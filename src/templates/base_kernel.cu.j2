@@ -1,0 +1,33 @@
+extern "C"
+#include <stdint.h>
+
+// コンスタントメモリ (今回はPQN用に固定で置きますが、将来的にはこれも動的生成可能です)
+__constant__ int AllParams[7][34];
+
+// --- モデル固有のデバイス関数 ---
+{{ device_funcs }}
+
+__global__ void update_neuron_state(
+    // --- モデル固有の引数 ---
+    {{ args }},
+    float* I_input,
+    unsigned char* raster
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid < {{ num_neurons }}) {
+        float I_float = I_input[tid];
+        
+        // --- 状態変数のロード ---
+        {{ load_states }}
+
+        // --- 状態の更新 ---
+        {{ dynamics }}
+
+        // --- スパイク判定 ---
+        {{ spike_logic }}
+
+        // --- 状態変数のセーブ ---
+        {{ save_states }}
+    }
+}

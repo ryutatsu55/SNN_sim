@@ -1,0 +1,4 @@
+# configs/test.yaml
+network:
+  num_neurons: 1
+  dt: 0.0001
