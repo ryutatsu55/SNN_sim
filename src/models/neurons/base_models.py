@@ -1,34 +1,26 @@
-# src/core/base_models.py
 from abc import ABC, abstractmethod
-import numpy as np
 
-class BaseNeuron(ABC):
-    """すべてのニューロンモデルの親クラス"""
-    
-    def __init__(self, num_neurons: int):
-        self.num_neurons = num_neurons
+class BaseNeuronModel(ABC):
+    """
+    バックエンド(GeNN等)にモデル情報を渡すための統一インターフェース
+    """
+    def __init__(self, **kwargs):
+        self.config = kwargs
 
+    @property
     @abstractmethod
-    def get_initial_states(self) -> dict:
-        """
-        GPUに転送する状態変数の初期値（Numpy配列）を辞書で返す
-        例: {"V": np.zeros(N), "U": np.zeros(N)}
-        """
+    def model_class(self):
+        """GeNNのモデル定義オブジェクトを返す"""
         pass
 
+    @property
     @abstractmethod
-    def get_cuda_components(self) -> dict:
-        """
-        Jinja2テンプレートに流し込む、このモデル専用の数式（C++文字列）を返す
-        """
+    def params(self) -> dict:
+        """GeNNに渡す定数パラメータ辞書"""
         pass
 
+    @property
     @abstractmethod
-    def get_constant_memory(self) -> dict:
-        """
-        __constant__ メモリに転送するデータの辞書を返す
-        例: {"AllParams": np.array(...)}
-        使わないモデルは空の辞書 {} を返せばOK
-        """
+    def initial_vars(self) -> dict:
+        """GeNNに渡す変数初期値辞書"""
         pass
-    

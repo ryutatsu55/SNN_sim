@@ -1,0 +1,34 @@
+simulation:
+  dt: 0.1             # 時間ステップ (ms)
+  duration: 100.0     # シミュレーション時間 (ms)
+  backend: "CUDA"     # 実行バックエンド
+
+neurons:
+  Layer_Exc:
+    type: "PQN_float"
+    mode: "RSexci"
+    num: 100
+  Layer_Inh:
+    type: "PQN_int"
+    mode: "RS_inhi"
+    num: 50
+
+network:
+  topology: "modular_random"
+  weight: "constant_default"
+  delay: "empirical"
+
+synapse_groups:
+  Exc_to_Inh:
+    source: "Layer_Exc"
+    target: "Layer_Inh"
+    synapse: "tsodyks_facilitate"
+    plasticity: "static"
+    weight_scale: 1.0
+  Inh_to_Exc:
+    source: "Layer_Inh"
+    target: "Layer_Exc"
+    synapse: "tsodyks_depress"
+    plasticity: "static"
+    weight_scale: -4.0
+

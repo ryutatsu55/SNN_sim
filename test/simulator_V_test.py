@@ -1,6 +1,6 @@
 import numpy as np
 from pygenn import genn_model
-from src.models.neurons.genn_pqn import get_pqn_3var_class, get_genn_pqn_params
+from models.neurons.PQN_float import get_pqn_3var_class, get_genn_pqn_params
 from tqdm import tqdm
 
 class Simulator:

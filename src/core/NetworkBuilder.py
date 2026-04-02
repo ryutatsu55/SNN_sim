@@ -1,5 +1,6 @@
 # src/core/NetworkBuilder.py
 import numpy as np
+import pygenn
 from src.core.registry import TOPOLOGY_MODELS, WEIGHT_MODELS, DELAY_MODELS, SYNAPSE_MODELS, NEURON_MODELS
 
 class NetworkBuilder:
@@ -31,6 +32,34 @@ class NetworkBuilder:
         DelayClass = DELAY_MODELS.get(delay_cfg["type"])
         delay_builder = DelayClass(delay_cfg, self.N, self.rng)
         delay_matrix = delay_builder.generate(mask)
+
+        # 4. ニューロン
+        for group_name, params in self.neuron_config.items():
+            cell_type = params['type']
+            mode = params.get('mode', 'default')
+            num_neurons = params['num']
+            
+            # --- レジストリから動的にクラスを取得し、インスタンス化 ---
+            try:
+                # NEURON_MODELS から "PQN_float" 等のクラスを取得
+                NeuronClass = NEURON_MODELS.get(cell_type) 
+                # 取得したクラスを初期化
+                neuron_instance = NeuronClass(mode=mode)
+            except KeyError as e:
+                # 未登録のモデルが指定された場合のエラーハンドリング
+                raise ValueError(f"Failed to build Network: {e}")
+            
+            # GeNNへのグループ追加
+            ng = self.model.add_neuron_group(
+                group_name,
+                num_neurons,
+                neuron_instance.model_class,
+                neuron_instance.params,
+                neuron_instance.initial_vars
+            )
+            
+            ng.spike_space = pygenn.genn_wrapper.SpikeBufferSpace_ZERO_COPY
+            print(f"Added NeuronGroup: {group_name} ({num_neurons} neurons, {cell_type}_{mode})")
 
         # 4. GPU転送用などのフォーマット変換 (CSR/COO相当の一次元化など)
         # ※以前の calc_init に相当する処理をここで一括で行うとクリーンです
