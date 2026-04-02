@@ -1,0 +1,62 @@
+# シミュレーション基盤
+base:
+  seed: 100
+  dt: 0.0001
+  precision: "float"
+
+# ネットワークトポロジー
+network:
+  total_n: 60
+  module_count: 4
+  neuron_model: "RSexci" # PQN_origin.py のモード名を使用
+  
+  # プロジェクション（結合）に関する詳細定義
+  projections:
+    
+    # 1. トポロジー（エッジの有無を決定するアルゴリズム）
+    topology:
+      type: "random"           # [random, distance_dependent, all_to_all など]
+      probability: 0.1         # type: random の場合に使用
+      # sigma: 2.0             # type: distance_dependent の場合などに使用する変数
+
+    # 2. 結合重み（シナプスの強さを決定するアルゴリズム）
+    weight:
+      type: "constant"         # [constant, normal, lognormal など]
+      value: 0.09              # type: constant の場合 (旧 reservoir_conn)
+      # mean: 0.1              # type: normal の場合
+      # std: 0.02              # type: normal の場合
+
+    # 3. 伝播遅延（スパイクが到達するまでの時間を決定するアルゴリズム）
+    delay:
+      type: "normal"           # [constant, normal, distance_dependent など]
+      mean: 7.0                # [ms]
+      std: 1.0                 # [ms]
+      min: 4.0                 # [ms] 正規分布の裾野のカットオフ
+      max: 10.0                # [ms]
+
+# タスク別の設定辞書
+tasks:
+  # 空間認識タスク
+  spatial_recognition:
+    input:
+      nodes: 30
+      strength: 0.5 
+      duration_stim: 0.1 
+      input_dt: 0.01 
+    output:
+      teaching_duration: 2.5
+      readout_nodes: 60 
+
+  # 音声認識タスク (TI-46など)
+  audio_recognition:
+    input:
+      nodes: 17 
+      input_dt: 0.008 # 8ms 
+      decimation_factor: 100
+    output:
+      n_train_files: 14 
+      n_test_files: 6 
+
+  # リアルタイム制御ループ設定
+  realtime_common:
+    io_interval: 0.005 # 5ms周期

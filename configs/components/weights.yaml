@@ -1,0 +1,17 @@
+constant_default:
+  type: "constant"
+  base_weight: 0.09        # 興奮性の基本重み (RESERVOIR_CONN)
+  g_scale: 0.5         # G (分散スケール)
+  inh_scale: -4.0          # 抑制性ニューロンの重み反転用スケール
+
+normal_broad:
+  type: "normal"
+  mean: 0.09
+  std: 0.02
+  inh_scale: -4.0
+
+distance_dependent:
+  type: "distance"
+  max_weight: 0.1
+  sigma: 2.0               # 距離による重み減衰の広がり（仮）
+  inh_scale: -4.0

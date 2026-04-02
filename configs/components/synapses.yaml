@@ -1,0 +1,19 @@
+tsodyks_doubleExponential:
+  type: "tsodyks_markram"
+  tau_rec: 0.8
+  tau_inact: 0.05
+  tau_faci: 0.2
+  U: 0.1
+  tr: 0.002
+  td: 0.01
+
+tsodyks_default:
+  type: "tsodyks_markram"
+  tau_rec: 0.5
+  tau_inact: 0.1
+  tau_faci: 0.1
+  U: 0.2
+
+static_synapse:
+  type: "static"
+  # 可塑性なしの単純なシナプス

@@ -1,0 +1,17 @@
+# configs/neurons.yaml
+
+PQN_default:
+  type: "PQN_Float32"
+  mode: "RSexci"  # Python側からパラメータを引っ張るためのキー
+
+FS_default:
+  type: "PQN_Float32"
+  mode: "FS"
+
+simple_lif:
+  type: "LIF"          # GeNN標準のLIFモデル
+  params:
+    C: 1.0             # 膜容量
+    TauM: 20.0         # 膜時定数
+    Vrest: -70.0       # 静止膜電位
+    Vthresh: -50.0     # 閾値

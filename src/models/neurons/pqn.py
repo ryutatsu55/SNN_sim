@@ -1,7 +1,7 @@
 import numpy as np
 # 既存の PQNparam クラスを利用すると仮定
 from src.models.neurons.PQN_origin import PQNengine as PQNparam
-from src.core.base_models import BaseNeuron
+from models.neurons.base_models import BaseNeuron
 import textwrap
 
 class PQNNeuron(BaseNeuron):
