@@ -1,13 +1,11 @@
-# src/core/config_manager.py
 import yaml
 import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
-# from src.models.neurons.PQN_origin import PQNengine
 
 class ConfigManager:
-    def __init__(self, config_source: str, active_task: str, config_dir: str = "configs"):
+    def __init__(self, config_source: str, active_task: str = None, config_dir: str = "configs"):
         self.config_dir = Path(config_dir)
         # サブファイルをまとめるディレクトリ
         self.components_dir = self.config_dir / "components" 
@@ -15,84 +13,71 @@ class ConfigManager:
         self.active_task = active_task
 
     def _load_yaml(self, filepath: Path) -> Dict[str, Any]:
-        """指定されたPathのYAMLファイルを読み込む"""
+        """指定されたPathのYAMLファイルを読み込む（ファイルがない場合は空辞書を返す）"""
         if not filepath.exists():
-            raise FileNotFoundError(f"Missing config file: {filepath}")
+            print(f"Warning: Missing config file: {filepath}. Returning empty dict.")
+            return {}
         with open(filepath, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
-
-    # def _inject_pqn_constants(self, neuron_config: Dict[str, Any]) -> Dict[str, Any]:
-    #     """
-    #     PQNモデルの場合は PQN_origin.py からパラメータを抽出・注入。
-    #     それ以外のモデル（LIF等）はYAMLに書かれた params をそのまま保持する。
-    #     """
-    #     if neuron_config.get("type") != "PQN_Float32":
-    #         return neuron_config
-
-    #     mode = neuron_config.get("mode", "RSexci")
-        
-    #     try:
-    #         # PQNengineを初期化して、浮動小数点演算用のPARAM辞書を丸ごと取得
-    #         pqn_instance = PQNengine(mode=mode)
-    #         # PQN.pdfの微分方程式に必要な a_fn, b_fn などのパラメータがこれで一括注入される
-    #         neuron_config["params"] = pqn_instance.PARAM
-    #     except ValueError as e:
-    #         raise ValueError(f"Failed to load PQN parameters for mode '{mode}': {e}")
-
-    #     return neuron_config
+            return yaml.safe_load(f) or {}
 
     def resolve(self) -> Dict[str, Any]:
         """
         全YAMLファイルを統合し、1つの resolved_config を生成する。
         """
-        main_cfg = self._load_yaml(self.config_dir / "default.yaml")
+        main_cfg = self._load_yaml(self.main_config_path)
         
-        # ベースとなる設定箱を用意
+        # test.yaml の構造に合わせてベースとなる設定箱を用意
+        # neurons や synapse_groups はメイン設定ファイルから直接取得する
         resolved = {
-            "base": main_cfg["base"],
-            "network": {
-                "total_n": main_cfg["network"]["total_n"],
-                "module_count": main_cfg["network"]["module_count"]
-            },
+            "simulation": main_cfg.get("simulation", {}),
+            "neurons": main_cfg.get("neurons", {}),
+            "synapse_groups": main_cfg.get("synapse_groups", {}),
+            "network": {},
             "task": {},
             "meta": {
                 "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             }
         }
 
-        # 1. タスクの解決 (components/tasks.yamlから)
-        tasks_cfg = self._load_yaml(self.components_dir / "tasks.yaml")
-        if self.active_task not in tasks_cfg:
-            raise KeyError(f"Task '{self.active_task}' not found in tasks.yaml")
-        resolved["task"] = tasks_cfg[self.active_task]
+        # メイン設定ファイルの network ブロックを取得
+        network = main_cfg.get("network", {})
 
-        # 2. ネットワークプロファイルの解決
-        profiles = main_cfg["network"]["profiles"]
-        
-        # 各要素のマッピング (YAMLファイル名 : プロファイルキー)
-        profile_map = {
-            "neurons.yaml": ("neuron", profiles.get("neuron_model")),
-            "topologies.yaml": ("topology", profiles.get("topology")),
-            "weights.yaml": ("weight", profiles.get("weight")),
-            "delays.yaml": ("delay", profiles.get("delay")),
-            "synapses.yaml": ("synapse", profiles.get("synapse")),
-            "plasticity.yaml": ("plasticity", profiles.get("plasticity")),
+        # 読み込むべきコンポーネントYAMLと、test.yaml 内のキー名のマッピング
+        network_map = {
+            "space.yaml": ("space", network.get("space")),
+            "connections.yaml": ("connection", network.get("connection")),
+            "weights.yaml": ("weight", network.get("weight")),
+            "delays.yaml": ("delay", network.get("delay")),
         }
 
-        for yaml_file, (key_name, profile_name) in profile_map.items():
+        for yaml_file, (key_name, profile_name) in network_map.items():
             if not profile_name:
+                resolved["network"][key_name] = {"type": "none"}
                 continue
             
             # コンポーネント用フォルダから読み込み
             data = self._load_yaml(self.components_dir / yaml_file)
+            
             if profile_name not in data:
-                print(f"Warning: Profile '{profile_name}' not found in {yaml_file}. Please check main.yaml.")
-                resolved["network"][key_name] = {"type": "unknown", "raw_profile_name": profile_name}
+                # print(f"Warning: Profile '{profile_name}' not found in {yaml_file}. Please check test.yaml.")
+                # プロファイルが見つからない（またはファイルがない）場合は、
+                # プロファイル名そのものをクラス名（type）として仮設定するフォールバック
+                resolved["network"][key_name] = {"type": profile_name}
                 continue
                 
+            # プロファイルが存在する場合は、その中身をコピーして割り当てる
             profile_data = data[profile_name].copy()
-                
+            # どのプロファイルを展開したかデバッグ用に記録しておく
+            profile_data["_profile_name"] = profile_name
             resolved["network"][key_name] = profile_data
+
+        # taskプロファイルの読み込み (active_taskが指定されている場合)
+        if self.active_task:
+            tasks_data = self._load_yaml(self.components_dir / "tasks.yaml")
+            if self.active_task in tasks_data:
+                resolved["task"] = tasks_data[self.active_task].copy()
+            else:
+                print(f"Warning: Task '{self.active_task}' not found in tasks.yaml.")
 
         return resolved
 

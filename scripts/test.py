@@ -16,15 +16,19 @@ from src.core.NetworkBuilder import NetworkBuilder
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
 import src.models.neurons.PQN_float
 import src.models.neurons.PQN_int
+import src.models.network.space
+import src.models.network.connectors
+import src.models.network.weights
+import src.models.network.delays
 # import src.models.neurons.lif  # 将来追加するモデルもここに書く
 
 def main():
     print("=== SNN_sim Test Pipeline Started ===")
 
     # 1. 設定の読み込み
-    config_path = "configs/test.yaml"
-    print(f"Loading config from {config_path}...")
-    config = ConfigManager(config_path).get_config()
+    config_src = "test.yaml"
+    print(f"Loading config from {config_src}...")
+    config = ConfigManager(config_src).resolve()
 
     # 2. データの準備 (モックアップ)
     print("Preparing Input Data...")
@@ -53,7 +57,7 @@ def main():
     
     print("=== Network Built Successfully ===")
     print(f"Model Name: {genn_model.name}")
-    print(f"Neurons Groups: {[g.name for g in genn_model.neuron_groups]}")
+    print(f"Neurons Groups: {[g for g in genn_model.neuron_populations]}")
 
 if __name__ == "__main__":
     main()

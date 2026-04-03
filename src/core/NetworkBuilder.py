@@ -1,98 +1,125 @@
-# src/core/NetworkBuilder.py
 import numpy as np
 import pygenn
-from src.core.registry import TOPOLOGY_MODELS, WEIGHT_MODELS, DELAY_MODELS, SYNAPSE_MODELS, NEURON_MODELS
+from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS
+
 
 class NetworkBuilder:
-    def __init__(self, network_config: dict, rng: np.random.RandomState):
-        """
-        network_config: resolved_cfg["network"] の辞書
-        """
-        self.cfg = network_config
-        self.rng = rng
-        self.N = self.cfg["total_n"]
+    def __init__(self, config: dict, rng: np.random.RandomState = None):
+        self.config = config
+        self.rng = rng if rng is not None else np.random.RandomState(config.get("base", {}).get("seed", 42))
+        
+        self.genn_model = pygenn.GeNNModel("float", "SNN_Model")
+        self.genn_model.dt = self.config.get("simulation", {}).get("dt", 0.1)
+        
+        self.group_info = {}
+        # yamlから総ニューロン数を計算
+        self.total_neurons = sum(p["num"] for p in self.config.get("neurons", {}).values())
 
-    def build(self) -> dict:
+    def build(self) -> pygenn.GeNNModel:
         print("=== ネットワーク構築 (Network Building) ===")
-        
-        # 1. トポロジー(結合有無のマスクと興奮/抑制のタイプ)の生成
-        topo_cfg = self.cfg["topology"]
-        TopoClass = TOPOLOGY_MODELS.get(topo_cfg["type"])
-        topo_builder = TopoClass(topo_cfg, self.N, self.rng)
-        mask, neuron_types = topo_builder.generate()
-        
-        # 2. 重みの生成
-        weight_cfg = self.cfg["weight"]
-        WeightClass = WEIGHT_MODELS.get(weight_cfg["type"])
-        weight_builder = WeightClass(weight_cfg, self.N, self.rng)
-        weight_matrix = weight_builder.generate(mask, neuron_types)
+        # 1. グループへのアサイン
+        self._assign_neurons()
+        # 2. グローバル行列(トポロジー等)の生成
+        self._generate_global_matrices()
+        # 3. シナプスグループの構築
+        self._build_synapses()
+        return self.genn_model
 
-        # 3. 伝播遅延の生成
-        delay_cfg = self.cfg["delay"]
-        DelayClass = DELAY_MODELS.get(delay_cfg["type"])
-        delay_builder = DelayClass(delay_cfg, self.N, self.rng)
-        delay_matrix = delay_builder.generate(mask)
+    def _assign_neurons(self):
+        print(f"  Generating Spatial Coordinates for {self.total_neurons} neurons...")
 
-        # 4. ニューロン
-        for group_name, params in self.neuron_config.items():
-            cell_type = params['type']
-            mode = params.get('mode', 'default')
+        # --- 2. 座標(インデックス)のアサイン(割り当て) ---
+        available_indices = np.arange(self.total_neurons)
+            
+        # (※もし「層(Layer)」のように特定座標で分けたい場合は、Z座標でソートしたインデックス等を使用可能)
+
+        # --- 3. グループごとにGeNNへ登録 ---
+        current_offset = 0
+        for group_name, params in self.config.get("neurons", {}).items():
             num_neurons = params['num']
             
-            # --- レジストリから動的にクラスを取得し、インスタンス化 ---
-            try:
-                # NEURON_MODELS から "PQN_float" 等のクラスを取得
-                NeuronClass = NEURON_MODELS.get(cell_type) 
-                # 取得したクラスを初期化
-                neuron_instance = NeuronClass(mode=mode)
-            except KeyError as e:
-                # 未登録のモデルが指定された場合のエラーハンドリング
-                raise ValueError(f"Failed to build Network: {e}")
+            assigned_indices = self.rng.choice(available_indices, size=num_neurons, replace=False)
+            available_indices = np.setdiff1d(available_indices, assigned_indices)
+            assigned_indices.sort()
             
-            # GeNNへのグループ追加
-            ng = self.model.add_neuron_group(
-                group_name,
+            self.group_info[group_name] = {
+                "global_indices": assigned_indices,
+                "num": num_neurons
+            }
+            current_offset += num_neurons
+
+            # GeNNへの登録
+            NeuronClass = NEURON_MODELS.get(params['type']) 
+            init_kwargs = params.copy()
+            neuron_instance = NeuronClass(**init_kwargs)
+            ng = self.genn_model.add_neuron_population(
+                group_name, 
                 num_neurons,
-                neuron_instance.model_class,
-                neuron_instance.params,
+                neuron_instance.model_class, 
+                neuron_instance.params, 
                 neuron_instance.initial_vars
             )
+            print(f"  Added NeuronGroup: {group_name} ({num_neurons} neurons, randomly assigned)")
+        print(f"  Added {current_offset} neurons as a result")
+
+    def _generate_global_matrices(self):
+        network = self.config.get("network")
+
+        spaceClass = SPATIAL_MODELS.get(network["space"]["type"])
+        self.global_coords = spaceClass(network["space"], self.total_neurons, self.rng).generate() 
+        
+        connectClass = CONNECTION_MODELS.get(network["connection"]["type"])
+        self.global_mask = connectClass(network["connection"], self.global_coords, self.rng).generate() 
+        
+        weightClass = WEIGHT_MODELS.get(network["weight"]["type"])
+        self.global_weights = weightClass(network["weight"], self.global_coords, self.global_mask, self.rng).generate()
+        
+        delayClass = DELAY_MODELS.get(network["delay"]["type"])
+        self.global_delays = delayClass(network["delay"], self.global_coords, self.global_mask, self.rng).generate()
+        
+
+    def _build_synapses(self):
+        for syn_group_name, params in self.config.get("synapse_groups", {}).items():
+            src_name = params["source"]
+            tgt_name = params["target"]
             
-            ng.spike_space = pygenn.genn_wrapper.SpikeBufferSpace_ZERO_COPY
-            print(f"Added NeuronGroup: {group_name} ({num_neurons} neurons, {cell_type}_{mode})")
+            # グループに割り当てられたグローバルインデックスを取得 (不連続な配列の可能性あり)
+            src_indices = self.group_info[src_name]["global_indices"]
+            tgt_indices = self.group_info[tgt_name]["global_indices"]
 
-        # 4. GPU転送用などのフォーマット変換 (CSR/COO相当の一次元化など)
-        # ※以前の calc_init に相当する処理をここで一括で行うとクリーンです
-        N_S = np.count_nonzero(weight_matrix)
-        col_indices, row_indices = np.where(weight_matrix.T != 0)
-        
-        resovoir_weight_calc = np.zeros(N_S, dtype=np.float32)
-        delay_row = np.zeros(N_S, dtype=np.int32)
-        neuron_from = np.zeros(N_S, dtype=np.int32)
-        neuron_to = np.zeros(N_S, dtype=np.int32)
-        
-        for i in range(N_S):
-            r = row_indices[i]
-            c = col_indices[i]
-            neuron_from[i] = c
-            neuron_to[i] = r
-            resovoir_weight_calc[i] = weight_matrix[r, c]
-            delay_row[i] = delay_matrix[r, c]
+            # --- np.ix_ を使って、グローバル行列から該当する座席同士の結合を抽出 ---
+            sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
+            sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
 
-        print(f"  - Total Neurons: {self.N}")
-        print(f"  - Total Synapses (N_S): {N_S}")
+            weight_scale = params.get("weight_scale", 1.0)
+            sub_weights *= weight_scale
 
-        # 最終的にSimulator（やGPUカーネル）が必要とする全情報をまとめた辞書を返す
-        return {
-            "N": self.N,
-            "N_S": N_S,
-            "neuron_types": neuron_types,
-            "weight_matrix": weight_matrix,
-            "delay_matrix": delay_matrix,
-            "gpu_data": {
-                "neuron_from": neuron_from,
-                "neuron_to": neuron_to,
-                "resovoir_weight_calc": resovoir_weight_calc,
-                "delay_row": delay_row,
-            }
-        }
+            # GeNN形式への変換
+            local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
+            weights_flat = sub_weights[local_src_idx, local_tgt_idx]
+
+            # TODO: 将来的には SYNAPSE_MODELS レジストリを使用
+            # ソースとターゲットの NeuronGroup インスタンスを取得
+            src_pop = self.genn_model.neuron_populations[src_name]
+            tgt_pop = self.genn_model.neuron_populations[tgt_name]
+
+            # GeNN 5の書式に合わせて各種初期化子(init_...)を使用する
+            weight_init = pygenn.genn_model.init_weight_update(
+                "StaticPulse", 
+                {}, 
+                {"g": weights_flat}
+            )
+            post_init = pygenn.genn_model.init_postsynaptic(
+                "DeltaCurr", 
+                {}
+            )
+
+            sg = self.genn_model.add_synapse_population(
+                syn_group_name, 
+                "SPARSE",        # matrix_type
+                src_pop,         # source (NeuronGroup オブジェクト)
+                tgt_pop,         # target (NeuronGroup オブジェクト)
+                weight_init,     # weight_update_init
+                post_init,       # postsynaptic_init
+            )
+            sg.set_sparse_connections(local_src_idx, local_tgt_idx)

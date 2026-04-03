@@ -26,7 +26,8 @@ class Registry:
 # システム全体のレジストリインスタンス
 DATA_LOADERS = Registry("DataLoaders")
 NEURON_MODELS = Registry("NeuronModels")
-TOPOLOGY_MODELS = Registry("TopologyModels") # 結合行列(マスク)の生成
+SPATIAL_MODELS = Registry("SpatialModels")
+CONNECTION_MODELS = Registry("ConnectionModels") # 結合行列(マスク)の生成
 WEIGHT_MODELS = Registry("WeightModels")     # 重みの生成
 DELAY_MODELS = Registry("DelayModels")       # 伝播遅延の生成
 SYNAPSE_MODELS = Registry("SynapseModels")   # シナプス力学(STP等)の生成

@@ -1,6 +1,6 @@
 simulation:
   dt: 0.1             # 時間ステップ (ms)
-  duration: 100.0     # シミュレーション時間 (ms)
+  duration: 2.0     # シミュレーション時間 (s)
   backend: "CUDA"     # 実行バックエンド
 
 neurons:
@@ -10,13 +10,14 @@ neurons:
     num: 100
   Layer_Inh:
     type: "PQN_int"
-    mode: "RS_inhi"
+    mode: "RSinhi"
     num: 50
 
 network:
-  topology: "modular_random"
-  weight: "constant_default"
-  delay: "empirical"
+  space: "grid_3d"
+  connection: "constant_prob"
+  weight: "constant"
+  delay: "constant"
 
 synapse_groups:
   Exc_to_Inh:
@@ -31,4 +32,3 @@ synapse_groups:
     synapse: "tsodyks_depress"
     plasticity: "static"
     weight_scale: -4.0
-
