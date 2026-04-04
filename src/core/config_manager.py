@@ -33,6 +33,7 @@ class ConfigManager:
             "neurons": main_cfg.get("neurons", {}),
             "synapse_groups": main_cfg.get("synapse_groups", {}),
             "network": {},
+            "data": main_cfg.get("data"),
             "task": {},
             "meta": {
                 "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

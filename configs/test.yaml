@@ -1,11 +1,12 @@
 simulation:
+  N: 150
   dt: 0.1             # 時間ステップ (ms)
-  duration: 2.0     # シミュレーション時間 (s)
+  duration: 2000     # シミュレーション時間 (s)
   backend: "CUDA"     # 実行バックエンド
 
 neurons:
   Layer_Exc:
-    type: "PQN_float"
+    type: "PQN_int"
     mode: "RSexci"
     num: 100
   Layer_Inh:
@@ -32,3 +33,5 @@ synapse_groups:
     synapse: "tsodyks_depress"
     plasticity: "static"
     weight_scale: -4.0
+
+data: pqn_test

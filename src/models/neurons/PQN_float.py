@@ -12,6 +12,7 @@ class PQNFloatModel(BaseNeuronModel):
     def __init__(self, mode="RSexci", **kwargs):
         super().__init__(**kwargs)
         self.mode = mode
+        self.dt = self.config["dt"]
         self.engine = PQNengine(mode=mode)
         self._params, self._init_vars = self._prepare_genn_data()
 
@@ -100,7 +101,8 @@ class PQNFloatModel(BaseNeuronModel):
             sim_code += "scalar dU = EPSU_OVER_TAU * (v_curr - V0 - ALPU * U);"
 
         # オイラー法による更新 (GeNN の DT を秒単位に変換して使用)
-        sim_code += "const scalar dt_sec = DT / 1000.0;"
+        dt_sec = self.dt / 1000.0
+        sim_code += f"const scalar dt_sec = (scalar){dt_sec};"
         sim_code += "V += dV * dt_sec; N += dN * dt_sec;"
         if self.mode != 'Class2': sim_code += "Q += dQ * dt_sec;"
         if self.mode in ['LTS', 'IB', 'PB']: sim_code += "U += dU * dt_sec;"

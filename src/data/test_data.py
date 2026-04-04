@@ -1,12 +1,16 @@
 import numpy as np
+from pydantic import BaseModel, Field, ValidationError
+from src.core.registry import DATA_LOADERS
 
-def get_data():
-    """テスト用のランダムな時系列データとラベルを生成して返す"""
-    # X: (サンプル数, 時間ステップ, 入力次元)
-    # Y: (サンプル数, クラス数) ※ワンホットエンコーディング想定
-    X_train = np.random.rand(10, 100, 30) 
-    Y_train = np.eye(3)[np.random.choice(3, 10)] # 3クラス分類
-    X_test = np.random.rand(5, 100, 30)
-    Y_test = np.eye(3)[np.random.choice(3, 5)]
-    
-    return X_train, Y_train, X_test, Y_test
+@DATA_LOADERS.register("pqn_test")
+class SpatialDataLoader:
+    def __init__(self, config: dict):
+        self.config = config
+
+    def load_data(self):
+        tmax = self.config["simulation"]["duration"]
+        input_current = 0.12
+        number_of_iterations = int(tmax / self.config["simulation"]["dt"])
+        I_in = np.zeros((number_of_iterations, self.config["simulation"]["N"]))
+        I_in[int(number_of_iterations/4):int(number_of_iterations/4*3), :] = input_current
+        return I_in

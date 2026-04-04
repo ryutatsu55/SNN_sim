@@ -1,1 +1,4 @@
 .venv/
+*.pyc
+result/*
+SNN_Model_CODE/*

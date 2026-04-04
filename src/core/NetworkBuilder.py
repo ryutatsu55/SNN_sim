@@ -51,6 +51,7 @@ class NetworkBuilder:
             # GeNNへの登録
             NeuronClass = NEURON_MODELS.get(params['type']) 
             init_kwargs = params.copy()
+            init_kwargs["dt"] = self.config.get("simulation", {}).get("dt", 0.1)
             neuron_instance = NeuronClass(**init_kwargs)
             ng = self.genn_model.add_neuron_population(
                 group_name, 

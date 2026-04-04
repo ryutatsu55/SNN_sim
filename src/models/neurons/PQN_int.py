@@ -7,50 +7,47 @@ from .PQN_origin import PQNengine
 class PQNIntModel(BaseNeuronModel):
     """
     公式の PQNengine (PQN_origin.py) に基づく固定小数点演算版 PQN モデル。
-    各パラメータと係数 Y を利用し、ビットシフト演算による計算を再現します。
+    パーサーエラーを避けるため、ビットシフト(>>)の代わりに定数除算(/)を利用します。
+    (コンパイラによって自動的に高速なシフト命令に最適化されます)
     """
     def __init__(self, mode="RSexci", **kwargs):
         super().__init__(**kwargs)
         self.mode = mode
-        # 公式エンジンを初期化して定数と係数を取得
         self.engine = PQNengine(mode=mode)
         
-        # 固定小数点のビット幅設定
         self.bit_f = self.engine.BIT_WIDTH_FRACTIONAL
         self.bit_y = self.engine.BIT_Y_SHIFT # 常に 20
         
         self._params, self._init_vars = self._prepare_genn_data()
 
     def _prepare_genn_data(self):
-        # 公式コードの係数辞書 Y を GeNN のパラメータ用に変換 (大文字化)
         params = {k.upper(): float(v) for k, v in self.engine.Y.items()}
-        
-        # 制御用のメタパラメータを追加
-        params["BIT_F"] = float(self.bit_f)
-        params["BIT_Y"] = float(self.bit_y)
-        # 閾値は通常 4.0 固定 (固定小数点へ変換)
         params["V_THRESH"] = float(4 << self.bit_f)
         
-        # 公式コードに定義されている初期状態変数を取得
         init_vars = {
             "V": int(self.engine.state_variable_v),
             "N": int(self.engine.state_variable_n),
             "Q": int(self.engine.state_variable_q),
             "U": int(self.engine.state_variable_u),
-            "Iext": 0.0 # 外部入力は GeNN 側で scalar (float) として受ける
+            "Iext": 0.0 
         }
-        
         return params, init_vars
 
     @property
     def model_class(self):
-        # 共通の事前計算 (V^2 の算出と Iext の固定小数点化)
-        # 符号付き 64bit 整数 (int64_t) を使用してオーバーフローを防止
-        sim_code = """
+        # Python側でシフト幅に対応する除数（スケール）を計算しておく
+        f_scale = 1 << self.bit_f
+        b_scale = 1 << self.bit_y
+
+        # f-string を使って、定数として C++ コードに直接埋め込む
+        sim_code = f"""
         const int64_t v_long = (int64_t)V;
-        const int64_t vv = (v_long * v_long) >> (int)BIT_F;
-        const int B = (int)BIT_Y;
-        const int64_t i_fixed = (int64_t)(Iext * (double)(1 << (int)BIT_F));
+        const int64_t F_SCALE = (int64_t){f_scale};
+        const int64_t B_SCALE = (int64_t){b_scale};
+        
+        // ビットシフト (>>) の代わりに定数除算 (/) を使用
+        const int64_t vv = (v_long * v_long) / F_SCALE;
+        const int64_t i_fixed = (int64_t)(Iext * (double)F_SCALE);
         """
 
         # --- dv (膜電位変化量) の計算 ---
@@ -58,27 +55,27 @@ class PQNIntModel(BaseNeuronModel):
             sim_code += """
             int64_t dv;
             if (V < 0) {
-                dv = (V_VV_S * vv >> B) + (V_V_S * v_long >> B) + (int64_t)V_C_S + (V_N * (int64_t)N >> B) + (V_Q * (int64_t)Q >> B) - (V_U * (int64_t)U >> B) + (V_I * i_fixed >> B);
+                dv = (V_VV_S * vv / B_SCALE) + (V_V_S * v_long / B_SCALE) + (int64_t)V_C_S + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) - (V_U * (int64_t)U / B_SCALE) + (V_I * i_fixed / B_SCALE);
             } else {
-                dv = (V_VV_L * vv >> B) + (V_V_L * v_long >> B) + (int64_t)V_C_L + (V_N * (int64_t)N >> B) + (V_Q * (int64_t)Q >> B) - (V_U * (int64_t)U >> B) + (V_I * i_fixed >> B);
+                dv = (V_VV_L * vv / B_SCALE) + (V_V_L * v_long / B_SCALE) + (int64_t)V_C_L + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) - (V_U * (int64_t)U / B_SCALE) + (V_I * i_fixed / B_SCALE);
             }
             """
         elif self.mode == 'Class2':
             sim_code += """
             int64_t dv;
             if (V < 0) {
-                dv = (V_VV_S * vv >> B) + (V_V_S * v_long >> B) + (int64_t)V_C_S + (V_N * (int64_t)N >> B) + (V_I * i_fixed >> B);
+                dv = (V_VV_S * vv / B_SCALE) + (V_V_S * v_long / B_SCALE) + (int64_t)V_C_S + (V_N * (int64_t)N / B_SCALE) + (V_I * i_fixed / B_SCALE);
             } else {
-                dv = (V_VV_L * vv >> B) + (V_V_L * v_long >> B) + (int64_t)V_C_L + (V_N * (int64_t)N >> B) + (V_I * i_fixed >> B);
+                dv = (V_VV_L * vv / B_SCALE) + (V_V_L * v_long / B_SCALE) + (int64_t)V_C_L + (V_N * (int64_t)N / B_SCALE) + (V_I * i_fixed / B_SCALE);
             }
             """
-        else: # RS, FS, LTS, IB, EB [cite: 198, 203]
+        else: # RS, FS, LTS, IB, EB
             sim_code += """
             int64_t dv;
             if (V < 0) {
-                dv = (V_VV_S * vv >> B) + (V_V_S * v_long >> B) + (int64_t)V_C_S + (V_N * (int64_t)N >> B) + (V_Q * (int64_t)Q >> B) + (V_I * i_fixed >> B);
+                dv = (V_VV_S * vv / B_SCALE) + (V_V_S * v_long / B_SCALE) + (int64_t)V_C_S + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) + (V_I * i_fixed / B_SCALE);
             } else {
-                dv = (V_VV_L * vv >> B) + (V_V_L * v_long >> B) + (int64_t)V_C_L + (V_N * (int64_t)N >> B) + (V_Q * (int64_t)Q >> B) + (V_I * i_fixed >> B);
+                dv = (V_VV_L * vv / B_SCALE) + (V_V_L * v_long / B_SCALE) + (int64_t)V_C_L + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) + (V_I * i_fixed / B_SCALE);
             }
             """
 
@@ -87,24 +84,24 @@ class PQNIntModel(BaseNeuronModel):
             sim_code += """
             int64_t dn;
             if (V < (int64_t)RG) {
-                dn = (N_VV_S * vv >> B) + (N_V_S * v_long >> B) + (int64_t)N_C_S + (N_N * (int64_t)N >> B);
+                dn = (N_VV_S * vv / B_SCALE) + (N_V_S * v_long / B_SCALE) + (int64_t)N_C_S + (N_N * (int64_t)N / B_SCALE);
             } else {
-                dn = (N_VV_L * vv >> B) + (N_V_L * v_long >> B) + (int64_t)N_C_L + (N_N * (int64_t)N >> B);
+                dn = (N_VV_L * vv / B_SCALE) + (N_V_L * v_long / B_SCALE) + (int64_t)N_C_L + (N_N * (int64_t)N / B_SCALE);
             }
-            // LTS/IB 特有の u による eta 制御 [cite: 236-239]
+            // LTS/IB 特有の u による eta 制御
             if (U < (int64_t)RU) {
-                dn = (dn * (int64_t)N_US) >> B;
+                dn = (dn * (int64_t)N_US) / B_SCALE;
             } else {
-                dn = (dn * (int64_t)N_UL) >> B;
+                dn = (dn * (int64_t)N_UL) / B_SCALE;
             }
             """
         else:
             sim_code += """
             int64_t dn;
             if (V < (int64_t)RG) {
-                dn = (N_VV_S * vv >> B) + (N_V_S * v_long >> B) + (int64_t)N_C_S + (N_N * (int64_t)N >> B);
+                dn = (N_VV_S * vv / B_SCALE) + (N_V_S * v_long / B_SCALE) + (int64_t)N_C_S + (N_N * (int64_t)N / B_SCALE);
             } else {
-                dn = (N_VV_L * vv >> B) + (N_V_L * v_long >> B) + (int64_t)N_C_L + (N_N * (int64_t)N >> B);
+                dn = (N_VV_L * vv / B_SCALE) + (N_V_L * v_long / B_SCALE) + (int64_t)N_C_L + (N_N * (int64_t)N / B_SCALE);
             }
             """
 
@@ -113,15 +110,15 @@ class PQNIntModel(BaseNeuronModel):
             sim_code += """
             int64_t dq;
             if (V < (int64_t)RH) {
-                dq = (Q_VV_S * vv >> B) + (Q_V_S * v_long >> B) + (int64_t)Q_C_S + (Q_Q * (int64_t)Q >> B);
+                dq = (Q_VV_S * vv / B_SCALE) + (Q_V_S * v_long / B_SCALE) + (int64_t)Q_C_S + (Q_Q * (int64_t)Q / B_SCALE);
             } else {
-                dq = (Q_VV_L * vv >> B) + (Q_V_L * v_long >> B) + (int64_t)Q_C_L + (Q_Q * (int64_t)Q >> B);
+                dq = (Q_VV_L * vv / B_SCALE) + (Q_V_L * v_long / B_SCALE) + (int64_t)Q_C_L + (Q_Q * (int64_t)Q / B_SCALE);
             }
             """
         
         if self.mode in ['LTS', 'IB', 'PB']:
             sim_code += """
-            int64_t du = (U_V * v_long >> B) + (U_U * (int64_t)U >> B) + (int64_t)U_C;
+            int64_t du = (U_V * v_long / B_SCALE) + (U_U * (int64_t)U / B_SCALE) + (int64_t)U_C;
             """
 
         # --- 状態の更新 ---
