@@ -9,8 +9,9 @@ class SpatialDataLoader:
 
     def load_data(self):
         tmax = self.config["simulation"]["duration"]
-        input_current = 0.12
+        input_current = 0.15
         number_of_iterations = int(tmax / self.config["simulation"]["dt"])
         I_in = np.zeros((number_of_iterations, self.config["simulation"]["N"]))
         I_in[int(number_of_iterations/4):int(number_of_iterations/4*3), :] = input_current
+        # I_in[:, :] = input_current
         return I_in

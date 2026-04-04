@@ -6,9 +6,8 @@ from .PQN_origin import PQNengine
 @NEURON_MODELS.register("PQN_int")
 class PQNIntModel(BaseNeuronModel):
     """
-    公式の PQNengine (PQN_origin.py) に基づく固定小数点演算版 PQN モデル。
-    パーサーエラーを避けるため、ビットシフト(>>)の代わりに定数除算(/)を利用します。
-    (コンパイラによって自動的に高速なシフト命令に最適化されます)
+    公式の PQNengine に基づく固定小数点演算版 PQN モデル。
+    GeNNパーサーエラーを回避しつつ、float変換による誤差と負数のシフト丸め誤差を完全に排除した設計。
     """
     def __init__(self, mode="RSexci", **kwargs):
         super().__init__(**kwargs)
@@ -16,13 +15,14 @@ class PQNIntModel(BaseNeuronModel):
         self.engine = PQNengine(mode=mode)
         
         self.bit_f = self.engine.BIT_WIDTH_FRACTIONAL
-        self.bit_y = self.engine.BIT_Y_SHIFT # 常に 20
+        self.bit_y = self.engine.BIT_Y_SHIFT 
         
         self._params, self._init_vars = self._prepare_genn_data()
 
     def _prepare_genn_data(self):
-        params = {k.upper(): float(v) for k, v in self.engine.Y.items()}
-        params["V_THRESH"] = float(4 << self.bit_f)
+        # ⚠️パラメータは全て C++ 側に定数として直接埋め込むため、GeNN の params は空にする。
+        # これにより、float 型への暗黙キャストによる下位ビットの量子化誤差を完全に排除。
+        params = {}
         
         init_vars = {
             "V": int(self.engine.state_variable_v),
@@ -35,90 +35,97 @@ class PQNIntModel(BaseNeuronModel):
 
     @property
     def model_class(self):
-        # Python側でシフト幅に対応する除数（スケール）を計算しておく
-        f_scale = 1 << self.bit_f
-        b_scale = 1 << self.bit_y
+        # Pythonの算術右シフト(床丸め)を、C++の除算と三項演算子で完全再現するインライン展開関数
+        # #defineや>>を使わないため、GeNNのパーサーを安全に通過する
+        def SR(expr):
+            return f"(({expr}) < 0 ? (({expr}) - B_MASK) / B_SCALE : ({expr}) / B_SCALE)"
 
-        # f-string を使って、定数として C++ コードに直接埋め込む
+        # 公式エンジンの Y 係数を全て int64_t の C++ 定数宣言として文字列生成
+        y_consts = "\n        ".join([f"const int64_t {k.upper()} = (int64_t){v};" for k, v in self.engine.Y.items()])
+
         sim_code = f"""
-        const int64_t v_long = (int64_t)V;
-        const int64_t F_SCALE = (int64_t){f_scale};
-        const int64_t B_SCALE = (int64_t){b_scale};
+        // === パラメータの完全定数化 (float変換排除) ===
+        {y_consts}
         
-        // ビットシフト (>>) の代わりに定数除算 (/) を使用
+        const int64_t v_long = (int64_t)V;
+        const int64_t F_SCALE = (int64_t){1 << self.bit_f};
+        const int64_t B_SCALE = (int64_t){1 << self.bit_y};
+        const int64_t B_MASK  = (int64_t){(1 << self.bit_y) - 1};
+
+        // 二乗は必ず正になるため通常の除算で丸め誤差なし
         const int64_t vv = (v_long * v_long) / F_SCALE;
+        // Iext スケーリング時のみ C++ の double キャスト(ゼロ方向切り捨て)で Python の int() と一致
         const int64_t i_fixed = (int64_t)(Iext * (double)F_SCALE);
         """
 
         # --- dv (膜電位変化量) の計算 ---
         if self.mode == 'PB':
-            sim_code += """
+            sim_code += f"""
             int64_t dv;
-            if (V < 0) {
-                dv = (V_VV_S * vv / B_SCALE) + (V_V_S * v_long / B_SCALE) + (int64_t)V_C_S + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) - (V_U * (int64_t)U / B_SCALE) + (V_I * i_fixed / B_SCALE);
-            } else {
-                dv = (V_VV_L * vv / B_SCALE) + (V_V_L * v_long / B_SCALE) + (int64_t)V_C_L + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) - (V_U * (int64_t)U / B_SCALE) + (V_I * i_fixed / B_SCALE);
-            }
+            if (V < 0) {{
+                dv = {SR('V_VV_S * vv')} + {SR('V_V_S * v_long')} + V_C_S + {SR('V_N * (int64_t)N')} + {SR('V_Q * (int64_t)Q')} - {SR('V_U * (int64_t)U')} + {SR('V_I * i_fixed')};
+            }} else {{
+                dv = {SR('V_VV_L * vv')} + {SR('V_V_L * v_long')} + V_C_L + {SR('V_N * (int64_t)N')} + {SR('V_Q * (int64_t)Q')} - {SR('V_U * (int64_t)U')} + {SR('V_I * i_fixed')};
+            }}
             """
         elif self.mode == 'Class2':
-            sim_code += """
+            sim_code += f"""
             int64_t dv;
-            if (V < 0) {
-                dv = (V_VV_S * vv / B_SCALE) + (V_V_S * v_long / B_SCALE) + (int64_t)V_C_S + (V_N * (int64_t)N / B_SCALE) + (V_I * i_fixed / B_SCALE);
-            } else {
-                dv = (V_VV_L * vv / B_SCALE) + (V_V_L * v_long / B_SCALE) + (int64_t)V_C_L + (V_N * (int64_t)N / B_SCALE) + (V_I * i_fixed / B_SCALE);
-            }
+            if (V < 0) {{
+                dv = {SR('V_VV_S * vv')} + {SR('V_V_S * v_long')} + V_C_S + {SR('V_N * (int64_t)N')} + {SR('V_I * i_fixed')};
+            }} else {{
+                dv = {SR('V_VV_L * vv')} + {SR('V_V_L * v_long')} + V_C_L + {SR('V_N * (int64_t)N')} + {SR('V_I * i_fixed')};
+            }}
             """
         else: # RS, FS, LTS, IB, EB
-            sim_code += """
+            sim_code += f"""
             int64_t dv;
-            if (V < 0) {
-                dv = (V_VV_S * vv / B_SCALE) + (V_V_S * v_long / B_SCALE) + (int64_t)V_C_S + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) + (V_I * i_fixed / B_SCALE);
-            } else {
-                dv = (V_VV_L * vv / B_SCALE) + (V_V_L * v_long / B_SCALE) + (int64_t)V_C_L + (V_N * (int64_t)N / B_SCALE) + (V_Q * (int64_t)Q / B_SCALE) + (V_I * i_fixed / B_SCALE);
-            }
+            if (V < 0) {{
+                dv = {SR('V_VV_S * vv')} + {SR('V_V_S * v_long')} + V_C_S + {SR('V_N * (int64_t)N')} + {SR('V_Q * (int64_t)Q')} + {SR('V_I * i_fixed')};
+            }} else {{
+                dv = {SR('V_VV_L * vv')} + {SR('V_V_L * v_long')} + V_C_L + {SR('V_N * (int64_t)N')} + {SR('V_Q * (int64_t)Q')} + {SR('V_I * i_fixed')};
+            }}
             """
 
         # --- dn (回復変数変化量) の計算 ---
         if self.mode in ['LTS', 'IB']:
-            sim_code += """
+            sim_code += f"""
             int64_t dn;
-            if (V < (int64_t)RG) {
-                dn = (N_VV_S * vv / B_SCALE) + (N_V_S * v_long / B_SCALE) + (int64_t)N_C_S + (N_N * (int64_t)N / B_SCALE);
-            } else {
-                dn = (N_VV_L * vv / B_SCALE) + (N_V_L * v_long / B_SCALE) + (int64_t)N_C_L + (N_N * (int64_t)N / B_SCALE);
-            }
-            // LTS/IB 特有の u による eta 制御
-            if (U < (int64_t)RU) {
-                dn = (dn * (int64_t)N_US) / B_SCALE;
-            } else {
-                dn = (dn * (int64_t)N_UL) / B_SCALE;
-            }
+            if (V < RG) {{
+                dn = {SR('N_VV_S * vv')} + {SR('N_V_S * v_long')} + N_C_S + {SR('N_N * (int64_t)N')};
+            }} else {{
+                dn = {SR('N_VV_L * vv')} + {SR('N_V_L * v_long')} + N_C_L + {SR('N_N * (int64_t)N')};
+            }}
+            if (U < RU) {{
+                dn = {SR('dn * N_US')};
+            }} else {{
+                dn = {SR('dn * N_UL')};
+            }}
             """
         else:
-            sim_code += """
+            sim_code += f"""
             int64_t dn;
-            if (V < (int64_t)RG) {
-                dn = (N_VV_S * vv / B_SCALE) + (N_V_S * v_long / B_SCALE) + (int64_t)N_C_S + (N_N * (int64_t)N / B_SCALE);
-            } else {
-                dn = (N_VV_L * vv / B_SCALE) + (N_V_L * v_long / B_SCALE) + (int64_t)N_C_L + (N_N * (int64_t)N / B_SCALE);
-            }
+            if (V < RG) {{
+                dn = {SR('N_VV_S * vv')} + {SR('N_V_S * v_long')} + N_C_S + {SR('N_N * (int64_t)N')};
+            }} else {{
+                dn = {SR('N_VV_L * vv')} + {SR('N_V_L * v_long')} + N_C_L + {SR('N_N * (int64_t)N')};
+            }}
             """
 
         # --- dq, du (追加変数) の計算 ---
         if self.mode != 'Class2':
-            sim_code += """
+            sim_code += f"""
             int64_t dq;
-            if (V < (int64_t)RH) {
-                dq = (Q_VV_S * vv / B_SCALE) + (Q_V_S * v_long / B_SCALE) + (int64_t)Q_C_S + (Q_Q * (int64_t)Q / B_SCALE);
-            } else {
-                dq = (Q_VV_L * vv / B_SCALE) + (Q_V_L * v_long / B_SCALE) + (int64_t)Q_C_L + (Q_Q * (int64_t)Q / B_SCALE);
-            }
+            if (V < RH) {{
+                dq = {SR('Q_VV_S * vv')} + {SR('Q_V_S * v_long')} + Q_C_S + {SR('Q_Q * (int64_t)Q')};
+            }} else {{
+                dq = {SR('Q_VV_L * vv')} + {SR('Q_V_L * v_long')} + Q_C_L + {SR('Q_Q * (int64_t)Q')};
+            }}
             """
         
         if self.mode in ['LTS', 'IB', 'PB']:
-            sim_code += """
-            int64_t du = (U_V * v_long / B_SCALE) + (U_U * (int64_t)U / B_SCALE) + (int64_t)U_C;
+            sim_code += f"""
+            int64_t du = {SR('U_V * v_long')} + {SR('U_U * (int64_t)U')} + U_C;
             """
 
         # --- 状態の更新 ---
@@ -137,7 +144,7 @@ class PQNIntModel(BaseNeuronModel):
                 ("Iext", "scalar")
             ],
             sim_code=sim_code,
-            threshold_condition_code="V >= (int32_t)V_THRESH"
+            threshold_condition_code=f"V >= (int32_t){4 << self.bit_f}"
         )
 
     @property
