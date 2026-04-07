@@ -1,17 +1,85 @@
 import numpy as np
-from pydantic import BaseModel, Field, ValidationError
+from typing import Dict, Iterator, Tuple, Any, List
+
 from src.core.registry import DATA_LOADERS
+from src.data.base_loader import BaseDataLoader
+from src.core.config_manager import AppConfig
 
 @DATA_LOADERS.register("pqn_test")
-class SpatialDataLoader:
-    def __init__(self, config: dict):
-        self.config = config
+class pqn_test_loader(BaseDataLoader):
+    def __init__(self, config: 'AppConfig', io_map: dict):
+        super().__init__(config, io_map)
+        
+        # ターゲットとなるポピュレーション名とニューロン数を取得
+        self.target_pop = list(self.input_map.keys())[0]
+        self.num_neurons = len(self.input_map[self.target_pop]["global_indices"])
+        
+        # 入力電流の強度
+        self.input_current = self.config.task.input
+        
+        # --- キャッシュ化: 2つの状態（ゼロ電流、刺激電流）を事前作成 ---
+        self.zero_array = np.zeros(self.num_neurons, dtype=np.float32)
+        self.stim_array = np.full(self.num_neurons, self.input_current, dtype=np.float32)
+        
+        # ステップ数の計算 (1/4 から 3/4 までの期間に電流を注入)
+        self.steps_off_1 = self.total_steps // 4
+        self.steps_on = self.total_steps // 2
+        self.steps_off_2 = self.total_steps - self.steps_off_1 - self.steps_on
+        
+        print(f"  [DataLoader] pqn_test Ready.")
+        print(f"               (Target: {self.target_pop}, Neurons: {self.num_neurons}, Total steps: {self.total_steps})")
 
-    def load_data(self):
-        tmax = self.config["simulation"]["duration"]
-        input_current = 0.15
-        number_of_iterations = int(tmax / self.config["simulation"]["dt"])
-        I_in = np.zeros((number_of_iterations, self.config["simulation"]["N"]))
-        I_in[int(number_of_iterations/4):int(number_of_iterations/4*3), :] = input_current
-        # I_in[:, :] = input_current
-        return I_in
+    def generate(self) -> Iterator[Tuple[List[Tuple[Dict[str, np.ndarray], int]], Dict[str, Any]]]:
+        """
+        テスト用の1トライアル分のデータを生成する。
+        """
+        # 事前作成した配列を使って、状態と継続ステップ数のタプルを構築
+        inputs = [
+            ({self.target_pop: self.zero_array}, self.steps_off_1),
+            ({self.target_pop: self.stim_array}, self.steps_on),
+            ({self.target_pop: self.zero_array}, self.steps_off_2)
+        ]
+        
+        # テスト用なのでメタデータはシンプルに
+        metadata = {
+            "phase": "test",
+            "trial_idx": 0,
+            "total_steps": self.total_steps,
+            "target_pop": self.target_pop
+        }
+        
+        yield inputs, metadata
+
+    def reconstruct(self, inputs, target_pop):
+        """
+        シミュレータに渡されるチャンク形式の inputs を (total_steps, num_neurons) の 2D配列に復元する。
+
+        Args:
+            inputs: [(UpdateDict, DurationSteps), ...] の形式のリスト
+            target_pop: 抽出対象のニューロンポピュレーション名 (例: "input_pop")
+
+        Returns:
+            (total_steps, num_neurons) の形状を持つ 2D NumPy 配列
+        """
+        if not inputs:
+            return np.array([])
+
+        # 1. トータルステップ数の計算
+        total_steps = sum(duration for _, duration in inputs)
+
+        num_neurons = self.num_neurons
+
+        # 3. 結果を格納する配列を初期化 (データ型は元の入力に合わせるのがベストですが、通常はfloat32)
+        result_array = np.zeros((total_steps, num_neurons))
+
+        # 4. データを時間軸に沿って埋めていく
+        current_step = 0
+        for update_dict, duration in inputs:
+            if target_pop in update_dict:
+                data = update_dict[target_pop]
+                # Numpyのブロードキャストを利用して、duration行分に一括代入
+                result_array[current_step : current_step + duration, :] = data
+            
+            current_step += duration
+
+        return result_array

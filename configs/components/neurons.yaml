@@ -1,16 +1,61 @@
-# configs/neurons.yaml
+PQN_int:
+  RSexci:
+    in_var: "Iext"
+    out_var: "V"
+  RSinhi:
+    in_var: "Iext"
+    out_var: "V"
+  FS:
+    in_var: "Iext"
+    out_var: "V"
+  LTS:
+    in_var: "Iext"
+    out_var: "V"
+  IB:
+    in_var: "Iext"
+    out_var: "V"
+  EB:
+    in_var: "Iext"
+    out_var: "V"
+  PB:
+    in_var: "Iext"
+    out_var: "V"
+  Class:
+    in_var: "Iext"
+    out_var: "V"
 
-PQN_default:
-  type: "PQN_Float32"
-  mode: "RSexci"  # Python側からパラメータを引っ張るためのキー
+PQN_float:
+  RSexci:
+    in_var: "Iext"
+    out_var: "V"
+  RSinhi:
+    in_var: "Iext"
+    out_var: "V"
+  FS:
+    in_var: "Iext"
+    out_var: "V"
+  LTS:
+    in_var: "Iext"
+    out_var: "V"
+  IB:
+    in_var: "Iext"
+    out_var: "V"
+    in_var: "Iext"
+    out_var: "V"
+  PB:
+    in_var: "Iext"
+    out_var: "V"
+  Class:
+    in_var: "Iext"
+    out_var: "V"
 
-FS_default:
-  type: "PQN_Float32"
-  mode: "FS"
-
-simple_lif:
-  type: "LIF"          # GeNN標準のLIFモデル
-  params:
+LIF:
+  excitatory:
+    C: 1.0             # 膜容量
+    TauM: 20.0         # 膜時定数
+    Vrest: -70.0       # 静止膜電位
+    Vthresh: -50.0     # 閾値
+  inhibitory:
     C: 1.0             # 膜容量
     TauM: 20.0         # 膜時定数
     Vrest: -70.0       # 静止膜電位

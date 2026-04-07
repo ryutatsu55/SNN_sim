@@ -1,30 +1,17 @@
-# パターンA: 空間配置を定義「しない」（従来通りのランダムモジュール結合）
-modular_random:
-  type: "modular"
-  e_rate: 0.75
-  p_in_module: 0.1
-  p_out_module: 0.05
-  # spatial キーは存在しない
 
-# パターンB: 空間配置を定義「する」（3Dグリッド配置に基づく距離依存結合）
+constant_prob:
+  num_modules: 4
+  e_rate: 0.75
+  p_in: 0.1
+  p_out: 0.05
+
 distance_based_grid:
   type: "distance"
   e_rate: 0.75
-  lambda_decay: 0.1        # 距離に応じた結合確率の減衰係数
-  
-  # ここで空間配置を定義
-  spatial:
-    type: "grid_3d"
-    shape: [10, 6, 1]      # x, y, z のニューロン数 (合計60)
-    spacing: 1.0           # ニューロン間の距離 [mm]
+  lambda_decay: 0.1    
 
-# パターンC: 空間配置を定義「する」（球状配置に基づくランダム結合）
 sparse_sphere:
   type: "random"
   e_rate: 0.75
   probability: 0.1
   
-  # 結合自体はランダムだが、後で「距離依存の遅延」を計算するために座標だけ持たせておくケース
-  spatial:
-    type: "sphere"
-    radius: 10.0           # [mm]

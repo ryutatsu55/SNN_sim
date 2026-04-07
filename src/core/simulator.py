@@ -1,87 +1,120 @@
 import pygenn
 import numpy as np
+from typing import Dict, Any, List, Tuple
 
-class Simulator:
-    def __init__(self, genn_model: pygenn.GeNNModel, sim_config: dict, group_info: dict = None):
+class GeNNSimulator:
+    def __init__(self, genn_model: pygenn.GeNNModel, config: Any, io_map: Dict[str, Any]):
         self.model = genn_model
-        self.config = sim_config
-        self.dt = sim_config.get("dt", 0.1)
-        self.duration = sim_config.get("duration", 100.0)
-        self.timesteps = int(self.duration / self.dt)
+        self.config = config
+        self.io_map = io_map
+        
+        self.dt = self.config.simulation.dt
+        # 1トライアルあたりの最大ステップ数 (事前メモリ確保用)
+        self.max_timesteps = int(self.config.task.duration / self.dt)
         self.is_setup = False
         
-        # NetworkBuilderから渡される、グループ名とグローバルインデックスの対応辞書
-        self.group_info = group_info or {}
+        self.record_targets = self.io_map.get("outputs", {})
+        self._recorded_vars_history = {}
 
     def setup(self):
-        """GeNNのコード生成、コンパイル、およびGPUへのロード"""
-        print(f"  [Simulator] Building and Loading Model: {self.model.name}...")
-
-        # スパイク記録の有効化
-        for pop in self.model.neuron_populations.values():
-            pop.spike_recording_enabled = True
+        """GeNNモデルのコード生成、コンパイル、およびGPUへのロード"""
+        print(f"=== [Simulator] Setup: Building model '{self.model.name}' ===")
 
         self.model.build()
-        self.model.load(num_recording_timesteps=self.timesteps)
-            
-        self.is_setup = True
-        print("  [Simulator] Setup complete.")
-
-    def run(self, input_data: np.ndarray = None):
-        """
-        シミュレーションを実行し、毎ステップの膜電位 V を取得するテスト用メソッド。
         
-        Parameters:
-        -----------
-        input_data : np.ndarray
-            時間変化する入力の場合は (timesteps, total_neurons)
-            一定の電流を流し続ける場合は (total_neurons,) の配列
-        """
+        # 【重要】GPU上に記録用バッファを事前確保してロード
+        self.model.load(num_recording_timesteps=self.max_timesteps)
+        self.is_setup = True
+        
+        print(f"  [Simulator] Setup complete. Allocated buffer for {self.max_timesteps} steps.")
+
+    def run(self, inputs: List[Tuple[Dict[str, np.ndarray], int]]) -> Dict[str, Dict[str, Any]]:
+        """1トライアル分のシミュレーションを実行する"""
         if not self.is_setup:
             raise RuntimeError("Simulator must be setup before running.")
 
-        print(f"  [Simulator] Starting {self.duration}ms simulation ({self.timesteps} steps)...")
-
-        # 記録用バッファの準備
-        results = {
-            "spikes": {},
-            "v_history": {} # グループごとに毎ステップのVを記録
+        self._recorded_vars_history = {
+            pop_name: {var_name: [] for var_name in out_info.get("record_vars", []) if var_name != "spikes"}
+            for pop_name, out_info in self.record_targets.items()
         }
-        
-        for name in self.model.neuron_populations:
-            results["spikes"][name] = []
-            results["v_history"][name] = []
 
-        for t in range(self.timesteps):
-            # --- 1. 外部入力 (Iext) の更新と転送 ---
-            # 毎ステップ入力が変化する場合、または最初のステップのみ転送
-            if input_data is not None:
-                current_input = input_data[t]
+        total_steps = sum(steps for _, steps in inputs)
+        if total_steps > self.max_timesteps:
+            raise ValueError(f"Input steps ({total_steps}) exceed allocated buffer ({self.max_timesteps}).")
+
+        print(f"=== [Simulator] Running {total_steps * self.dt}ms trial ===")
+
+        for update_dict, duration_steps in inputs:
+            # デバイス(GPU)上の変数を更新
+            for pop_name, data in update_dict.items():
+                pop = self.model.neuron_populations[pop_name]
+                target_var = self.io_map["inputs"][pop_name]["target_var"]
                 
-                for name, pop in self.model.neuron_populations.items():
-                    # グローバル配列から、このグループに属するニューロンの入力だけを抽出
-                    global_idx = self.group_info[name]["global_indices"]
-                    group_input = current_input[global_idx]
+                pop.vars[target_var].view[:] = data
+                pop.vars[target_var].push_to_device()
 
-                    # デバイス（GPU/CPU）へ転送
-                    pop.vars["Iext"].view[:] = group_input
-                    pop.vars["Iext"].push_to_device()
+            # 変数を維持したまま指定ステップ数だけGPU上で計算を進める
+            for _ in range(duration_steps):
+                self.model.step_time()
+                for pop_name, var_dict in self._recorded_vars_history.items():
+                    pop = self.model.neuron_populations[pop_name]
+                    for var_name, history_list in var_dict.items():
+                        # GPUから値をプル
+                        pop.vars[var_name].pull_from_device()
+                        # viewのコピーを履歴に追加 (ニューロン数のサイズの1D配列)
+                        history_list.append(np.copy(pop.vars[var_name].view))
 
-            # --- 2. シミュレーションを1ステップ進める ---
-            self.model.step_time()
+        return self._gather_results()
+
+    def _gather_results(self) -> Dict[str, Dict[str, Any]]:
+        """デバイスから記録結果を一括で引き出す"""
+        if getattr(self.model, "_recording_in_use", False):
+            self.model.pull_recording_buffers_from_device()
+        results = {}
+
+        for pop_name, out_info in self.record_targets.items():
+            pop = self.model.neuron_populations[pop_name]
+            pop_results = {}
+            vars_to_record = out_info.get("record_vars")
             
-            # --- 3. 毎ステップの膜電位 (V) を引き出す ---
-            for name, pop in self.model.neuron_populations.items():
-                pop.vars["V"].pull_from_device()
-                # .copy() をしないと、PyGeNNの参照バッファが毎ステップ上書きされてしまうため必須
-                results["v_history"][name].append(pop.vars["V"].view.copy())
+            if "spikes" in vars_to_record:
+                spike_times, spike_ids = pop.spike_recording_data
+                pop_results["spikes"] = {
+                    "times": spike_times.copy(),
+                    "ids": spike_ids.copy()
+                }
 
-        # --- 4. スパイクデータの回収 (ループ終了後に一括) ---
-        self.model.pull_recording_buffers_from_device()
-        for name, pop in self.model.neuron_populations.items():
-            results["spikes"][name] = pop.spike_recording_data
-            # Vの履歴をnumpy配列 (timesteps, num_neurons) に変換して扱いやすくする
-            results["v_history"][name] = np.array(results["v_history"][name])
+            for var_name in vars_to_record:
+                if var_name != "spikes":
+                    history_list = self._recorded_vars_history[pop_name][var_name]
+                    # [time_steps, num_neurons] の形状にする
+                    pop_results[var_name] = np.stack(history_list, axis=0) if history_list else np.array([])
+
+            results[pop_name] = pop_results
 
         return results
-    
+
+    def reset(self):
+        """
+        次のトライアルに向けてシミュレータの状態をリセットする。
+        これを行わないと、時間が前回の続きから進み、メモリオーバーフローを引き起こす。
+        """
+        # 1. ネットワーク時間を0に戻す (これにより記録バッファのインデックスが先頭に戻る)
+        # self.model.t = 0.0
+        self.model.timestep = 0
+
+        # 2. 変数(膜電位 V など)を初期状態に戻してGPUへ再転送
+        # (NetworkBuilderで初期化された際の値をホストからデバイスへ押し込む)
+        for pop in self.model.neuron_populations.values():
+            for var_name, var in pop.vars.items():
+                var.push_to_device()
+                
+        for pop in self.model.synapse_populations.values():
+            for var_name, var in pop.vars.items():
+                var.push_to_device()
+                
+        # ※ GeNN 5.x においてスパイク等の内部バッファポインタを明示的にクリアするAPI
+        # （基本的には pull_recording_buffers_from_device を呼んでおけば問題ありませんが、
+        # 念のため PyGeNN の reinit メソッド等で状態をクリーンにします）
+        # self.model.reinit() # 必要に応じてコメントアウト解除
+        print("  [Simulator] Network time and variables reset to 0.")

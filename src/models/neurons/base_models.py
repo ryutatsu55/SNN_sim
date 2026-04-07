@@ -4,8 +4,9 @@ class BaseNeuronModel(ABC):
     """
     バックエンド(GeNN等)にモデル情報を渡すための統一インターフェース
     """
-    def __init__(self, **kwargs):
-        self.config = kwargs
+    def __init__(self, config, dt):
+        self.config = config
+        self.dt = dt
 
     @property
     @abstractmethod

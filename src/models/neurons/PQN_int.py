@@ -9,11 +9,9 @@ class PQNIntModel(BaseNeuronModel):
     公式の PQNengine に基づく固定小数点演算版 PQN モデル。
     GeNNパーサーエラーを回避しつつ、float変換による誤差と負数のシフト丸め誤差を完全に排除した設計。
     """
-    def __init__(self, mode="RSexci", **kwargs):
-        super().__init__(**kwargs)
-        self.mode = mode
-        self.engine = PQNengine(mode=mode)
-        
+    def __init__(self, config, dt):
+        super().__init__(config, dt)
+        self.engine = PQNengine(mode=config.mode)
         self.bit_f = self.engine.BIT_WIDTH_FRACTIONAL
         self.bit_y = self.engine.BIT_Y_SHIFT 
         
@@ -59,7 +57,7 @@ class PQNIntModel(BaseNeuronModel):
         """
 
         # --- dv (膜電位変化量) の計算 ---
-        if self.mode == 'PB':
+        if self.config.mode == 'PB':
             sim_code += f"""
             int64_t dv;
             if (V < 0) {{
@@ -68,7 +66,7 @@ class PQNIntModel(BaseNeuronModel):
                 dv = {SR('V_VV_L * vv')} + {SR('V_V_L * v_long')} + V_C_L + {SR('V_N * (int64_t)N')} + {SR('V_Q * (int64_t)Q')} - {SR('V_U * (int64_t)U')} + {SR('V_I * i_fixed')};
             }}
             """
-        elif self.mode == 'Class2':
+        elif self.config.mode == 'Class2':
             sim_code += f"""
             int64_t dv;
             if (V < 0) {{
@@ -88,7 +86,7 @@ class PQNIntModel(BaseNeuronModel):
             """
 
         # --- dn (回復変数変化量) の計算 ---
-        if self.mode in ['LTS', 'IB']:
+        if self.config.mode in ['LTS', 'IB']:
             sim_code += f"""
             int64_t dn;
             if (V < RG) {{
@@ -113,7 +111,7 @@ class PQNIntModel(BaseNeuronModel):
             """
 
         # --- dq, du (追加変数) の計算 ---
-        if self.mode != 'Class2':
+        if self.config.mode != 'Class2':
             sim_code += f"""
             int64_t dq;
             if (V < RH) {{
@@ -123,20 +121,20 @@ class PQNIntModel(BaseNeuronModel):
             }}
             """
         
-        if self.mode in ['LTS', 'IB', 'PB']:
+        if self.config.mode in ['LTS', 'IB', 'PB']:
             sim_code += f"""
             int64_t du = {SR('U_V * v_long')} + {SR('U_U * (int64_t)U')} + U_C;
             """
 
         # --- 状態の更新 ---
         sim_code += "V += (int32_t)dv; N += (int32_t)dn;"
-        if self.mode != 'Class2':
+        if self.config.mode != 'Class2':
             sim_code += "Q += (int32_t)dq;"
-        if self.mode in ['LTS', 'IB', 'PB']:
+        if self.config.mode in ['LTS', 'IB', 'PB']:
             sim_code += "U += (int32_t)du;"
 
         return pygenn.create_neuron_model(
-            f"PQN_Int_{self.mode}",
+            f"PQN_Int_{self.config.mode}",
             params=list(self._params.keys()),
             vars=[
                 ("V", "int32_t"), ("N", "int32_t"), 

@@ -1,37 +1,42 @@
 simulation:
   N: 150
   dt: 0.1             # 時間ステップ (ms)
-  duration: 2000     # シミュレーション時間 (s)
-  backend: "CUDA"     # 実行バックエンド
+  seed: null         # 乱数シード
 
 neurons:
   Layer_Exc:
-    type: "PQN_int"
-    mode: "RSexci"
-    num: 100
+    type: PQN_int
+    mode: RSexci
+    num: 48
   Layer_Inh:
-    type: "PQN_int"
-    mode: "RSinhi"
-    num: 50
+    type: PQN_int
+    mode: RSinhi
+    num: 12
+
+synapses:
+  Exc_to_Inh:
+    source: Layer_Exc
+    target: Layer_Inh
+    weight_scale: 1.0
+    synapse:
+      type: tsodyks_markram
+      mode: facilitate
+    plasticity: 
+      type: static
+      mode: null
+  Inh_to_Exc:
+    source: Layer_Inh
+    target: Layer_Exc
+    weight_scale: -4.0
+    synapse:
+      type: tsodyks_markram
+      mode: depress
+    plasticity: 
+      type: static
+      mode: null
 
 network:
-  space: "grid_3d"
-  connection: "constant_prob"
-  weight: "constant"
-  delay: "constant"
-
-synapse_groups:
-  Exc_to_Inh:
-    source: "Layer_Exc"
-    target: "Layer_Inh"
-    synapse: "tsodyks_facilitate"
-    plasticity: "static"
-    weight_scale: 1.0
-  Inh_to_Exc:
-    source: "Layer_Inh"
-    target: "Layer_Exc"
-    synapse: "tsodyks_depress"
-    plasticity: "static"
-    weight_scale: -4.0
-
-data: pqn_test
+  space: no_space
+  connection: constant_prob
+  weight: constant
+  delay: constant 

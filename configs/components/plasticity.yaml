@@ -6,4 +6,4 @@ stdp_additive:
   a_minus: 0.012
 
 static:
-  type: "none"      # 長期的な学習（重み変化）は行わない
+  type: null      # 長期的な学習（重み変化）は行わない

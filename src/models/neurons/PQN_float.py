@@ -9,11 +9,10 @@ class PQNFloatModel(BaseNeuronModel):
     浮動小数点演算（FP32）による PQN モデル。
     全モードに対応し、オイラー法を用いてダイナミクスを計算します。
     """
-    def __init__(self, mode="RSexci", **kwargs):
-        super().__init__(**kwargs)
-        self.mode = mode
-        self.dt = self.config["dt"]
-        self.engine = PQNengine(mode=mode)
+    def __init__(self, config, dt):
+        super().__init__(config, dt)
+        self.dt = dt
+        self.engine = PQNengine(mode=config.mode)
         self._params, self._init_vars = self._prepare_genn_data()
 
     def _prepare_genn_data(self):
@@ -39,7 +38,7 @@ class PQNFloatModel(BaseNeuronModel):
         }
 
         # LTS, IB, PB モード用の追加パラメータ
-        if self.mode in ['LTS', 'IB', 'PB']:
+        if self.config.mode in ['LTS', 'IB', 'PB']:
             params.update({
                 "EPSU_OVER_TAU": float(p.get('epsu', 0.0) / p['tau']),
                 "ALPU": float(p.get('alpu', 0.0)),
@@ -75,40 +74,40 @@ class PQNFloatModel(BaseNeuronModel):
 
         # モードに応じた微分方程式の構築
         # --- dV/dt ---
-        if self.mode == 'PB':
+        if self.config.mode == 'PB':
             sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N - Q - U + I0 + K * Iext);"
-        elif self.mode == 'Class2':
+        elif self.config.mode == 'Class2':
             sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N + I0 + K * Iext);"
         else:
             sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N - Q + I0 + K * Iext);"
 
         # --- dn/dt ---
-        if self.mode in ['LTS', 'IB']:
+        if self.config.mode in ['LTS', 'IB']:
             sim_code += "scalar eta = (U < RU) ? ETA0 : ETA1;"
             sim_code += "scalar dN = INV_TAU * (g_v - N) * eta;"
         else:
             sim_code += "scalar dN = INV_TAU * (g_v - N);"
 
         # --- dq/dt, du/dt ---
-        if self.mode != 'Class2':
+        if self.config.mode != 'Class2':
             sim_code += """
             const scalar h_v = (v_curr < RH) ? fma(A_HN, (v_curr - B_HN) * (v_curr - B_HN), C_HN)
                                              : fma(A_HP, (v_curr - B_HP) * (v_curr - B_HP), C_HP);
             scalar dQ = EPSQ_OVER_TAU * (h_v - Q);
             """
         
-        if self.mode in ['LTS', 'IB', 'PB']:
+        if self.config.mode in ['LTS', 'IB', 'PB']:
             sim_code += "scalar dU = EPSU_OVER_TAU * (v_curr - V0 - ALPU * U);"
 
         # オイラー法による更新 (GeNN の DT を秒単位に変換して使用)
         dt_sec = self.dt / 1000.0
         sim_code += f"const scalar dt_sec = (scalar){dt_sec};"
         sim_code += "V += dV * dt_sec; N += dN * dt_sec;"
-        if self.mode != 'Class2': sim_code += "Q += dQ * dt_sec;"
-        if self.mode in ['LTS', 'IB', 'PB']: sim_code += "U += dU * dt_sec;"
+        if self.config.mode != 'Class2': sim_code += "Q += dQ * dt_sec;"
+        if self.config.mode in ['LTS', 'IB', 'PB']: sim_code += "U += dU * dt_sec;"
 
         return pygenn.create_neuron_model(
-            f"PQN_Float_{self.mode}",
+            f"PQN_Float_{self.config.mode}",
             params=list(self._params.keys()),
             vars=[("V", "scalar"), ("N", "scalar"), ("Q", "scalar"), ("U", "scalar"), ("Iext", "scalar")],
             sim_code=sim_code,

@@ -1,16 +1,20 @@
+pqn_test:
+    input: 0.09         # [nA]
+    input_type: "step"  # (step or continuous)
+    duration: 2000.0    # [ms]
+    graph_name: "PQN_V_test"
+    
 spatial_recognition:
-  name: "spatial_recognition"
+  duration: 10000.0
   input:
     type: "spatial"
     strength: 0.5
     duration_stim: 0.1
-    input_dt: 0.01         # 旧 INPUT_DT
     input_nodes: 30
   output:
     teaching_duration: 2.5
     readout_nodes: 60
   experiment:
-    duration_interval: 10.0
     n_train: 20
     n_test: 10
 
