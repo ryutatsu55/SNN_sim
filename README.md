@@ -3,22 +3,19 @@
 PyGeNNをバックエンドに採用した、スパイキングニューラルネットワーク(SNN)シミュレーションフレームワーク
 カスタムモデルであるPQN (Piecewise Quadratic Neuron) の実装（浮動小数点/固定小数点）を含み、YAMLとPydanticによる設定管理
 
-## Features
-
 - **PyGeNN Backend**: GeNN (GPU Enhanced Neuronal Networks) を利用した高速なSNNシミュレーション。
 - **Flexible Configuration**: YAMLベースの設定ファイルをモジュール化(`components/`)し、`Pydantic`による型チェックとバリデーションを実装
 - **Registry Pattern**: ニューロンモデル、シナプス、トポロジー、データローダーなどをレジストリパターンで動的に登録・読み込み可能
-- **PQN Models**: Piecewise Quadratic Neuron モデルの浮動小数点演算版(`PQN_float`)および、GeNN上で安全に動作する固定小数点演算版(`PQN_int`)を実装
 
 ## 初期設定
 順番にremoteSSHの設定、githubの設定、pythonの環境構築、GeNNのインストールが必要になる。
 remoteSSHについては、黒木または先輩に直接聞いてください。セキュリティーの観点でgithubには共有しない。
-引継ぎ用に**`github_setup.md`, `python_env_setup`**を用意したのでそれを参照して初期設定してちょうだい
-GeNNのインストールについては最新版の5.4を使用している。公式ドキュメントを参考にインストールしてください。`(https://genn-team.github.io/genn/documentation/5/index.html)` ※editable installってやつです。homeディレクトリにcloneまでしてあります。各自の仮想環境にインストールしてください。
+引継ぎ用に`github_setup.md`, `python_env_setup`を用意したのでそれを参照して初期設定してちょうだい
+GeNNのインストールについては最新版の5.4を使用している。公式ドキュメントを参考にインストールしてください。(https://genn-team.github.io/genn/documentation/5/index.html) ※editable installってやつです。homeディレクトリにcloneまでしてあります。各自の仮想環境にインストールしてください。
 
 
 
-## Directory Structure
+## ファイル構造
 
 ```text
 SNN_sim/
@@ -51,7 +48,7 @@ python scripts/test.py
 
 ## アーキテクチャと設定管理 (YAML + Pydantic + Registry)
 
-本プロジェクトでは、「設定ファイル (YAML)」「型バリデーション (Pydantic)」「動的クラス生成 (Registry)」の3者が協調して動作します。既存のコアコード（`NetworkBuilder`等）を書き換えることなく、新しいモデルや実験を追加できる設計です。
+本プロジェクトでは、「設定ファイル (YAML)」「型バリデーション (Pydantic)」「動的クラス生成 (Registry)」の3者が協調して動作することで、モデルやその条件を独立に管理しています。既存のコアコード（`NetworkBuilder`等）を書き換えることなく、新しいモデルや実験を追加できる設計です。
 
 1. **`configs/` (YAML)**: 実験パラメータや、使用するクラスの「名前（文字列）」を階層的に定義します。実行ファイル`scripts/*.py`から指定されるメイン設定(例:`test.yaml`)とモジュール別設定(`components/*.yaml`)に分割して記述します。
 2. **`src/core/config_manager.py`(`pydantic`)**: 読み込まれたYAMLデータを結合し、型チェックと値のバリデーションを行ってオブジェクト化します。
@@ -59,11 +56,12 @@ python scripts/test.py
 
 ### Coreモジュールの役割 (`src/core/`)
 コアモジュールはシミュレータの心臓部。
-**モデル追加時にここのコードを修正しなくていい**
+**基本的にここは変更しないで済むように設計されてるはず**
 * **`config_manager.py`**: YAMLの読み込み、コンポーネントの結合、Pydanticによる構造化。
     ちなみにこれをメインファイルとして実行すると最終的に完成されるconfigオブジェクトを確認できる
-* **`registry.py`**: コンポーネントをグローバルに登録・取得する仕組み。
-* **`NetworkBuilder.py`**: 設定とクラス部品からネットワークトポロジーを構築するファクトリ。
+* **`registry.py`**: コンポーネント(Class)をグローバルに登録・取得する仕組み。
+    ここに登録されたClassのうちyamlで指定した名前で登録されているClassが動的に呼び出される
+* **`NetworkBuilder.py`**: 設定とClass部品からネットワークトポロジーを構築するファクトリ。
 * **`simulator.py`**: PyGeNNへのロード、GPU転送、ステップ実行を管理。
 
 ---
@@ -81,6 +79,7 @@ python scripts/test.py
 network:
   connection: constant_prob  # components/connections.yaml内のプロファイル名
   weight: normal_broad       # components/weights.yaml内のプロファイル名
+  ~~~~
 ```
 
 **コンポーネント設定 (例: `configs/components/connections.yaml`)**
@@ -105,7 +104,7 @@ neurons:
 ```
 
 コンポーネント側にはin_varとout_varで入力対象の変数と出力対象の変数を指定する。
-その他そのモデルに必要な設定値もここで定義する。
+その他そのモデルに必要な独自の設定値もここで定義する。
 
 **コンポーネント設定 (例: `configs/components/neurons.yaml`)**
 ```yaml
@@ -121,8 +120,8 @@ PQN_int:
 
 `models/` や `data/` 配下に新しいモデルを追加する場合、以下のルールに従います。
 
-### 1. 対応する抽象基底クラス (ABC) の継承
-カテゴリに応じて必ず基底クラスを継承し、必須メソッドを実装します。
+### 1. 対応する親クラス (ABC) の継承
+カテゴリに応じて必ず親クラスを継承し、必須メソッドを実装します。
 
 * **ニューロン (`BaseNeuronModel`)**: `model_class`, `params` (定数), `initial_vars` (初期値) を実装する。
 * **データローダー (`BaseDataLoader`)**: `generate()` を実装し、1トライアルごとのデータを `yield` する。
@@ -130,6 +129,8 @@ PQN_int:
 * **結合マスク (`BaseConnection`)**: `generate()` を実装し、結合有無の配列を返す。
 * **重み生成 (`BaseWeight`)**: `generate()` を実装し、重みの配列を返す。
 * **遅延生成 (`BaseDelay`)**: `generate()` を実装し、遅延の配列を返す。
+
+詳細はそれぞれの親クラスをよく読むこと
 
 ### 2. レジストリへの登録
 作成したクラス定義の直上に、必ず `@カテゴリ名.register("YAMLで使用する名前")` デコレータを付与します。
