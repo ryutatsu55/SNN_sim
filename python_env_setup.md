@@ -8,15 +8,17 @@ PC全体のPython環境に直接パッケージをインストールすると、
 
 ---
 
-## フェーズ1：現在の環境を書き出す
+## フェーズ1：現在の環境を書き出す(venvがすでにある人が行う。初めて環境作る人はフェーズ2から)
 すでに正しく動いている先人の環境を「設計図（`requirements.txt`）」として書き出します。
 
 ```bash
-# SNN_sim などのプロジェクトディレクトリ（既存の作業フォルダ）に移動
-cd 既存の作業フォルダ
-
+# 既存の.venvかアクティブであることを想定しています
 # 現在インストールされているパッケージ一覧をテキストに書き出す
 pip freeze > requirements.txt
+# 書き出された内容をgit push する
+git add requirements.txt
+git commit -m "何かコメントあればここに書いて"
+git push origin master
 ```
 
 ## フェーズ2：新しい環境を構築する
@@ -25,14 +27,18 @@ pip freeze > requirements.txt
 # 自分の作業フォルダに移動
 cd 自分の作業フォルダ
 
+# フェーズ1で事前に書き出されたrequirements.txtを含む最新のプロジェクトをpullする
+git pull
+
 # "venv" という名前の仮想環境を作成（少し時間がかかります）
 python3 -m venv .venv
 ```
-### 2.仮想環境をGitの管理から除外する
+<!-- ### 2.仮想環境をGitの管理から除外する
 .gitignore ファイルに "venv/" を追記する
 ```bash
 echo ".venv/" >> .gitignore
-```
+``` -->
+
 ### 3. 仮想環境の有効化（アクティベート）
 ```bash
 source .venv/bin/activate
@@ -44,4 +50,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-
+### 5. 動作確認
+構築した環境でプロジェクトが動作するか確認
+```bash
+python scripts/test.py
+```
