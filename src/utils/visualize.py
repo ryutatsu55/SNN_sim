@@ -1,10 +1,25 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def raster(spike_data, title="Raster"):
-    """ラスタープロット等の図を出力するダミー関数"""
-    print(f" [Vis] Generating Plot: {title} (saving to file...)")
-    # matplotlib 等の処理をここに記述
+def raster(spike_time: np.ndarray, neuron_id: np.ndarray, title="Raster"):
+    """発火時刻とニューロンIDからラスタープロットを作成・保存する関数"""
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    if spike_time.size >0:
+        ax.scatter(spike_time, neuron_id, s=8, c='blue', marker='.', linewidths=0)
+        ax.set_ylim(np.min(neuron_id) - 0.5, np.max(neuron_id) + 0.5)
+        ax.set_xlim(0, np.max(spike_time))
+    else:
+        raise ValueError("spike_time and neuron_id arrays must not be empty.")
+    
+    ax.set_title(title)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Neuron ID')
+
+    plt.tight_layout()
+    plt.savefig(f"{title}.png")
+    plt.close(fig)
 
 def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     tmax = config.task.duration/1000
