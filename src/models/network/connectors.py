@@ -57,108 +57,45 @@ class DistanceBasedTopology(BaseConnection):
 class ModuleBasedTopology(BaseConnection):
     def generate(self):
         """ニューロンをモジュール（クラスター）に分割し、モジュール内は高確率、モジュール間は低確率で結合するマスクを生成"""
-        reservoir_weight = np.zeros((self.num_neurons, self.num_neurons))
-        # TODO: self.num_neurons / self.config.num_modules も何かしらの変数で置きたい。
-        block_size = self.num_neurons // self.config.num_modules
+        num_modules = self.config.num_modules
+        p_in = 0.1
+        p_out = 0.01
 
-        G = 0.5 # TODO: これも config から取るようにしたい
-        p = 0.1 # TODO: これも config から取るようにしたい
-        offset = 1.0
-        
-        crust_idx = 0
-        while crust_idx != self.config.num_modules:
-            i1 = int(crust_idx * self.num_neurons / self.config.num_modules)
-            i2 = int((crust_idx + 1) * self.num_neurons / self.config.num_modules)
-            reservoir_weight[i1:i2, i1:i2] = ((G * self.rng.randn(block_size, block_size)) + offset) * (
-                self.rng.rand(block_size, block_size) < p
+        mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
+
+        # ニューロンをモジュールに分割するためのインデックス範囲を計算
+        module_ranges: list[tuple[int, int]] = []
+        for module_idx in range(num_modules):
+            start = int(module_idx * self.num_neurons / num_modules)
+            end = int((module_idx + 1) * self.num_neurons / num_modules)
+            module_ranges.append((start, end))
+
+        # モジュール内の結合を生成
+        for start, end in module_ranges:
+            block_shape = (end - start, end - start)
+            block_mask = self.rng.rand(*block_shape) < p_in
+            mask[start:end, start:end] = block_mask.astype(np.int8)
+
+        # モジュール間の結合を生成
+        for module_idx in range(num_modules):
+            current_module_start, current_module_end = module_ranges[module_idx]
+            # module_idx + 1 == num_modulesのとき、IndexErrorになる。よって、%演算子を使うことで、module_idx + 1 == num_modulesのときは、0に戻るようにする。
+            next_module_start, next_module_end = module_ranges[(module_idx + 1) % num_modules]
+
+            forward_block_shape = (
+                current_module_end - current_module_start,
+                next_module_end - next_module_start,
             )
-            # reservoir_weight[i1:i2, i1:i2] = (
-            #     G*(self.rng.rand(block_size, block_size)-0.5) + offset
-            #     ) * (self.rng.rand(block_size, block_size) < p)
+            backward_block_shape = (
+                next_module_end - next_module_start,
+                current_module_end - current_module_start,
+            )
 
-            # 1. ニューロンごとに異なる「接続確率」を作成する
-            # 対数正規分布を使って「ムラ」を作る (sigmaが大きいほどムラが激しくなる)
-            # size=(1, block_size) にすることで「列（前ニューロン）」ごとに確率を変える
-            # variability = self.rng.lognormal(mean=0.0, sigma=1.0, size=(1, block_size))
-            # # 平均が元の p (0.08) になるように正規化
-            # variability = variability / np.mean(variability)
-            # p_vec = p * variability
-            # # 確率が 1.0 を超えないようにクリップ
-            # p_vec = np.clip(p_vec, 0.0, 1.0)
-            # # self.rng.rand(self.num_neurons, self.num_neurons) < (1, self.num_neurons) の比較により、ブロードキャスト
-            # mask = self.rng.rand(block_size, block_size) < p_vec
-            # reservoir_weight[i1:i2, i1:i2] = (
-            #     G * (rng.rand(block_size, block_size) - 0.5) + offset
-            # ) * mask
-            
-            crust_idx += 1
-        
-        # クラスター間の接続
-        M = 4
-        G = 0.5
-        p = 0.01
-        offset = 1.0
-        # TODO: hogeの名前を変えたい。さすがにダメ。
-        for hoge in range(M):
-            i_range1 = int((hoge * self.num_neurons / self.config.num_modules) % self.num_neurons)
-            i_range2 = int((hoge + 1) * self.num_neurons / self.config.num_modules)
-            if i_range2 > self.num_neurons:
-                i_range2 = i_range2 % self.num_neurons
-            j_range1 = int(((hoge + 1) * self.num_neurons / self.config.num_modules) % self.num_neurons)
-            j_range2 = int((hoge + 2) * self.num_neurons / self.config.num_modules)
-            if j_range2 > self.num_neurons:
-                j_range2 = j_range2 % self.num_neurons
-            reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
-                (G * self.rng.randn(block_size, block_size)) + offset
-            ) * (self.rng.rand(block_size, block_size) < p)
-            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
-            #     G*(self.rng.rand(block_size, block_size)-0.5) + offset
-            #     ) * (self.rng.rand(block_size, block_size) < p)
+            # 各モジュールを隣接モジュールと双方向に接続する。
+            forward_mask = self.rng.rand(*forward_block_shape) < p_out
+            backward_mask = self.rng.rand(*backward_block_shape) < p_out
 
-            # variability = self.rng.lognormal(mean=0.0, sigma=2.0, size=(1, block_size))
-            # variability = variability / np.mean(variability)
-            # p_vec = p * variability
-            # p_vec = np.clip(p_vec, 0.0, 1.0)
-            # mask = self.rng.rand(block_size, block_size) < p_vec
-            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
-            #     G * (self.rng.rand(block_size, block_size) - 0.5) + offset
-            # ) * mask
+            mask[current_module_start:current_module_end, next_module_start:next_module_end] = forward_mask.astype(np.int8)
+            mask[next_module_start:next_module_end, current_module_start:current_module_end] = backward_mask.astype(np.int8)
 
-            i_range1 = int(((hoge + 1) * self.num_neurons / self.config.num_modules) % self.num_neurons)
-            i_range2 = int((hoge + 2) * self.num_neurons / self.config.num_modules)
-            if i_range2 > self.num_neurons:
-                i_range2 = i_range2 % self.num_neurons
-            j_range1 = int((hoge * self.num_neurons / self.config.num_modules) % self.num_neurons)
-            j_range2 = int((hoge + 1) * self.num_neurons / self.config.num_modules)
-            if j_range2 > self.num_neurons:
-                j_range2 = j_range2 % self.num_neurons
-            reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
-                (G * self.rng.randn(block_size, block_size)) + offset
-            ) * (self.rng.rand(block_size, block_size) < p)
-            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
-            #     G*(self.rng.rand(block_size, block_size)-0.5) + offset
-            #     ) * (self.rng.rand(block_size, block_size) < p)
-
-            # variability = self.rng.lognormal(mean=0.0, sigma=2.0, size=(1, block_size))
-            # variability = variability / np.mean(variability)
-            # p_vec = p * variability
-            # p_vec = np.clip(p_vec, 0.0, 1.0)
-            # mask = self.rng.rand(block_size, block_size) < p_vec
-            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
-            #     G * (self.rng.rand(block_size, block_size) - 0.5) + offset
-            # ) * mask
-
-        # 抑制結合の設定
-        mask = np.ones((self.num_neurons, self.num_neurons))
-        inhi_idx = self.rng.choice(np.arange(self.num_neurons), int(self.num_neurons/4), replace=False)
-        mask[:, inhi_idx] = -1
-        reservoir_weight = reservoir_weight * mask
-        # reservoir_weight = np.zeros((N, N))#test
-        # reservoir_weight[0, 1] = 1       #test
-        type = np.where(mask[0,:] == 1, 0, 1)
-        mask = (reservoir_weight != 0) * mask
-
-        return reservoir_weight, mask, type
-        mask = (reservoir_weight != 0) * mask
-
-        return reservoir_weight, mask, type
+        return mask
