@@ -60,6 +60,7 @@ class ModuleBasedTopology(BaseConnection):
         num_modules = self.config.num_modules
         within_module_connection_prob = self.config.within_module_connection_prob
         between_module_connection_prob = self.config.between_module_connection_prob
+        allow_self_connections = self.config.allow_self_connections
 
         mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
 
@@ -97,5 +98,8 @@ class ModuleBasedTopology(BaseConnection):
 
             mask[current_module_start:current_module_end, next_module_start:next_module_end] = forward_mask.astype(np.int8)
             mask[next_module_start:next_module_end, current_module_start:current_module_end] = backward_mask.astype(np.int8)
+
+        if not allow_self_connections:
+            np.fill_diagonal(mask, 0)
 
         return mask

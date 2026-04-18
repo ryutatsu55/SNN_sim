@@ -20,3 +20,4 @@ module_based:
   num_modules: 4
   within_module_connection_prob: 0.1
   between_module_connection_prob: 0.01
+  allow_self_connections: true
