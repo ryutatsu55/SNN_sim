@@ -57,7 +57,7 @@ class DistanceBasedTopology(BaseConnection):
 class ModuleBasedTopology(BaseConnection):
     def generate(self):
         """ニューロンをモジュール（クラスター）に分割し、モジュール内は高確率、モジュール間は低確率で結合するマスクを生成"""
-        resovoir_weight = np.zeros((self.num_neurons, self.num_neurons))
+        reservoir_weight = np.zeros((self.num_neurons, self.num_neurons))
         # TODO: self.num_neurons / self.config.num_modules も何かしらの変数で置きたい。
         block_size = self.num_neurons // self.config.num_modules
 
@@ -69,10 +69,10 @@ class ModuleBasedTopology(BaseConnection):
         while crust_idx != self.config.num_modules:
             i1 = int(crust_idx * self.num_neurons / self.config.num_modules)
             i2 = int((crust_idx + 1) * self.num_neurons / self.config.num_modules)
-            resovoir_weight[i1:i2, i1:i2] = ((G * self.rng.randn(block_size, block_size)) + offset) * (
+            reservoir_weight[i1:i2, i1:i2] = ((G * self.rng.randn(block_size, block_size)) + offset) * (
                 self.rng.rand(block_size, block_size) < p
             )
-            # resovoir_weight[i1:i2, i1:i2] = (
+            # reservoir_weight[i1:i2, i1:i2] = (
             #     G*(self.rng.rand(block_size, block_size)-0.5) + offset
             #     ) * (self.rng.rand(block_size, block_size) < p)
 
@@ -87,7 +87,7 @@ class ModuleBasedTopology(BaseConnection):
             # p_vec = np.clip(p_vec, 0.0, 1.0)
             # # self.rng.rand(self.num_neurons, self.num_neurons) < (1, self.num_neurons) の比較により、ブロードキャスト
             # mask = self.rng.rand(block_size, block_size) < p_vec
-            # resovoir_weight[i1:i2, i1:i2] = (
+            # reservoir_weight[i1:i2, i1:i2] = (
             #     G * (rng.rand(block_size, block_size) - 0.5) + offset
             # ) * mask
             
@@ -108,10 +108,10 @@ class ModuleBasedTopology(BaseConnection):
             j_range2 = int((hoge + 2) * self.num_neurons / self.config.num_modules)
             if j_range2 > self.num_neurons:
                 j_range2 = j_range2 % self.num_neurons
-            resovoir_weight[i_range1:i_range2, j_range1:j_range2] = (
+            reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
                 (G * self.rng.randn(block_size, block_size)) + offset
             ) * (self.rng.rand(block_size, block_size) < p)
-            # resovoir_weight[i_range1:i_range2, j_range1:j_range2] = (
+            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
             #     G*(self.rng.rand(block_size, block_size)-0.5) + offset
             #     ) * (self.rng.rand(block_size, block_size) < p)
 
@@ -120,7 +120,7 @@ class ModuleBasedTopology(BaseConnection):
             # p_vec = p * variability
             # p_vec = np.clip(p_vec, 0.0, 1.0)
             # mask = self.rng.rand(block_size, block_size) < p_vec
-            # resovoir_weight[i_range1:i_range2, j_range1:j_range2] = (
+            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
             #     G * (self.rng.rand(block_size, block_size) - 0.5) + offset
             # ) * mask
 
@@ -132,10 +132,10 @@ class ModuleBasedTopology(BaseConnection):
             j_range2 = int((hoge + 1) * self.num_neurons / self.config.num_modules)
             if j_range2 > self.num_neurons:
                 j_range2 = j_range2 % self.num_neurons
-            resovoir_weight[i_range1:i_range2, j_range1:j_range2] = (
+            reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
                 (G * self.rng.randn(block_size, block_size)) + offset
             ) * (self.rng.rand(block_size, block_size) < p)
-            # resovoir_weight[i_range1:i_range2, j_range1:j_range2] = (
+            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
             #     G*(self.rng.rand(block_size, block_size)-0.5) + offset
             #     ) * (self.rng.rand(block_size, block_size) < p)
 
@@ -144,7 +144,7 @@ class ModuleBasedTopology(BaseConnection):
             # p_vec = p * variability
             # p_vec = np.clip(p_vec, 0.0, 1.0)
             # mask = self.rng.rand(block_size, block_size) < p_vec
-            # resovoir_weight[i_range1:i_range2, j_range1:j_range2] = (
+            # reservoir_weight[i_range1:i_range2, j_range1:j_range2] = (
             #     G * (self.rng.rand(block_size, block_size) - 0.5) + offset
             # ) * mask
 
@@ -152,10 +152,13 @@ class ModuleBasedTopology(BaseConnection):
         mask = np.ones((self.num_neurons, self.num_neurons))
         inhi_idx = self.rng.choice(np.arange(self.num_neurons), int(self.num_neurons/4), replace=False)
         mask[:, inhi_idx] = -1
-        resovoir_weight = resovoir_weight * mask
-        # resovoir_weight = np.zeros((N, N))#test
-        # resovoir_weight[0, 1] = 1       #test
+        reservoir_weight = reservoir_weight * mask
+        # reservoir_weight = np.zeros((N, N))#test
+        # reservoir_weight[0, 1] = 1       #test
         type = np.where(mask[0,:] == 1, 0, 1)
-        mask = (resovoir_weight != 0) * mask
+        mask = (reservoir_weight != 0) * mask
 
-        return resovoir_weight, mask, type
+        return reservoir_weight, mask, type
+        mask = (reservoir_weight != 0) * mask
+
+        return reservoir_weight, mask, type
