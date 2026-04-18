@@ -14,4 +14,7 @@ sparse_sphere:
   type: "random"
   e_rate: 0.75
   probability: 0.1
-  
+
+module_based:
+  type: "module"
+  num_modules: 4
