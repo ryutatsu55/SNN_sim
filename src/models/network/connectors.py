@@ -58,8 +58,8 @@ class ModuleBasedTopology(BaseConnection):
     def generate(self):
         """ニューロンをモジュール（クラスター）に分割し、モジュール内は高確率、モジュール間は低確率で結合するマスクを生成"""
         num_modules = self.config.num_modules
-        p_in = 0.1
-        p_out = 0.01
+        within_module_connection_prob = self.config.within_module_connection_prob
+        between_module_connection_prob = self.config.between_module_connection_prob
 
         mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
 
@@ -73,7 +73,7 @@ class ModuleBasedTopology(BaseConnection):
         # モジュール内の結合を生成
         for start, end in module_ranges:
             block_shape = (end - start, end - start)
-            block_mask = self.rng.rand(*block_shape) < p_in
+            block_mask = self.rng.rand(*block_shape) < within_module_connection_prob
             mask[start:end, start:end] = block_mask.astype(np.int8)
 
         # モジュール間の結合を生成
@@ -92,8 +92,8 @@ class ModuleBasedTopology(BaseConnection):
             )
 
             # 各モジュールを隣接モジュールと双方向に接続する。
-            forward_mask = self.rng.rand(*forward_block_shape) < p_out
-            backward_mask = self.rng.rand(*backward_block_shape) < p_out
+            forward_mask = self.rng.rand(*forward_block_shape) < between_module_connection_prob
+            backward_mask = self.rng.rand(*backward_block_shape) < between_module_connection_prob
 
             mask[current_module_start:current_module_end, next_module_start:next_module_end] = forward_mask.astype(np.int8)
             mask[next_module_start:next_module_end, current_module_start:current_module_end] = backward_mask.astype(np.int8)

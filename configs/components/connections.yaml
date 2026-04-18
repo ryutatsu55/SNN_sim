@@ -18,3 +18,5 @@ sparse_sphere:
 module_based:
   type: "module"
   num_modules: 4
+  within_module_connection_prob: 0.1
+  between_module_connection_prob: 0.01
