@@ -54,3 +54,32 @@ class DistanceBasedDelay(BaseDelay):
         delays[idx] = calc_delays[idx]
         
         return delays
+
+@DELAY_MODELS.register("random")
+class RandomDelay(BaseDelay):
+    def generate(self) -> np.ndarray:
+        """結合がある箇所に正規分布ベースのランダム遅延を割り当てる"""
+        mean = float(self.config.mean)
+        std = float(self.config.std)
+        min_delay = self.config.min
+        max_delay = self.config.max
+
+        if std < 0:
+            raise ValueError("RandomDelay requires std >= 0.")
+
+        delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+        valid_mask = self.mask != 0
+        num_connections = int(np.count_nonzero(valid_mask))
+
+        if num_connections == 0:
+            return delays
+
+        sampled_delays = self.rng.normal(mean, std, size=num_connections).astype(np.float32)
+
+        if min_delay is not None or max_delay is not None:
+            lower = -np.inf if min_delay is None else float(min_delay)
+            upper = np.inf if max_delay is None else float(max_delay)
+            sampled_delays = np.clip(sampled_delays, lower, upper)
+
+        delays[valid_mask] = sampled_delays
+        return delays
