@@ -53,10 +53,10 @@ class DistanceBasedTopology(BaseConnection):
         
         return mask.astype(np.int8)
 
-@CONNECTION_MODELS.register("module_based")
-class ModuleBasedTopology(BaseConnection):
+@CONNECTION_MODELS.register("block_random")
+class BlockRandomTopology(BaseConnection):
     def generate(self):
-        """ニューロンをモジュール（クラスター）に分割し、モジュール内は高確率、モジュール間は低確率で結合するマスクを生成"""
+        """ブロック分割ベースの確率結合を生成し、num_modules=1 では単一ブロックのランダム結合として振る舞う"""
         num_modules = self.config.num_modules
         within_module_connection_prob = self.config.within_module_connection_prob
         between_module_connection_prob = self.config.between_module_connection_prob

@@ -43,10 +43,10 @@ class NormalRandomWeight(BaseWeight):
         weights[idx] = self.rng.normal(mean, std, size=num_conns)
         return weights
 
-@WEIGHT_MODELS.register("module_based")
-class ModuleBasedWeight(BaseWeight):
+@WEIGHT_MODELS.register("block_random")
+class BlockRandomWeight(BaseWeight):
     def generate(self):
-        """モジュールベースで有効な結合に対してランダムな重みを割り当てる。"""
+        """ブロック分割ベースで有効な結合に対してランダムな重みを割り当てる。"""
         offset = self.config.offset
         g_scale = self.config.g_scale
 
