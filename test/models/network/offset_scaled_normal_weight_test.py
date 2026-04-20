@@ -9,7 +9,7 @@ import pytest
 root_path = Path(__file__).resolve().parents[3]
 sys.path.append(str(root_path))
 
-from src.models.network.weights import BlockRandomWeight
+from src.models.network.weights import OffsetScaledNormalWeight
 
 
 class ConfigDict(dict[str, Any]):
@@ -37,7 +37,7 @@ def make_mask() -> np.ndarray:
 
 
 def test_generate_raises_when_offset_is_not_number():
-    weight = BlockRandomWeight(
+    weight = OffsetScaledNormalWeight(
         config=make_config(offset="1.0"),  # type: ignore
         num_neurons=3,
         coords=None,
@@ -50,7 +50,7 @@ def test_generate_raises_when_offset_is_not_number():
 
 
 def test_generate_raises_when_g_scale_is_not_number():
-    weight = BlockRandomWeight(
+    weight = OffsetScaledNormalWeight(
         config=make_config(g_scale="0.5"),  # type: ignore
         num_neurons=3,
         coords=None,
@@ -63,7 +63,7 @@ def test_generate_raises_when_g_scale_is_not_number():
 
 
 def test_generate_raises_when_g_scale_is_negative():
-    weight = BlockRandomWeight(
+    weight = OffsetScaledNormalWeight(
         config=make_config(g_scale=-0.1),
         num_neurons=3,
         coords=None,
@@ -76,7 +76,7 @@ def test_generate_raises_when_g_scale_is_negative():
 
 
 def test_generate_accepts_zero_g_scale():
-    weight = BlockRandomWeight(
+    weight = OffsetScaledNormalWeight(
         config=make_config(offset=1.2, g_scale=0.0),
         num_neurons=3,
         coords=None,
