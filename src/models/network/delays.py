@@ -1,6 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
+from numbers import Real
 from scipy.spatial.distance import pdist, squareform
 from src.core.registry import DELAY_MODELS
 
@@ -59,13 +60,31 @@ class DistanceBasedDelay(BaseDelay):
 class RandomDelay(BaseDelay):
     def generate(self) -> np.ndarray:
         """結合がある箇所に正規分布ベースのランダム遅延を割り当てる"""
-        mean = float(self.config.mean)
-        std = float(self.config.std)
+        mean = self.config.mean
+        std = self.config.std
         min_delay = self.config.min
         max_delay = self.config.max
 
+        if not isinstance(mean, Real) or isinstance(mean, bool):
+            raise ValueError("mean must be a real number.")
+        if not isinstance(std, Real) or isinstance(std, bool):
+            raise ValueError("std must be a real number.")
         if std < 0:
-            raise ValueError("RandomDelay requires std >= 0.")
+            raise ValueError("std must be greater than or equal to 0.0.")
+
+        for bound_name, bound_value in (("min", min_delay), ("max", max_delay)):
+            if bound_value is None:
+                continue
+
+            if not isinstance(bound_value, Real) or isinstance(bound_value, bool):
+                raise ValueError(f"{bound_name} must be a real number or None.")
+            if bound_value < 0.0:
+                raise ValueError(f"{bound_name} must be greater than or equal to 0.0.")
+
+        if min_delay is None or max_delay is None:
+            pass  # 片方がNoneなら比較は不要
+        elif min_delay > max_delay:
+            raise ValueError("min must be less than or equal to max.")
 
         delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
         valid_mask = self.mask != 0
@@ -74,7 +93,7 @@ class RandomDelay(BaseDelay):
         if num_connections == 0:
             return delays
 
-        sampled_delays = self.rng.normal(mean, std, size=num_connections).astype(np.float32)
+        sampled_delays = self.rng.normal(float(mean), float(std), size=num_connections).astype(np.float32)
 
         lower = -np.inf if min_delay is None else float(min_delay)
         upper = np.inf if max_delay is None else float(max_delay)
