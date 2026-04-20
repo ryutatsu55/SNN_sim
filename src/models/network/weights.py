@@ -42,3 +42,20 @@ class NormalRandomWeight(BaseWeight):
         
         weights[idx] = self.rng.normal(mean, std, size=num_conns)
         return weights
+
+@WEIGHT_MODELS.register("module_based")
+class ModuleBasedWeight(BaseWeight):
+    def generate(self):
+        """モジュールベースで有効な結合に対してランダムな重みを割り当てる。"""
+        offset = self.config.offset
+        g_scale = self.config.g_scale
+
+        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+        idx = self.mask != 0
+        num_conns = np.sum(idx)
+
+        if num_conns == 0:
+            return weights
+
+        weights[idx] = offset + (g_scale * self.rng.randn(num_conns))
+        return weights
