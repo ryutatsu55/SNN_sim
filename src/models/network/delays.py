@@ -76,10 +76,9 @@ class RandomDelay(BaseDelay):
 
         sampled_delays = self.rng.normal(mean, std, size=num_connections).astype(np.float32)
 
-        if min_delay is not None or max_delay is not None:
-            lower = -np.inf if min_delay is None else float(min_delay)
-            upper = np.inf if max_delay is None else float(max_delay)
-            sampled_delays = np.clip(sampled_delays, lower, upper)
+        lower = -np.inf if min_delay is None else float(min_delay)
+        upper = np.inf if max_delay is None else float(max_delay)
+        sampled_delays = np.clip(sampled_delays, lower, upper)
 
         delays[valid_mask] = sampled_delays
         return delays
