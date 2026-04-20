@@ -58,9 +58,28 @@ class BlockRandomTopology(BaseConnection):
     def generate(self):
         """ブロック分割ベースの確率結合を生成し、num_modules=1 では単一ブロックのランダム結合として振る舞う"""
         num_modules = self.config.num_modules
+        if not isinstance(num_modules, int) or isinstance(num_modules, bool):
+            raise ValueError("num_modules must be an integer.")
+        if num_modules < 1:
+            raise ValueError("num_modules must be at least 1.")
+        if num_modules > self.num_neurons:
+            raise ValueError("num_modules must not exceed num_neurons.")
+
         within_module_connection_prob = self.config.within_module_connection_prob
         between_module_connection_prob = self.config.between_module_connection_prob
         allow_self_connections = self.config.allow_self_connections
+
+        for prob_name, prob_value in (
+            ("within_module_connection_prob", within_module_connection_prob),
+            ("between_module_connection_prob", between_module_connection_prob),
+        ):
+            if not isinstance(prob_value, (int, float)) or isinstance(prob_value, bool):
+                raise ValueError(f"{prob_name} must be a real number.")
+            if not 0.0 <= prob_value <= 1.0:
+                raise ValueError(f"{prob_name} must be between 0.0 and 1.0.")
+
+        if not isinstance(allow_self_connections, bool):
+            raise ValueError("allow_self_connections must be a boolean.")
 
         mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
 
