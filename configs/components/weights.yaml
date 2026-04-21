@@ -9,3 +9,7 @@ normal_broad:
 distance_dependent:
   max_weight: 0.1
   sigma: 2.0               # 距離による重み減衰の広がり（仮）
+
+offset_scaled_normal:
+  offset: 1.0
+  g_scale: 0.5

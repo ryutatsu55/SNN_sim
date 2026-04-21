@@ -1,6 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
+from numbers import Real
 from src.core.registry import WEIGHT_MODELS
 
 class BaseWeight(ABC):
@@ -41,4 +42,28 @@ class NormalRandomWeight(BaseWeight):
         num_conns = np.sum(idx)
         
         weights[idx] = self.rng.normal(mean, std, size=num_conns)
+        return weights
+
+@WEIGHT_MODELS.register("offset_scaled_normal")
+class OffsetScaledNormalWeight(BaseWeight):
+    def generate(self):
+        """有効な結合に対して、offset + g_scale * N(0, 1) の重みを割り当てる。"""
+        offset = self.config.offset
+        g_scale = self.config.g_scale
+
+        if not isinstance(offset, Real) or isinstance(offset, bool):
+            raise ValueError("offset must be a real number.")
+        if not isinstance(g_scale, Real) or isinstance(g_scale, bool):
+            raise ValueError("g_scale must be a real number.")
+        if g_scale < 0.0:
+            raise ValueError("g_scale must be greater than or equal to 0.0.")
+
+        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+        idx = self.mask != 0
+        num_conns = np.sum(idx)
+
+        if num_conns == 0:
+            return weights
+
+        weights[idx] = offset + (g_scale * self.rng.randn(num_conns))
         return weights
