@@ -5,18 +5,11 @@ constant_prob:
   p_in: 0.1
   p_out: 0.05
 
-distance_based_grid:
-  type: "distance"
-  e_rate: 0.75
-  lambda_decay: 0.1    
+distance_based:
+  sigma: 0.75
+  max_prob: 0.5
 
-sparse_sphere:
-  type: "random"
-  e_rate: 0.75
-  probability: 0.1
-
-block_random:
-  type: "module"
+prob_based_block:
   num_modules: 4
   within_module_connection_prob: 0.1
   between_module_connection_prob: 0.01

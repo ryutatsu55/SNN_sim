@@ -2,6 +2,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from numbers import Real
+from scipy.spatial.distance import pdist, squareform
 from src.core.registry import WEIGHT_MODELS
 
 class BaseWeight(ABC):
@@ -30,18 +31,32 @@ class ConstantWeight(BaseWeight):
         weights[self.mask != 0] = val
         return weights
 
-@WEIGHT_MODELS.register("normal_random")
+@WEIGHT_MODELS.register("normal_broad")
 class NormalRandomWeight(BaseWeight):
     def generate(self):
         """結合がある箇所に、正規分布に従うランダムな重みを割り当てる"""
-        mean = self.config.get("mean", 1.0)
-        std = self.config.get("std", 0.2)
+        mean = self.config.mean
+        std = self.config.std
         
         weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
         idx = (self.mask != 0)
         num_conns = np.sum(idx)
         
         weights[idx] = self.rng.normal(mean, std, size=num_conns)
+        return weights
+
+@WEIGHT_MODELS.register("lognormal_broad")
+class LogNormalRandomWeight(BaseWeight):
+    def generate(self):
+        """結合がある箇所に、対数正規分布に従うランダムな重みを割り当てる"""
+        mean = self.config.mean
+        std = self.config.std
+        
+        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+        idx = (self.mask != 0)
+        num_conns = np.sum(idx)
+        
+        weights[idx] = self.rng.lognormal(mean, std, size=num_conns)
         return weights
 
 @WEIGHT_MODELS.register("offset_scaled_normal")
@@ -66,4 +81,29 @@ class OffsetScaledNormalWeight(BaseWeight):
             return weights
 
         weights[idx] = offset + (g_scale * self.rng.randn(num_conns))
+        return weights
+
+@WEIGHT_MODELS.register("distance_dependent")
+class DistanceDependentWeight(BaseWeight):
+    def generate(self):
+        """
+        結合がある箇所に、距離に応じた重みを割り当てる。
+        近いほど重みが大きく（最大 amplitude）、遠いほど指数関数的に小さくなる。
+        """
+        # パラメータの取得（設定がない場合の安全なフォールバック値を設定）
+        amplitude = self.config.max_weight
+        decay_length = self.config.decay_length
+        
+        # N x N の距離行列を一括計算
+        dist_matrix = squareform(pdist(self.coords))
+
+        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+        idx = (self.mask != 0)
+        
+        # 結合が存在する箇所（マスクが有効な箇所）の距離データを取得
+        active_distances = dist_matrix[idx]
+        
+        # 距離に応じた指数減衰の計算： w = A * exp(-d / λ)
+        weights[idx] = amplitude * np.exp(-active_distances / decay_length)
+        
         return weights

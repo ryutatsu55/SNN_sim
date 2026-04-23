@@ -94,5 +94,7 @@ def main():
     I_in = data_loader.reconstruct(trial_inputs)
     visualize.PQN_test(np.array(results)[:,0], I_in[:,0], config)
 
+    visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
+
 if __name__ == "__main__":
     main()

@@ -1,5 +1,5 @@
 pqn_test:
-    input: 0.09         # [nA]
+    input: 0.15         # [nA]
     input_type: "step"  # (step or continuous)
     duration: 2000.0    # [ms]
     graph_name: "PQN_V_test"
