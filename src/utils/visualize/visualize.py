@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+
 def raster(spike_time: np.ndarray, neuron_id: np.ndarray, title="Raster"):
     """発火時刻とニューロンIDからラスタープロットを作成・保存する関数"""
 
@@ -20,6 +21,7 @@ def raster(spike_time: np.ndarray, neuron_id: np.ndarray, title="Raster"):
     plt.tight_layout()
     plt.savefig(f"{title}.png")
     plt.close(fig)
+
 
 def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     tmax = config.task.duration/1000

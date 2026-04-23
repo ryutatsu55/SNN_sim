@@ -9,7 +9,7 @@ from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
-import src.utils.visualize as visualize
+import src.utils.visualize.visualize as visualize
 
 # --- プラグイン(モデル)の登録トリガー ---
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
