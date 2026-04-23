@@ -24,10 +24,11 @@ class PQNIntModel(BaseNeuronModel):
         
         init_vars = {
             "V": int(self.engine.state_variable_v),
+            "V_prev": int(self.engine.state_variable_v),
             "N": int(self.engine.state_variable_n),
             "Q": int(self.engine.state_variable_q),
             "U": int(self.engine.state_variable_u),
-            "Iext": 0.0 
+            "Iext": 0.0
         }
         return params, init_vars
 
@@ -39,11 +40,14 @@ class PQNIntModel(BaseNeuronModel):
             return f"(({expr}) < 0 ? (({expr}) - B_MASK) / B_SCALE : ({expr}) / B_SCALE)"
 
         # 公式エンジンの Y 係数を全て int64_t の C++ 定数宣言として文字列生成
-        y_consts = "\n        ".join([f"const int64_t {k.upper()} = (int64_t){v};" for k, v in self.engine.Y.items()])
+        y_consts = "\n".join([f"const int64_t {k.upper()} = (int64_t){v};" for k, v in self.engine.Y.items()])
 
         sim_code = f"""
+        V_prev = V;
         // === パラメータの完全定数化 (float変換排除) ===
         {y_consts}
+
+        const scalar I_total = Iext + Isyn;
         
         const int64_t v_long = (int64_t)V;
         const int64_t F_SCALE = (int64_t){1 << self.bit_f};
@@ -53,7 +57,7 @@ class PQNIntModel(BaseNeuronModel):
         // 二乗は必ず正になるため通常の除算で丸め誤差なし
         const int64_t vv = (v_long * v_long) / F_SCALE;
         // Iext スケーリング時のみ C++ の double キャスト(ゼロ方向切り捨て)で Python の int() と一致
-        const int64_t i_fixed = (int64_t)(Iext * (double)F_SCALE);
+        const int64_t i_fixed = (int64_t)(I_total * (double)F_SCALE);
         """
 
         # --- dv (膜電位変化量) の計算 ---
@@ -137,12 +141,15 @@ class PQNIntModel(BaseNeuronModel):
             f"PQN_Int_{self.config.mode}",
             params=list(self._params.keys()),
             vars=[
-                ("V", "int32_t"), ("N", "int32_t"), 
-                ("Q", "int32_t"), ("U", "int32_t"), 
+                ("V", "int32_t"), 
+                ("V_prev", "int32_t"),
+                ("N", "int32_t"), 
+                ("Q", "int32_t"), 
+                ("U", "int32_t"), 
                 ("Iext", "scalar")
             ],
             sim_code=sim_code,
-            threshold_condition_code=f"V >= (int32_t){4 << self.bit_f}"
+            threshold_condition_code=f"V >= (int32_t){4 << self.bit_f} && V_prev < (int32_t){4 << self.bit_f}"
         )
 
     @property

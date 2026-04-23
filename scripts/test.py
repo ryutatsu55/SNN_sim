@@ -77,7 +77,8 @@ def main():
         # 3. デバイスから記録バッファを一括で引き出す
         trial_results = sim.get_global_spikes()
 
-        print(trial_results["times"])
+        indices = np.where(trial_results["ids"] == 0)[0]
+        print(trial_results["times"][indices])
         
         # 4. 次のトライアルに向けて、ネットワーク時間と変数を初期化
         sim.reset()

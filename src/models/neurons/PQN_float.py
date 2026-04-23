@@ -53,6 +53,7 @@ class PQNFloatModel(BaseNeuronModel):
         scale = 1 << self.engine.BIT_WIDTH_FRACTIONAL
         init_vars = {
             "V": float(self.engine.state_variable_v / scale),
+            "V_prev": float(self.engine.state_variable_v / scale),
             "N": float(self.engine.state_variable_n / scale),
             "Q": float(self.engine.state_variable_q / scale),
             "U": float(self.engine.state_variable_u / scale),
@@ -65,6 +66,8 @@ class PQNFloatModel(BaseNeuronModel):
         # 共通の Piecewise Quadratic 関数 (f, g, h) の定義
         # fma (Fused Multiply-Add) を使用して計算精度と速度を向上
         sim_code = """
+        V_prev = V;
+        const scalar I_total = Iext + Isyn;
         const scalar v_curr = V;
         const scalar f_v = (v_curr < 0.0) ? fma(A_FN, (v_curr - B_FN) * (v_curr - B_FN), C_FN) 
                                          : fma(A_FP, (v_curr - B_FP) * (v_curr - B_FP), C_FP);
@@ -75,11 +78,11 @@ class PQNFloatModel(BaseNeuronModel):
         # モードに応じた微分方程式の構築
         # --- dV/dt ---
         if self.config.mode == 'PB':
-            sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N - Q - U + I0 + K * Iext);"
+            sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N - Q - U + I0 + K * I_total);"
         elif self.config.mode == 'Class2':
-            sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N + I0 + K * Iext);"
+            sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N + I0 + K * I_total);"
         else:
-            sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N - Q + I0 + K * Iext);"
+            sim_code += "scalar dV = PHI_OVER_TAU * (f_v - N - Q + I0 + K * I_total);"
 
         # --- dn/dt ---
         if self.config.mode in ['LTS', 'IB']:
@@ -109,9 +112,16 @@ class PQNFloatModel(BaseNeuronModel):
         return pygenn.create_neuron_model(
             f"PQN_Float_{self.config.mode}",
             params=list(self._params.keys()),
-            vars=[("V", "scalar"), ("N", "scalar"), ("Q", "scalar"), ("U", "scalar"), ("Iext", "scalar")],
+            vars=[
+                ("V", "scalar"), 
+                ("V_prev", "scalar"),
+                ("N", "scalar"), 
+                ("Q", "scalar"), 
+                ("U", "scalar"), 
+                ("Iext", "scalar")
+                ],
             sim_code=sim_code,
-            threshold_condition_code="V >= V_THRESH"
+            threshold_condition_code="V >= V_THRESH && V_prev < V_THRESH"
         )
 
     @property
