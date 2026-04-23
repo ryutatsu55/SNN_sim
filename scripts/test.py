@@ -1,5 +1,7 @@
 import os
 import sys
+import numpy as np
+from tqdm import tqdm
 
 # プロジェクトルートにパスを通す
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,7 +38,7 @@ def main():
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
-    genn_model, io_map = builder.build()
+    genn_model, group_info = builder.build(rec_spike=True)
     
     # 3. データの準備 (io_mapを渡してグローバル→ローカルの変換ルールを教える)
     print("Preparing Input Data...")
@@ -46,29 +48,38 @@ def main():
     if data_loader_class is None:
         raise ValueError(f"DataLoader '{TASK_NAME}' not found in registry.")
         
-    data_loader = data_loader_class(config, io_map)
+    data_loader = data_loader_class(config, group_info)
     
     # 4. シミュレーターの初期化とビルド
     print("Initializing Simulator...")
-    sim = GeNNSimulator(genn_model, config, io_map)
+    sim = GeNNSimulator(genn_model, config, group_info)
     sim.setup() # GeNNのコンパイルとGPUメモリ確保
     
     # 5. シミュレーション実行 (トライアルごとのループ)
     print("Running Simulation Trials...")
     
     # 結果保存用のコンテナ (実験スクリプトで柔軟に取捨選択する想定)
-    all_results = []
+    results = []  # 例: 全ニューロンの膜電位を保存する場合
     
     for trial_idx, (trial_inputs, meta) in enumerate(data_loader.generate()):
         print(f"  --- Trial {trial_idx + 1} ---")
         
-        # 1トライアル分を回して結果を引き出す
-        trial_results = sim.run(trial_inputs)
+        # --- 新しい制御フロー ---
+        step=0
+        for update_dict, duration_steps in trial_inputs:
+            # 1. スパイク入力データをGPUに転送
+            # ※連続値(Iextなど)をスナップショットで渡したい場合は sim.push() を併用
+            sim.push(update_dict)
+            for i in range(duration_steps):
+                sim.step()
+                results.append(sim.pull("V"))
+
+        # 3. デバイスから記録バッファを一括で引き出す
+        trial_results = sim.get_global_spikes()
+
+        print(trial_results["times"])
         
-        # ★ ここで必要なデータだけを保存する (柔軟なロギング)
-        # 例: all_results.append((trial_results, meta))
-        
-        # 次のトライアルに向けて、ネットワークの時間と変数を初期化
+        # 4. 次のトライアルに向けて、ネットワーク時間と変数を初期化
         sim.reset()
         
     print("=== Simulation Complete! ===")
@@ -79,8 +90,8 @@ def main():
     # weights = readout.fit(all_results, target_data)
 
     # 7. 評価と可視化
-    I_in = data_loader.reconstruct(trial_inputs, target_pop=meta["target_pop"])
-    visualize.PQN_test(trial_results["Layer_Exc"]["V"][:,0], I_in[:,0], config)
+    I_in = data_loader.reconstruct(trial_inputs)
+    visualize.PQN_test(np.array(results)[:,0], I_in[:,0], config)
 
 if __name__ == "__main__":
     main()

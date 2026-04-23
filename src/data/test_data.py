@@ -7,12 +7,11 @@ from src.core.config_manager import AppConfig
 
 @DATA_LOADERS.register("pqn_test")
 class pqn_test_loader(BaseDataLoader):
-    def __init__(self, config: 'AppConfig', io_map: dict):
-        super().__init__(config, io_map)
+    def __init__(self, config: 'AppConfig', group_info: dict):
+        super().__init__(config, group_info)
         
         # ターゲットとなるポピュレーション名とニューロン数を取得
-        self.target_pop = list(self.input_map.keys())[0]
-        self.num_neurons = len(self.input_map[self.target_pop]["global_indices"])
+        self.num_neurons = sum(info["num"] for _, info in self.group_info.items())
         
         # 入力電流の強度
         self.input_current = self.config.task.input
@@ -27,7 +26,7 @@ class pqn_test_loader(BaseDataLoader):
         self.steps_off_2 = self.total_steps - self.steps_off_1 - self.steps_on
         
         print(f"  [DataLoader] pqn_test Ready.")
-        print(f"               (Target: {self.target_pop}, Neurons: {self.num_neurons}, Total steps: {self.total_steps})")
+        print(f"               (Neurons: {self.num_neurons}, Total steps: {self.total_steps})")
 
     def generate(self) -> Iterator[Tuple[List[Tuple[Dict[str, np.ndarray], int]], Dict[str, Any]]]:
         """
@@ -35,27 +34,26 @@ class pqn_test_loader(BaseDataLoader):
         """
         # 事前作成した配列を使って、状態と継続ステップ数のタプルを構築
         inputs = [
-            ({self.target_pop: self.zero_array}, self.steps_off_1),
-            ({self.target_pop: self.stim_array}, self.steps_on),
-            ({self.target_pop: self.zero_array}, self.steps_off_2)
+            (self.zero_array, self.steps_off_1),
+            (self.stim_array, self.steps_on),
+            (self.zero_array, self.steps_off_2)
         ]
         
         # テスト用なのでメタデータはシンプルに
         metadata = {
             "phase": "test",
             "trial_idx": 0,
-            "total_steps": self.total_steps,
-            "target_pop": self.target_pop
+            "total_steps": self.total_steps
         }
         
         yield inputs, metadata
 
-    def reconstruct(self, inputs, target_pop):
+    def reconstruct(self, inputs):
         """
         シミュレータに渡されるチャンク形式の inputs を (total_steps, num_neurons) の 2D配列に復元する。
 
         Args:
-            inputs: [(UpdateDict, DurationSteps), ...] の形式のリスト
+            inputs: [(input, DurationSteps), ...] の形式のリスト
             target_pop: 抽出対象のニューロンポピュレーション名 (例: "input_pop")
 
         Returns:
@@ -74,11 +72,9 @@ class pqn_test_loader(BaseDataLoader):
 
         # 4. データを時間軸に沿って埋めていく
         current_step = 0
-        for update_dict, duration in inputs:
-            if target_pop in update_dict:
-                data = update_dict[target_pop]
-                # Numpyのブロードキャストを利用して、duration行分に一括代入
-                result_array[current_step : current_step + duration, :] = data
+        for input, duration in inputs:
+            # Numpyのブロードキャストを利用して、duration行分に一括代入
+            result_array[current_step : current_step + duration, :] = input
             
             current_step += duration
 

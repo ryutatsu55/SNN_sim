@@ -3,6 +3,12 @@ simulation:
   dt: 0.1             # 時間ステップ (ms)
   seed: null         # 乱数シード
 
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 10.0      # [nA] 
+    sd: 1.0        # [nA]
+
 neurons:
   Layer_Exc:
     type: PQN_int

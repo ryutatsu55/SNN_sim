@@ -3,18 +3,17 @@ import numpy as np
 from typing import Dict, Any, List, Tuple
 
 class GeNNSimulator:
-    def __init__(self, genn_model: pygenn.GeNNModel, config: Any, io_map: Dict[str, Any]):
+    def __init__(self, genn_model: pygenn.GeNNModel, config: Any, group_info: Dict[str, Any]):
         self.model = genn_model
         self.config = config
-        self.io_map = io_map
-        
+        self.group_info = group_info
+
         self.dt = self.config.simulation.dt
         # 1トライアルあたりの最大ステップ数 (事前メモリ確保用)
         self.max_timesteps = int(self.config.task.duration / self.dt)
-        self.is_setup = False
+        self.total_neurons = sum(info["num"] for _, info in self.group_info.items())
         
-        self.record_targets = self.io_map.get("outputs", {})
-        self._recorded_vars_history = {}
+        self.is_setup = False
 
     def setup(self):
         """GeNNモデルのコード生成、コンパイル、およびGPUへのロード"""
@@ -24,97 +23,154 @@ class GeNNSimulator:
         
         # 【重要】GPU上に記録用バッファを事前確保してロード
         self.model.load(num_recording_timesteps=self.max_timesteps)
+
+        self.initial_states = {}
+        for pop_name, pop in self.model.neuron_populations.items():
+            self.initial_states[pop_name] = {}
+            for var_name, var in pop.vars.items():
+                self.initial_states[pop_name][var_name] = np.copy(var.view)
+
         self.is_setup = True
         
         print(f"  [Simulator] Setup complete. Allocated buffer for {self.max_timesteps} steps.")
 
-    def run(self, inputs: List[Tuple[Dict[str, np.ndarray], int]]) -> Dict[str, Dict[str, Any]]:
-        """1トライアル分のシミュレーションを実行する"""
-        if not self.is_setup:
-            raise RuntimeError("Simulator must be setup before running.")
+    # def flush_recording(self):
+    #     """
+    #     GPU上の記録バッファをCPUに転送し、内部カウンタをリセットして『捨てる』
+    #     これにより、次のステップからバッファの先頭に上書きされるようになる
+    #     """
+    #     # GPUからデータを引き上げる（これを行わないとGPU側で上書きが起きるか停止する）
+    #     self.model.pull_recording_buffers_from_device()
+        
+    #     # 重要：ホスト（CPU）側の記録カウンタを0リセットする
+    #     # これにより、これまでにpullしたスパイクデータがクリアされる
+    #     self.model.reset_recording_counters()
+    #     # print("  [Simulator] Recording buffer flushed and reset.")
 
-        self._recorded_vars_history = {
-            pop_name: {var_name: [] for var_name in out_info.get("record_vars", []) if var_name != "spikes"}
-            for pop_name, out_info in self.record_targets.items()
-        }
+    # def load_input_spikes(self, spike_data: Dict[str, Dict[str, np.ndarray]]):
+    #     """
+    #     [トライアル毎] SpikeSourceArrayに入力データをセットし、GPUへ転送する
+    #     """
+    #     for pop_name, data in spike_data.items():
+    #         pop = self.model.neuron_populations[pop_name]
+    #         spike_times = data["times"]
+    #         spike_ids = data["ids"]
+    #         # SpikeSourceArray特有の変数を更新 (開始/終了インデックスなど)
+    #         # ※定義したSnippetの仕様によって変数名は変わりますが、基本形はこれです
+    #         pop.vars["startSpike"].view[:] = ...
+    #         pop.vars["endSpike"].view[:] = ...
+            
+    #         # タイムスタンプとIDの配列をカスタム配列（Extra Global Params等）に流し込む
+    #         self.model.custom_input_arrays["spike_times"].view[:] = spike_times
+    #         self.model.custom_input_arrays["spike_ids"].view[:] = spike_ids
+            
+    #         # GPUへ転送
+    #         pop.push_var_to_device("startSpike")
+    #         pop.push_var_to_device("endSpike")
+    #         self.model.custom_input_arrays["spike_times"].push_to_device()
+    #         self.model.custom_input_arrays["spike_ids"].push_to_device()
 
-        total_steps = sum(steps for _, steps in inputs)
-        if total_steps > self.max_timesteps:
-            raise ValueError(f"Input steps ({total_steps}) exceed allocated buffer ({self.max_timesteps}).")
+    def push(self, global_data: np.ndarray, target_var: str = "Iext"):
+        """
+        外部からの入力(形状: total_neurons)を、各Populationの対象変数に流し込む
+        """
+        local_data_dict = self._split_global_to_local(global_data)
+        for pop_name, data in local_data_dict.items():
+            pop = self.model.neuron_populations[pop_name]
+            
+            pop.vars[target_var].view[:] = data
+            pop.vars[target_var].push_to_device()
 
-        print(f"=== [Simulator] Running {total_steps * self.dt}ms trial ===")
+    def step(self, duration_steps: int=1):
+        """現在の変数の状態を維持したまま、指定ステップ数だけ時間を進める"""
+        for _ in range(duration_steps):
+            self.model.step_time()
 
-        for update_dict, duration_steps in inputs:
-            # デバイス(GPU)上の変数を更新
-            for pop_name, data in update_dict.items():
-                pop = self.model.neuron_populations[pop_name]
-                target_var = self.io_map["inputs"][pop_name]["target_var"]
-                
-                pop.vars[target_var].view[:] = data
-                pop.vars[target_var].push_to_device()
+    def pull(self, var_name: str) -> np.ndarray:
+        """
+        ネットワーク全体の対象変数の現在状態を、(total_neurons,) の形状で引き上げる
+        """
+        local_data_dict = {}
+        for pop_name in self.group_info.keys():
+            pop = self.model.neuron_populations[pop_name]
+            
+            # GPUから現在の値をプルして辞書に格納
+            pop.vars[var_name].pull_from_device()
+            local_data_dict[pop_name] = np.copy(pop.vars[var_name].view)
+            
+        # グローバル配列に再構築して返す
+        return self._merge_local_to_global(local_data_dict)
 
-            # 変数を維持したまま指定ステップ数だけGPU上で計算を進める
-            for _ in range(duration_steps):
-                self.model.step_time()
-                for pop_name, var_dict in self._recorded_vars_history.items():
-                    pop = self.model.neuron_populations[pop_name]
-                    for var_name, history_list in var_dict.items():
-                        # GPUから値をプル
-                        pop.vars[var_name].pull_from_device()
-                        # viewのコピーを履歴に追加 (ニューロン数のサイズの1D配列)
-                        history_list.append(np.copy(pop.vars[var_name].view))
-
-        return self._gather_results()
-
-    def _gather_results(self) -> Dict[str, Dict[str, Any]]:
-        """デバイスから記録結果を一括で引き出す"""
+    def get_global_spikes(self) -> Dict[str, np.ndarray]:
+        """
+        全Populationのスパイク記録を収集し、グローバルIDに変換して時間順にソートした結果を返す
+        """
         if getattr(self.model, "_recording_in_use", False):
             self.model.pull_recording_buffers_from_device()
-        results = {}
 
-        for pop_name, out_info in self.record_targets.items():
-            pop = self.model.neuron_populations[pop_name]
-            pop_results = {}
-            vars_to_record = out_info.get("record_vars")
+        all_times = []
+        all_global_ids = []
+
+        for pop_name, info in self.group_info.items():
+            # GeNNからローカルデータを直接参照
+            times, local_ids = self.model.neuron_populations[pop_name].spike_recording_data[0]
             
-            if "spikes" in vars_to_record:
-                spike_times, spike_ids = pop.spike_recording_data
-                pop_results["spikes"] = {
-                    "times": spike_times.copy(),
-                    "ids": spike_ids.copy()
-                }
+            if len(times) > 0:
+                all_times.append(times)
+                # ループ内で直接グローバルインデックスにマッピング
+                # info["global_indices"] は以前に作成したnumpy配列を想定
+                all_global_ids.append(info["global_indices"][local_ids])
 
-            for var_name in vars_to_record:
-                if var_name != "spikes":
-                    history_list = self._recorded_vars_history[pop_name][var_name]
-                    # [time_steps, num_neurons] の形状にする
-                    pop_results[var_name] = np.stack(history_list, axis=0) if history_list else np.array([])
+        # スパイクが0件の場合の早期リターン
+        if not all_times:
+            return {"times": np.array([], dtype=np.float32), "ids": np.array([], dtype=np.int32)}
 
-            results[pop_name] = pop_results
+        # 結合とソート（複数Populationの混在を時間軸で整列）
+        flat_times = np.concatenate(all_times)
+        flat_ids = np.concatenate(all_global_ids)
+        sort_idx = np.argsort(flat_times)
 
-        return results
+        return {
+            "times": flat_times[sort_idx],
+            "ids": flat_ids[sort_idx]
+        }
 
     def reset(self):
         """
-        次のトライアルに向けてシミュレータの状態をリセットする。
-        これを行わないと、時間が前回の続きから進み、メモリオーバーフローを引き起こす。
+        次のトライアルに向けてシミュレータの状態をリセット
         """
-        # 1. ネットワーク時間を0に戻す (これにより記録バッファのインデックスが先頭に戻る)
-        # self.model.t = 0.0
         self.model.timestep = 0
+        # self.model.t = 0.0
 
-        # 2. 変数(膜電位 V など)を初期状態に戻してGPUへ再転送
-        # (NetworkBuilderで初期化された際の値をホストからデバイスへ押し込む)
-        for pop in self.model.neuron_populations.values():
+        # バックアップしておいた初期値で view を上書きしてから GPU へ送る
+        for pop_name, pop in self.model.neuron_populations.items():
             for var_name, var in pop.vars.items():
+                var.view[:] = self.initial_states[pop_name][var_name]
                 var.push_to_device()
                 
-        for pop in self.model.synapse_populations.values():
-            for var_name, var in pop.vars.items():
-                var.push_to_device()
-                
-        # ※ GeNN 5.x においてスパイク等の内部バッファポインタを明示的にクリアするAPI
-        # （基本的には pull_recording_buffers_from_device を呼んでおけば問題ありませんが、
-        # 念のため PyGeNN の reinit メソッド等で状態をクリーンにします）
-        # self.model.reinit() # 必要に応じてコメントアウト解除
-        print("  [Simulator] Network time and variables reset to 0.")
+        print("  [Simulator] Network time and variables safely reset to initial states.")
+
+    def _split_global_to_local(self, global_data: np.ndarray) -> Dict[str, np.ndarray]:
+        """
+        [形状: (total_neurons,)] のグローバル配列を Population毎に分割する
+        """
+        if len(global_data) != self.total_neurons:
+            raise ValueError(f"Input data size {len(global_data)} does not match total neurons {self.total_neurons}")
+
+        local_dict = {}
+        for pop_name, info in self.group_info.items():
+            global_idx = info["global_indices"]
+            # fancy indexingによる切り出し
+            local_dict[pop_name] = global_data[global_idx]
+        return local_dict
+    
+    def _merge_local_to_global(self, local_dict: Dict[str, np.ndarray], dtype=np.float32) -> np.ndarray:
+        """
+        Population毎の配列を [形状: (total_neurons,)] のグローバル配列に結合する
+        """
+        global_data = np.zeros(self.total_neurons, dtype=dtype)
+        for pop_name, local_data in local_dict.items():
+            global_idx = self.group_info[pop_name]["global_indices"]
+            global_data[global_idx] = local_data
+        return global_data
+    
