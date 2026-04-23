@@ -1,56 +1,42 @@
 PQN_int:
   RSexci:
     in_var: "Iext"
-    out_var: "V"
   RSinhi:
     in_var: "Iext"
-    out_var: "V"
   FS:
     in_var: "Iext"
-    out_var: "V"
   LTS:
     in_var: "Iext"
-    out_var: "V"
   IB:
     in_var: "Iext"
-    out_var: "V"
   EB:
     in_var: "Iext"
-    out_var: "V"
   PB:
     in_var: "Iext"
-    out_var: "V"
   Class:
     in_var: "Iext"
-    out_var: "V"
 
 PQN_float:
   RSexci:
     in_var: "Iext"
-    out_var: "V"
   RSinhi:
     in_var: "Iext"
-    out_var: "V"
   FS:
     in_var: "Iext"
-    out_var: "V"
   LTS:
     in_var: "Iext"
-    out_var: "V"
   IB:
     in_var: "Iext"
-    out_var: "V"
+  EB:
     in_var: "Iext"
-    out_var: "V"
   PB:
     in_var: "Iext"
-    out_var: "V"
   Class:
     in_var: "Iext"
-    out_var: "V"
 
 LIF:
   excitatory:
+    in_var: "Iext"
     C: 1.0             # 膜容量
     TauM: 20.0         # 膜時定数
     Vrest: -70.0       # 静止膜電位

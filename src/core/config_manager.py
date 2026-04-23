@@ -58,12 +58,21 @@ class NetworkConfig(BaseModel):
     weight: ComponentConfig
     delay: ComponentConfig
 
+class InputSourceConfig(BaseModel):
+    """各入力ソースの汎用設定"""
+    enable: bool = Field(..., description="この入力ソースを有効にするかどうか")
+    model_config = ConfigDict(extra='allow')
+
+class InputsConfig(BaseModel):
+    GaussianNoise: Optional[InputSourceConfig] = None
+
 class MetaConfig(BaseModel):
     timestamp: str
 
 class AppConfig(BaseModel):
     """アプリケーション全体の設定を統括するルートスキーマ"""
     simulation: SimulationConfig
+    inputs: InputsConfig
     neurons: Dict[str, NeuronConfig] = Field(default_factory=dict)
     synapses: Dict[str, SynapseGroupConfig] = Field(default_factory=dict)
     network: NetworkConfig
@@ -99,6 +108,7 @@ class ConfigManager:
         # 統合用の辞書を構築
         resolved = {
             "simulation": main_cfg["simulation"],
+            "inputs": main_cfg["inputs"],
             "neurons": {},
             "synapses": {},
             "network": {},

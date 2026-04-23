@@ -5,14 +5,15 @@ import numpy as np
 from src.core.config_manager import AppConfig
 
 class BaseDataLoader(ABC):
-    def __init__(self, config: 'AppConfig', io_map: dict):
+    def __init__(self, config: 'AppConfig', group_info: dict):
         self.config = config
-        self.io_map = io_map
-        self.input_map = io_map.get("inputs", {})
+        self.group_info = group_info
         
         # ネットワーク全体のニューロン数を取得
-        self.total_neurons = io_map.get("meta", {}).get("total_neurons", 0)
-        
+        self.total_neurons = 0
+        for _, info in group_info.items():
+            self.total_neurons += info["num"]
+
         self.dt = self.config.simulation.dt
         self.duration = config.task.duration
         self.total_steps = int(self.duration / self.dt)
@@ -49,7 +50,7 @@ class BaseDataLoader(ABC):
         Simulatorが受け付けるグループベースの辞書 {"pop_name": tensor} に変換する。
         """
         inputs = {}
-        for pop_name, info in self.input_map.items():
+        for pop_name, info in self.group_info.items():
             # そのグループが担当するグローバルインデックスのリストを取得
             indices = info["global_indices"]
             # グローバル空間から抽出して割り当て
