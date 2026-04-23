@@ -39,9 +39,8 @@ class DistanceBasedDelay(BaseDelay):
         if self.coords is None:
             raise ValueError("DistanceBasedDelay requires spatial coordinates (coords cannot be None).")
             
-        d_cfg = self.config.get("delay", {})
-        velocity = d_cfg.get("velocity", 1.0) # 伝播速度
-        min_delay = d_cfg.get("min_delay", 0.1) # 最小遅延 (シナプス間隙の遅延など)
+        velocity = self.config.velocity
+        min_delay = self.config.min_delay
 
         # 距離行列の計算
         dist_matrix = squareform(pdist(self.coords))

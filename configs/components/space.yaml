@@ -1,4 +1,16 @@
 no_space:
   hoge: null
-grid_3d:
-  hoge: null
+
+grid_2d:
+  x_range: [0.0, 10.0]  # um
+  y_range: [0.0, 10.0]  # um
+
+random_2d:
+  x_range: [0.0, 10.0]  # um
+  y_range: [0.0, 10.0]  # um
+
+block_2d:
+  x_range: [0.0, 10.0]  # um
+  y_range: [0.0, 10.0]  # um
+  num_modules: 4
+  margin: 0.3

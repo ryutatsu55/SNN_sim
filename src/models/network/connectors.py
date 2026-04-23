@@ -36,24 +36,19 @@ class DistanceBasedTopology(BaseConnection):
         """空間座標間の距離に基づき、ガウス分布で減衰する確率結合を生成"""
         if self.coords is None:
             raise ValueError("DistanceBasedTopology requires spatial coordinates (coords cannot be None).")
-        
-        topo_cfg = self.config.get("connection", {})
-        sigma = topo_cfg.get("sigma", 2.0)
-        max_prob = topo_cfg.get("max_prob", 0.5)
 
         # N x N の距離行列を一括計算
         dist_matrix = squareform(pdist(self.coords))
         
         # 距離に応じた結合確率を計算
-        prob_matrix = max_prob * np.exp(-(dist_matrix**2) / (2 * sigma**2))
+        prob_matrix = self.config.max_prob * np.exp(-(dist_matrix**2) / (2 * self.config.sigma**2))
         
         # 確率に基づいてマスクを生成
         mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob_matrix
-        np.fill_diagonal(mask, 0)
         
         return mask.astype(np.int8)
 
-@CONNECTION_MODELS.register("block_random")
+@CONNECTION_MODELS.register("prob_based_block")
 class BlockRandomTopology(BaseConnection):
     def generate(self):
         """ブロック分割ベースの確率結合を生成し、num_modules=1 では単一ブロックのランダム結合として振る舞う"""

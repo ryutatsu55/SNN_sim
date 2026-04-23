@@ -1,15 +1,19 @@
 constant:
-  base_weight: 0.09        # 興奮性の基本重み (RESERVOIR_CONN)
+  base_weight: 0.09    # 興奮性の基本重み (RESERVOIR_CONN)
   g_scale: 0.5         # G (分散スケール)
 
 normal_broad:
   mean: 0.09
   std: 0.02
-
-distance_dependent:
-  max_weight: 0.1
-  sigma: 2.0               # 距離による重み減衰の広がり（仮）
+  
+lognormal_broad:
+  mean: 0.09
+  std: 0.02      
 
 offset_scaled_normal:
   offset: 1.0
   g_scale: 0.5
+
+distance_dependent:
+  max_weight: 1.0
+  decay_length: 2.0   # 距離減衰の長さ[um] (距離がこの値のとき、重みが約0.37倍になる)

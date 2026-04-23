@@ -11,13 +11,13 @@ inputs:
 
 neurons:
   Layer_Exc:
-    type: PQN_int
+    type: PQN_float
     mode: RSexci
-    num: 48
+    num: 80
   Layer_Inh:
     type: PQN_int
     mode: RSinhi
-    num: 12
+    num: 20
 
 synapses:
   Exc_to_Inh:
@@ -33,7 +33,7 @@ synapses:
   Inh_to_Exc:
     source: Layer_Inh
     target: Layer_Exc
-    weight_scale: -4.0
+    weight_scale: 4.0
     synapse:
       type: tsodyks_markram
       mode: depress
@@ -42,7 +42,7 @@ synapses:
       mode: null
 
 network:
-  space: no_space
-  connection: constant_prob
-  weight: constant
-  delay: constant 
+  space: block_2d
+  connection: distance_based
+  weight: distance_dependent
+  delay: distance_based 
