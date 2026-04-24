@@ -1,14 +1,23 @@
 custom_Akita:
   e-stdp:
-    tau_plus: 20.0    # LTPの時間定数 [ms]
-    tau_minus: 20.0   # LTDの時間定数 [ms]
-    a_plus: 0.01      # 増幅率
-    a_minus: 0.012
+    tau_rec: 150.0  
+    U: 0.4           
+    g_max: 4.0     
+    A_E: 0.02
+    tau_E: 20.0
+    beta_E: 1.12
+    Wmin: 0.0
+    Wmax: 1.0
   i-stdp:
-    tau_plus: 20.0    # LTPの時間定数 [ms]
-    tau_minus: 20.0   # LTDの時間定数 [ms]
-    a_plus: 0.01      # 増幅率
-    a_minus: 0.012
+    tau_rec: 150.0   
+    U: 0.4           
+    g_max: 4.0    
+    A_I: 0.02    
+    tau_I1: 10.0  
+    tau_I2: 20.0  
+    beta_I: 1.12
+    Wmin: 0.0
+    Wmax: 1.0
 
 static:
   mode: null      # 長期的な学習（重み変化）は行わない

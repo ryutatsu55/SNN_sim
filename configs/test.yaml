@@ -22,20 +22,20 @@ neurons:
 synapses:
   from_Exc:
     source: Layer_Exc
+    plasticity: 
+      type: custom_Akita
+      mode: e-stdp
     synapse:
       type: ExpCond
       mode: excitatory
-    plasticity: 
-      type: custom_Akita
-      mode: null
   from_Inh:
     source: Layer_Inh
+    plasticity: 
+      type: custom_Akita
+      mode: i-stdp
     synapse:
       type: ExpCond
       mode: inhibitory
-    plasticity: 
-      type: custom_Akita
-      mode: null
 
 network:
   space: block_2d

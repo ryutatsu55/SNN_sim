@@ -121,61 +121,64 @@ class NetworkBuilder:
         """グローバル行列からインデックスで切り出し、シナプスを構築"""
         print("  Building Synapse Populations...")
         for syn_group_name, syn_cfg in self.config.synapses.items():
-            src_name = syn_cfg.source
-            tgt_name = syn_cfg.target
-            
-            src_indices = self.group_info[src_name]["global_indices"]
-            tgt_indices = self.group_info[tgt_name]["global_indices"]
+            for tgt_name in self.group_info.keys():
+                src_name = syn_cfg.source
+                # tgt_name = syn_cfg.target
+                
+                src_indices = self.group_info[src_name]["global_indices"]
+                tgt_indices = self.group_info[tgt_name]["global_indices"]
 
-            # グローバル行列からの抽出
-            sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
-            sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
-            sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
+                # グローバル行列からの抽出
+                sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
+                sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
+                sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
 
-            local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
-            weights_flat = sub_weights[local_src_idx, local_tgt_idx]
-            delays_flat = sub_delays[local_src_idx, local_tgt_idx]
-            delays_flat = delays_flat // self.config.simulation.dt
+                local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
+                weights_flat = sub_weights[local_src_idx, local_tgt_idx]
+                delays_flat = sub_delays[local_src_idx, local_tgt_idx]
+                delays_flat = delays_flat // self.config.simulation.dt
 
-            src_pop = self.genn_model.neuron_populations[src_name]
-            tgt_pop = self.genn_model.neuron_populations[tgt_name]
+                src_pop = self.genn_model.neuron_populations[src_name]
+                tgt_pop = self.genn_model.neuron_populations[tgt_name]
 
-            PlasClass = PLASTICITY_MODELS.get(syn_cfg.plasticity.type)
-            plas_instance = PlasClass(
-                config=syn_cfg.plasticity, 
-                dt=self.config.simulation.dt,
-                weight=weights_flat,
-                delay=delays_flat
-            )
+                PlasClass = PLASTICITY_MODELS.get(syn_cfg.plasticity.type)
+                plas_instance = PlasClass(
+                    config=syn_cfg.plasticity, 
+                    dt=self.config.simulation.dt,
+                    weight=weights_flat,
+                    delay=delays_flat
+                    )
+                weight_init = pygenn.genn_model.init_weight_update(
+                    snippet=plas_instance.model_class, 
+                    params=plas_instance.params, 
+                    vars=plas_instance.vars,
+                    pre_vars=plas_instance.pre_vars,
+                    post_vars=plas_instance.post_vars,
+                    pre_var_refs={},
+                    post_var_refs={},
+                    psm_var_refs={}
+                    )
+                
+                # SynClass = SYNAPSE_MODELS.get(syn_cfg.synapse.type)
+                # syn_instance = SynClass(syn_cfg.synapse, self.config.simulation.dt)
+                post_init = pygenn.genn_model.init_postsynaptic(
+                    snippet="ExpCurr", 
+                    params={"tau": 15.0},
+                    vars={},
+                    var_refs={}
+                    )
 
-            weight_init = pygenn.genn_model.init_weight_update(
-                snippet=plas_instance.model_class, 
-                params=plas_instance.params, 
-                vars=plas_instance.vars,
-                pre_vars=plas_instance.pre_vars,
-                post_vars=plas_instance.post_vars,
-                pre_var_refs={},
-                post_var_refs={},
-                psm_var_refs={}
+                sg = self.genn_model.add_synapse_population(
+                    pop_name=f"{src_name}_to_{tgt_name}", 
+                    matrix_type="SPARSE", 
+                    source=src_pop, 
+                    target=tgt_pop, 
+                    weight_update_init=weight_init, 
+                    postsynaptic_init=post_init
                 )
-            SynClass = SYNAPSE_MODELS.get(syn_cfg.synapse.type)
-            syn_instance = SynClass(syn_cfg.synapse, self.config.simulation.dt)
-            post_init = pygenn.genn_model.init_postsynaptic(
-                snippet="ExpCurr", 
-                params={"tau": 15.0},
-                vars={},
-                var_refs={}
-                )
-
-            sg = self.genn_model.add_synapse_population(
-                pop_name=syn_group_name, 
-                matrix_type="SPARSE", 
-                source=src_pop, 
-                target=tgt_pop, 
-                weight_update_init=weight_init, 
-                postsynaptic_init=post_init
-            )
-            sg.set_sparse_connections(local_src_idx, local_tgt_idx)
+                sg.set_sparse_connections(local_src_idx, local_tgt_idx)
+                max_delay_steps = int(np.max(delays_flat)) + 1
+                sg.max_dendritic_delay_timesteps = max_delay_steps
 
     def _build_input_ports(self):
         """GeNN上に入力専用のglobal_popを定義し、本体へ1対1で接続する"""
@@ -216,12 +219,14 @@ class NetworkBuilder:
 if __name__ == "__main__":
     import traceback
     from src.core.config_manager import ConfigManager
-    import models.neurons.pqn_float
-    import models.neurons.pqn_int
+    import src.models.neurons.pqn_float
+    import src.models.neurons.pqn_int
     import src.models.network.space
     import src.models.network.connectors
     import src.models.network.weights
     import src.models.network.delays
+    import src.models.plasticity.standard_models
+    import src.models.plasticity.custom_Akita
     import src.data.test_data
 
     print("=== NetworkBuilder 動作検証テストを開始します ===")
@@ -244,19 +249,21 @@ if __name__ == "__main__":
         
         # 4. アサーションと検証
         print("\n[TEST] Validating generated objects...")
-        pop_names = list(genn_model.neuron_populations.keys())
-        print(f"  - Registered Populations in GeNN: {pop_names}")
+        Npop_names = list(genn_model.neuron_populations.keys())
+        print(f"  - Registered Populations in GeNN: {Npop_names}")
+        Spop_names = list(genn_model.synapse_populations.keys())
+        print(f"  - Registered Synapse Populations in GeNN: {Spop_names}")
         CSpop_names = list(genn_model.current_sources.keys())
         print(f"  - Registered Current Sources in GeNN: {CSpop_names}")
 
         # --- 本体層の存在確認 ---
         for body_name in config.neurons.keys():
-            assert body_name in pop_names, f"Body Pop '{body_name}' not found in GeNN model."
+            assert body_name in Npop_names, f"Body Pop '{body_name}' not found in GeNN model."
             assert body_name in group_info.keys(), f"'{body_name}' missing in group_info."
         print("  ✓ Body populations successfully validated.")
 
         # --- Current Source の確認 ---
-        if config.inputs.current_DC.enable:
+        if config.inputs.GaussianNoise.enable:
             cs_names = list(genn_model.current_sources.keys())
             print(f"  - Registered Current Sources: {cs_names}")
             # 各body_popに対してDCソースが作られているか確認

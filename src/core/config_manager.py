@@ -40,7 +40,7 @@ class PlasticityConfig(BaseModel):
 class SynapseGroupConfig(BaseModel):
     """シナプス結合グループの設定"""
     source: str = Field(..., description="シナプス前ニューロングループ名")
-    target: str = Field(..., description="シナプス後ニューロングループ名")
+    # target: str = Field(..., description="シナプス後ニューロングループ名")
     # weight_scale: float = Field(default=1.0, description="初期重みのスケーリング係数")
     synapse: SynapseParamsConfig
     plasticity: PlasticityConfig
@@ -133,17 +133,17 @@ class ConfigManager:
         for group_name, s_cfg in main_cfg["synapses"].items():
             resolved["synapses"][group_name] = s_cfg.copy()
 
-            # synapse (コンダクタンスや放出ダイナミクス)
-            syn_info = s_cfg["synapse"]
-            s_type, s_mode = syn_info["type"], syn_info["mode"]
-            if s_type in synapses_data and s_mode in synapses_data[s_type]:
-                resolved["synapses"][group_name]["synapse"].update(synapses_data[s_type][s_mode])
-
             # plasticity (STDP等)
             plas_info = s_cfg["plasticity"]
             p_type, p_mode = plas_info["type"], plas_info["mode"]
             if p_type in plasticity_data and p_mode in plasticity_data[p_type]:
                 resolved["synapses"][group_name]["plasticity"].update(plasticity_data[p_type][p_mode])
+                
+            # synapse (コンダクタンスや放出ダイナミクス)
+            syn_info = s_cfg["synapse"]
+            s_type, s_mode = syn_info["type"], syn_info["mode"]
+            if s_type in synapses_data and s_mode in synapses_data[s_type]:
+                resolved["synapses"][group_name]["synapse"].update(synapses_data[s_type][s_mode])
 
         # メイン設定ファイルの network ブロックを取得
         network = main_cfg["network"]

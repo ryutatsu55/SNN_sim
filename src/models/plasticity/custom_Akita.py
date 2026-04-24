@@ -10,9 +10,11 @@ class CustomAkitaModel(BasePlasticityModel):
     プレ発火時のLTDとポスト発火時のLTPを、Akita論文の式に基づいて実装。
     STPは、プレ発火ごとにリソースxが消費され、時間経過で回復する単純なモデル。
     """
+    _snippet_cache = {}
     def __init__(self, config, dt, weight, delay):
         super().__init__(config, dt, weight, delay)
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
+        self._model_class_instance = self._get_or_create_snippet()
 
     def _prepare_genn_data(self):
         if self.config.mode == "e-stdp":
@@ -27,13 +29,22 @@ class CustomAkitaModel(BasePlasticityModel):
                 "wMax": float(self.config.Wmax)
             }
         elif self.config.mode == "i-stdp":
+            tau_I1 = float(self.config.tau_I1)
+            tau_I2 = float(self.config.tau_I2)
+            beta_I = float(self.config.beta_I)
+            A_I = float(self.config.A_I)
+            
+            C_I_beta = (tau_I1 / tau_I2) * beta_I
+            C_I = A_I / (1.0 - C_I_beta)
+
             params = {
                 "tau_rec": float(self.config.tau_rec),
                 "U": float(self.config.U),
                 "g_max": float(self.config.g_max),
-                "A_E": float(self.config.A_E),
-                "tau_E": float(self.config.tau_E),
-                "beta_E": float(self.config.beta_E),
+                "tau_I1": tau_I1,
+                "tau_I2": tau_I2,
+                "C_I": C_I,
+                "C_I_beta": C_I_beta,
                 "wMin": float(self.config.Wmin),
                 "wMax": float(self.config.Wmax)
             }
@@ -51,17 +62,19 @@ class CustomAkitaModel(BasePlasticityModel):
 
         return params, vars, pre_vars, post_vars
     
-    
-    @property
-    def model_class(self):
+    def _get_or_create_snippet(self):
+        """スニペットを生成するか、キャッシュから返す"""
+        mode = self.config.mode
+        
+        # すでに同じモードのモデルが生成されていれば、それを返す（二重登録エラーも防げる）
+        if mode in CustomAkitaModel._snippet_cache:
+            return CustomAkitaModel._snippet_cache[mode]
+
         # ① プレニューロン発火時に1度だけ実行 (リソースxの回復と消費)
-        pre_spike_code = """
-            // 前回のリソース消費 (Eq. S12)
-            x = x * (1.0 - U);
-            // 前回発火からの経過時間でリソースxを回復 (Eq. S11)
+        pre_spike_code = f"""
+            x = x * (1.0 - {self.config.U});
             const scalar dt_pre = t - t_last_pre;
-            x = 1.0 - ((1.0 - x) * exp(-dt_pre / tau_rec));
-            
+            x = 1.0 - ((1.0 - x) * exp(-dt_pre / {self.config.tau_rec}));
             t_last_pre = t;
         """
         # ② プレ発火時に「各シナプス」で実行 (伝播とLTD)
@@ -85,9 +98,11 @@ class CustomAkitaModel(BasePlasticityModel):
                 // 2. Pre発火時に、過去のPost発火を参照する
                 const scalar dt = t - st_post; 
                 if (dt > 0.0) {
-                    const scalar timing = exp(-dt / tau_E);
-                    // Akitaモデルの t < 0 (Pre after Post) の式: -A_E * beta_E * exp(t/tau_E)
-                    const scalar newWeight = g - (A_E * beta_E * timing);
+                    const scalar timing1 = exp(-dt / tau_I1);
+                    const scalar timing2 = exp(-dt / tau_I2);
+                    const scalar dW = C_I * (timing1 - C_I_beta * timing2);
+                    
+                    const scalar newWeight = g + dW;
                     g = fmax(wMin, fmin(wMax, newWeight));
                 }
             """
@@ -110,26 +125,35 @@ class CustomAkitaModel(BasePlasticityModel):
             post_spike_syn_code="""
                 // 3. Post発火時に、過去のPre発火を参照する
                 const scalar dt = t - st_pre;
-                if (dt >= 0.0) {
-                    const scalar timing = exp(-dt / tau_E);
-                    // Akitaモデルの t >= 0 (Post after Pre) の式: A_E * exp(-t/tau_E)
-                    const scalar newWeight = g + (A_E * timing);
+                if (dt > 0.0) {
+                    // 関数が対称(|t|に依存)なため、Pre側と全く同じ計算を行う
+                    const scalar timing1 = exp(-dt / tau_I1);
+                    const scalar timing2 = exp(-dt / tau_I2);
+                    const scalar dW = C_I * (timing1 - C_I_beta * timing2);
+                    
+                    const scalar newWeight = g + dW;
                     g = fmax(wMin, fmin(wMax, newWeight));
                 }
             """
         else:
             raise ValueError(f"Unsupported mode '{self.config.mode}' for CustomAkitaModel.")
 
-        return pygenn.create_weight_update_model(
+        snippet=pygenn.create_weight_update_model(
             class_name=f"custom_Akita_{self.config.mode}",
-            params=list(self.params.keys()),
-            vars=[("g", "scalar"), ("d", "unit8_t")],
+            params=list(self._params.keys()),
+            vars=[("g", "scalar"), ("d", "uint8_t")],
             pre_vars=[("x", "scalar"), ("t_last_pre", "scalar")],
             pre_spike_code=pre_spike_code,
             pre_spike_syn_code=pre_spike_syn_code,
-            post_spike_syn_code=post_spike_syn_code,
             post_spike_syn_code=post_spike_syn_code
         )
+        
+        # キャッシュに保存して寿命を永続化
+        CustomAkitaModel._snippet_cache[mode] = snippet
+        return snippet
+    @property
+    def model_class(self):
+        return self._get_or_create_snippet()
     
     @property
     def params(self): return self._params
