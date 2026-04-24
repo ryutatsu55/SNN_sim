@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # プロジェクトルートにパスを通す
 root_path = Path(__file__).resolve().parent.parent
 sys.path.append(str(root_path))
-from src.models.neurons.PQN_origin import PQNengine
+from models.neurons.pqn_origin import PQNengine
 
 
 class PQNFloatEngine:

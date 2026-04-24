@@ -1,9 +1,14 @@
-stdp_additive:
-  type: "stdp"
-  tau_plus: 20.0    # LTPの時間定数 [ms]
-  tau_minus: 20.0   # LTDの時間定数 [ms]
-  a_plus: 0.01      # 増幅率
-  a_minus: 0.012
+custom_Akita:
+  e-stdp:
+    tau_plus: 20.0    # LTPの時間定数 [ms]
+    tau_minus: 20.0   # LTDの時間定数 [ms]
+    a_plus: 0.01      # 増幅率
+    a_minus: 0.012
+  i-stdp:
+    tau_plus: 20.0    # LTPの時間定数 [ms]
+    tau_minus: 20.0   # LTDの時間定数 [ms]
+    a_plus: 0.01      # 増幅率
+    a_minus: 0.012
 
 static:
-  type: null      # 長期的な学習（重み変化）は行わない
+  mode: null      # 長期的な学習（重み変化）は行わない

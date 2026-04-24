@@ -10,7 +10,7 @@ if project_root not in sys.path:
 
 # Pydanticの設定モデルと、コンポーネントを動的ロードするレジストリをインポート
 from src.core.config_manager import AppConfig
-from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS
+from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
 
 class NetworkBuilder:
     def __init__(self, config: AppConfig):
@@ -113,7 +113,7 @@ class NetworkBuilder:
                 num_neurons = num_neurons,
                 neuron = neuron_instance.model_class, 
                 params = neuron_instance.params, 
-                vars = neuron_instance.initial_vars
+                vars = neuron_instance.vars
             )
             print(f"  Added NeuronGroup: {group_name} ({num_neurons} neurons)")
 
@@ -129,30 +129,40 @@ class NetworkBuilder:
 
             # グローバル行列からの抽出
             sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
+            sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
             sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
-
-            weight_scale = syn_cfg.weight_scale
-            sub_weights *= weight_scale
 
             local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
             weights_flat = sub_weights[local_src_idx, local_tgt_idx]
+            delays_flat = sub_delays[local_src_idx, local_tgt_idx]
+            delays_flat = delays_flat // self.config.simulation.dt
 
             src_pop = self.genn_model.neuron_populations[src_name]
             tgt_pop = self.genn_model.neuron_populations[tgt_name]
 
+            PlasClass = PLASTICITY_MODELS.get(syn_cfg.plasticity.type)
+            plas_instance = PlasClass(
+                config=syn_cfg.plasticity, 
+                dt=self.config.simulation.dt,
+                weight=weights_flat,
+                delay=delays_flat
+            )
+
             weight_init = pygenn.genn_model.init_weight_update(
-                snippet="StaticPulse", 
-                params={}, 
-                vars={"g": weights_flat},
-                pre_vars={},
-                post_vars={},
+                snippet=plas_instance.model_class, 
+                params=plas_instance.params, 
+                vars=plas_instance.vars,
+                pre_vars=plas_instance.pre_vars,
+                post_vars=plas_instance.post_vars,
                 pre_var_refs={},
                 post_var_refs={},
                 psm_var_refs={}
                 )
+            SynClass = SYNAPSE_MODELS.get(syn_cfg.synapse.type)
+            syn_instance = SynClass(syn_cfg.synapse, self.config.simulation.dt)
             post_init = pygenn.genn_model.init_postsynaptic(
-                snippet="DeltaCurr", 
-                params={},
+                snippet="ExpCurr", 
+                params={"tau": 15.0},
                 vars={},
                 var_refs={}
                 )
@@ -206,8 +216,8 @@ class NetworkBuilder:
 if __name__ == "__main__":
     import traceback
     from src.core.config_manager import ConfigManager
-    import src.models.neurons.PQN_float
-    import src.models.neurons.PQN_int
+    import models.neurons.pqn_float
+    import models.neurons.pqn_int
     import src.models.network.space
     import src.models.network.connectors
     import src.models.network.weights

@@ -41,7 +41,7 @@ class SynapseGroupConfig(BaseModel):
     """シナプス結合グループの設定"""
     source: str = Field(..., description="シナプス前ニューロングループ名")
     target: str = Field(..., description="シナプス後ニューロングループ名")
-    weight_scale: float = Field(default=1.0, description="初期重みのスケーリング係数")
+    # weight_scale: float = Field(default=1.0, description="初期重みのスケーリング係数")
     synapse: SynapseParamsConfig
     plasticity: PlasticityConfig
     # model_config = ConfigDict(extra='allow')

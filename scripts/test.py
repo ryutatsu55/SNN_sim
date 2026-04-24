@@ -15,8 +15,8 @@ import src.utils.visualize as visualize
 
 # --- プラグイン(モデル)の登録トリガー ---
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
-import src.models.neurons.PQN_float
-import src.models.neurons.PQN_int
+import models.neurons.pqn_float
+import models.neurons.pqn_int
 import src.models.network.space
 import src.models.network.connectors
 import src.models.network.weights
@@ -66,10 +66,10 @@ def main():
         
         # --- 新しい制御フロー ---
         step=0
-        for update_dict, duration_steps in trial_inputs:
+        for inputs, duration_steps in trial_inputs:
             # 1. スパイク入力データをGPUに転送
             # ※連続値(Iextなど)をスナップショットで渡したい場合は sim.push() を併用
-            sim.push(update_dict)
+            sim.push(inputs)
             for i in range(duration_steps):
                 sim.step()
                 results.append(sim.pull("V"))
@@ -95,6 +95,14 @@ def main():
     visualize.PQN_test(np.array(results)[:,0], I_in[:,0], config)
 
     visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
+
+    visualize.raster(
+        trial_results["times"], 
+        trial_results["ids"], 
+        tmax=config.task.duration/1000, 
+        idmax=builder.total_neurons, 
+        save_path="raster.png"
+        )
 
 if __name__ == "__main__":
     main()

@@ -24,6 +24,14 @@ tsodyks_markram:
     tau_faci: 0.1
     U: 0.2
 
+ExpCond:
+  excitatory:
+    tau: 2.0        # [ms]
+    Erev: 0.0       # [mV]
+  inhibitory:
+    tau: 4.0        # [ms]
+    Erev: -80.0     # [mV]
+
 static_synapse:
   type: "static"
   # 可塑性なしの単純なシナプス

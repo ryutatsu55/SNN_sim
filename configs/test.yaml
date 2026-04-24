@@ -20,25 +20,21 @@ neurons:
     num: 20
 
 synapses:
-  Exc_to_Inh:
+  from_Exc:
     source: Layer_Exc
-    target: Layer_Inh
-    weight_scale: 1.0
     synapse:
-      type: tsodyks_markram
-      mode: facilitate
+      type: ExpCond
+      mode: excitatory
     plasticity: 
-      type: static
+      type: custom_Akita
       mode: null
-  Inh_to_Exc:
+  from_Inh:
     source: Layer_Inh
-    target: Layer_Exc
-    weight_scale: 4.0
     synapse:
-      type: tsodyks_markram
-      mode: depress
+      type: ExpCond
+      mode: inhibitory
     plasticity: 
-      type: static
+      type: custom_Akita
       mode: null
 
 network:
