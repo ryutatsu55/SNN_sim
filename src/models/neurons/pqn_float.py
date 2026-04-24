@@ -1,7 +1,7 @@
 import pygenn
 from src.core.registry import NEURON_MODELS
-from .base_models import BaseNeuronModel
-from .PQN_origin import PQNengine
+from .BASE_neuron import BaseNeuronModel
+from .pqn_origin import PQNengine
 
 @NEURON_MODELS.register("PQN_float")
 class PQNFloatModel(BaseNeuronModel):
@@ -11,7 +11,6 @@ class PQNFloatModel(BaseNeuronModel):
     """
     def __init__(self, config, dt):
         super().__init__(config, dt)
-        self.dt = dt
         self.engine = PQNengine(mode=config.mode)
         self._params, self._init_vars = self._prepare_genn_data()
 
@@ -128,4 +127,4 @@ class PQNFloatModel(BaseNeuronModel):
     def params(self): return self._params
 
     @property
-    def initial_vars(self): return self._init_vars
+    def vars(self): return self._init_vars

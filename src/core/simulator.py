@@ -91,7 +91,7 @@ class GeNNSimulator:
         ネットワーク全体の対象変数の現在状態を、(total_neurons,) の形状で引き上げる
         """
         local_data_dict = {}
-        for pop_name in self.group_info.keys():
+        for pop_name in self.model.neuron_populations.keys():
             pop = self.model.neuron_populations[pop_name]
             
             # GPUから現在の値をプルして辞書に格納

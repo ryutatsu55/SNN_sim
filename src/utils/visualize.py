@@ -2,10 +2,39 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 
-def raster(spike_data, title="Raster"):
-    """ラスタープロット等の図を出力するダミー関数"""
-    print(f" [Vis] Generating Plot: {title} (saving to file...)")
-    # matplotlib 等の処理をここに記述
+def raster(times, ids, title="Raster Plot", tmax=None, idmax=None, s=10.0, save_path=None):
+    """
+    スパイク時刻とニューロンIDの配列からラスタープロットを作成する。
+    
+    Parameters:
+        times (np.ndarray): スパイクが発生した時刻の1次元配列[ms]
+        ids (np.ndarray): スパイクを発火したニューロンIDの1次元配列
+        title (str): グラフのタイトル
+        tmax (float): 時間軸の最大値。Noneの場合は自動
+        idmax (float): Y軸(ID)の最大値。Noneの場合は自動
+        s (float): マーカーのサイズ
+        save_path (str): 保存先のパス。Noneの場合は画面に表示
+    """
+    times = times/1000.0  # ms -> s に変換
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.scatter(times, ids, s=s)
+    
+    ax.set_title(title)
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Neuron ID")
+    
+    # 表示範囲の指定がある場合
+    if tmax is not None:
+        ax.set_xlim(0, tmax)
+    if idmax is not None:
+        ax.set_ylim(0, idmax)
+
+    plt.tight_layout()
+    
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Raster plot saved to {save_path}")
+        
+    plt.close()
 
 def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     tmax = config.task.duration/1000
@@ -25,7 +54,7 @@ def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     plt.tight_layout()
     plt.savefig(f"{title}.png")
 
-def network(weights, coords, config, node_size=10, title="Network", save_path="network.png"):
+def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title="Network", save_path="network.png"):
     """
     ニューロンの空間配置と重み行列からネットワーク構造を可視化する。
     

@@ -1,12 +1,14 @@
 from abc import ABC, abstractmethod
 
-class BaseNeuronModel(ABC):
+class BasePlasticityModel(ABC):
     """
     バックエンド(GeNN等)にモデル情報を渡すための統一インターフェース
     """
-    def __init__(self, config, dt):
+    def __init__(self, config, dt, weight, delay):
         self.config = config
         self.dt = dt
+        self.weight = weight
+        self.delay = delay
 
     @property
     @abstractmethod
@@ -22,6 +24,18 @@ class BaseNeuronModel(ABC):
 
     @property
     @abstractmethod
-    def initial_vars(self) -> dict:
+    def vars(self) -> dict:
         """GeNNに渡す変数初期値辞書"""
+        pass
+
+    @property
+    @abstractmethod
+    def pre_vars(self) -> dict:
+        """GeNNに渡すpreneuron変数初期値辞書"""
+        pass
+
+    @property
+    @abstractmethod
+    def post_vars(self) -> dict:
+        """GeNNに渡すpostneuron変数初期値辞書"""
         pass
