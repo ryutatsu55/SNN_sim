@@ -78,7 +78,19 @@ class GeNNSimulator:
             vars_to_record = out_info.get("record_vars")
             
             if "spikes" in vars_to_record:
-                spike_times, spike_ids = pop.spike_recording_data
+                # GeNN 5 系では spike_recording_data は batch ごとの
+                # [(times, ids), ...] を返すため、単一バッチでは先頭要素を使う。
+                spike_recording_data = pop.spike_recording_data
+
+                if isinstance(spike_recording_data, list):
+                    if len(spike_recording_data) == 0:
+                        spike_times = np.array([])
+                        spike_ids = np.array([])
+                    else:
+                        spike_times, spike_ids = spike_recording_data[0]
+                else:
+                    spike_times, spike_ids = spike_recording_data
+
                 pop_results["spikes"] = {
                     "times": spike_times.copy(),
                     "ids": spike_ids.copy()
