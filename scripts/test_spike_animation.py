@@ -89,8 +89,8 @@ def main():
         neuron_id=spike_ids,
         coords=coords,
         output_path=OUTPUT_VIDEO,
-        fps=30,
-        decay_tau_ms=20.0,
+        fps=60,
+        decay_tau_ms=50.0,
         duration_ms=duration_ms,
         title=f"{TARGET_POPULATION} Spike Animation",
     )
