@@ -21,9 +21,10 @@ import src.data.test_data
 
 TASK_NAME = "pqn_test"
 TARGET_POPULATION = "Layer_Exc"
-OUTPUT_VIDEO = f"{TARGET_POPULATION}_spike_animation.mp4"
-OUTPUT_RASTER = f"{TARGET_POPULATION}_raster"
-OUTPUT_SPIKE_CSV = f"{TARGET_POPULATION}_spikes.csv"
+OUTPUT_DIR = "output"
+OUTPUT_VIDEO = f"{OUTPUT_DIR}/{TARGET_POPULATION}_spike_animation.mp4"
+OUTPUT_RASTER = f"{OUTPUT_DIR}/{TARGET_POPULATION}_raster"
+OUTPUT_SPIKE_CSV = f"{OUTPUT_DIR}/{TARGET_POPULATION}_spikes.csv"
 
 
 def main():
