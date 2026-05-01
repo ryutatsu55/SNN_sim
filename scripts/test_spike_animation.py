@@ -85,7 +85,7 @@ def main():
         coords=coords,
         output_path=OUTPUT_VIDEO,
         fps=30,
-        window_ms=20.0,
+        decay_tau_ms=20.0,
         duration_ms=duration_ms,
         title=f"{TARGET_POPULATION} Spike Animation",
     )

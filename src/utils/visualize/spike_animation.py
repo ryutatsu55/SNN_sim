@@ -69,13 +69,48 @@ def _resolve_animation_coords(neuron_id: np.ndarray, coords: np.ndarray | None):
     )
 
 
+def _compute_decay_intensity(
+    frame_time: float,
+    sorted_time: np.ndarray,
+    sorted_id: np.ndarray,
+    display_index: dict[int, int],
+    num_display_ids: int,
+    decay_tau_ms: float,
+    decay_cutoff_ms: float,
+):
+    if decay_tau_ms <= 0:
+        raise ValueError("decay_tau_ms must be greater than 0.")
+    if decay_cutoff_ms <= 0:
+        raise ValueError("decay_cutoff_ms must be greater than 0.")
+
+    left = np.searchsorted(sorted_time, frame_time - decay_cutoff_ms, side="left")
+    right = np.searchsorted(sorted_time, frame_time, side="right")
+
+    intensity = np.zeros(num_display_ids, dtype=float)
+    if right <= left:
+        return intensity
+
+    recent_time = sorted_time[left:right]
+    recent_id = sorted_id[left:right]
+    elapsed_ms = frame_time - recent_time
+    recent_intensity = np.exp(-elapsed_ms / decay_tau_ms)
+    recent_index = np.fromiter(
+        (display_index[int(neuron)] for neuron in recent_id),
+        dtype=int,
+        count=recent_id.size,
+    )
+    np.maximum.at(intensity, recent_index, recent_intensity)
+    return intensity
+
+
 def spike_animation(
     spike_time: np.ndarray,
     neuron_id: np.ndarray,
     coords: np.ndarray | None = None,
     output_path: str = "spike_animation.mp4",
     fps: int = 30,
-    window_ms: float = 20.0,
+    decay_tau_ms: float = 20.0,
+    decay_cutoff_ms: float | None = None,
     duration_ms: float | None = None,
     title: str = "Spike Animation",
 ) -> None:
@@ -85,8 +120,12 @@ def spike_animation(
 
     if fps <= 0:
         raise ValueError("fps must be greater than 0.")
-    if window_ms <= 0:
-        raise ValueError("window_ms must be greater than 0.")
+    if decay_tau_ms <= 0:
+        raise ValueError("decay_tau_ms must be greater than 0.")
+    if decay_cutoff_ms is None:
+        decay_cutoff_ms = decay_tau_ms * 5.0
+    if decay_cutoff_ms <= 0:
+        raise ValueError("decay_cutoff_ms must be greater than 0.")
 
     if duration_ms is None:
         duration_ms = float(np.max(spike_time))
@@ -141,22 +180,15 @@ def spike_animation(
     )
 
     def update(frame_time):
-        left = np.searchsorted(sorted_time, frame_time - window_ms, side="left")
-        right = np.searchsorted(sorted_time, frame_time, side="right")
-
-        intensity = np.zeros(display_ids.size, dtype=float)
-        if right > left:
-            recent_time = sorted_time[left:right]
-            recent_id = sorted_id[left:right]
-            recent_intensity = 1.0 - ((frame_time - recent_time) / window_ms)
-            recent_intensity = np.clip(recent_intensity, 0.0, 1.0)
-            recent_index = np.fromiter(
-                (display_index[int(neuron)] for neuron in recent_id),
-                dtype=int,
-                count=recent_id.size,
-            )
-            np.maximum.at(intensity, recent_index, recent_intensity)
-
+        intensity = _compute_decay_intensity(
+            frame_time=frame_time,
+            sorted_time=sorted_time,
+            sorted_id=sorted_id,
+            display_index=display_index,
+            num_display_ids=display_ids.size,
+            decay_tau_ms=decay_tau_ms,
+            decay_cutoff_ms=decay_cutoff_ms,
+        )
         scatter.set_array(intensity)
         time_text.set_text(f"t = {frame_time:.1f} ms")
         return scatter, time_text
