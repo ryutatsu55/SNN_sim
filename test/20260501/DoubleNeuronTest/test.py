@@ -82,7 +82,7 @@ def main():
             for i in range(duration_steps):
                 sim.step()
                 results[step,:] = sim.pull("V")
-                I_in[step,:] = sim.pull("Isyn_rec")
+                # I_in[step,:] = sim.pull("Isyn")
                 step += 1
 
         # 3. デバイスから記録バッファを一括で引き出す
@@ -109,12 +109,11 @@ def main():
     # visualize.PQN_test(results[:,0], I_in[:,0], config)
 
     visualize.neuron_test(
-        results,
-        I_in,
+        results[:,0],
+        I_in[:,0],
         trial_results["times"],
         trial_results["ids"], 
-        config,
-        id = 0
+        config
     )
 
     visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)

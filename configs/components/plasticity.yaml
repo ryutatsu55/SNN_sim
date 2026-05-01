@@ -1,17 +1,18 @@
+
 custom_Akita:
   e-stdp:
-    tau_rec: 150.0  
+    tau_rec: 150.0  # [ms]
     U: 0.4           
-    g_max: 4.0     
+    g_max: 4.0      # [uS]
     A_E: 0.02
     tau_E: 20.0
     beta_E: 1.12
     Wmin: 0.0
     Wmax: 1.0
   i-stdp:
-    tau_rec: 150.0   
+    tau_rec: 150.0   # [ms]
     U: 0.4           
-    g_max: 4.0    
+    g_max: 4.0       # [uS]
     A_I: 0.02    
     tau_I1: 10.0  
     tau_I2: 20.0  
@@ -19,5 +20,42 @@ custom_Akita:
     Wmin: 0.0
     Wmax: 1.0
 
-static:
-  mode: null      # 長期的な学習（重み変化）は行わない
+# =================================================================
+# Standard Plasticity Models Configuration
+# =================================================================
+
+# 1. STDP (Spike-Timing Dependent Plasticity)
+# standard_models.py の STDP クラスに対応
+STDP:
+  default:
+    tauPlus: 20.0    # プレ後発火時の時定数 (ms)
+    tauMinus: 20.0   # ポスト後発火時の時定数 (ms)
+    Aplus: 0.01      # 強化の振幅
+    Aminus: 0.012    # 抑制の振幅
+    Wmin: 0.0        # 最小重み
+    Wmax: 1.0        # 最大重み
+  
+  strong_potentiate:
+    tauPlus: 20.0
+    tauMinus: 20.0
+    Aplus: 0.05      # 強めに強化
+    Aminus: 0.01
+    Wmin: 0.0
+    Wmax: 5.0
+
+# 2. StaticPulse (スパイク時に一定の重みを伝達。重みは行列から取得)
+# standard_models.py の StaticPulse クラスに対応
+StaticPulse:
+  default:
+    # 実際の実装では config から値を取得していないため空でOK
+    # モード切り替えが必要な場合のためにセクションのみ定義
+    {}
+
+# 3. StaticPulseConstantWeight (全結合で共通の固定重みを使用)
+# standard_models.py の StaticPulseConstantWeight クラスに対応
+StaticPulseConstantWeight:
+  fixed_1.0:
+    g: 1.0           # 伝達される固定の重み
+  
+  inhibitory_fixed:
+    g: -0.5          # 抑制性の固定重み

@@ -24,6 +24,7 @@ class NetworkBuilder:
         # Pydanticモデルから総ニューロン数を計算
         self.total_neurons = sum(neuron_cfg.num for neuron_cfg in self.config.neurons.values())
         
+        self._component_lifeline = []
         self.group_info = {}
         self.global_coords = None
         self.global_mask = None
@@ -124,9 +125,11 @@ class NetworkBuilder:
             for tgt_name in self.group_info.keys():
                 src_name = syn_cfg.source
                 # tgt_name = syn_cfg.target
+                print(f"src:{src_name}, tgt:{tgt_name}")
                 
                 src_indices = self.group_info[src_name]["global_indices"]
                 tgt_indices = self.group_info[tgt_name]["global_indices"]
+                # print(f"src:{src_indices}, tgt:{tgt_indices}")
 
                 # グローバル行列からの抽出
                 sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
@@ -146,27 +149,35 @@ class NetworkBuilder:
                     config=syn_cfg.plasticity, 
                     dt=self.config.simulation.dt,
                     weight=weights_flat,
-                    delay=delays_flat
+                    delay=delays_flat,
+                    num_pre=src_pop.num_neurons,
+                    num_post=tgt_pop.num_neurons
                     )
+                self._component_lifeline.append(plas_instance)
                 weight_init = pygenn.genn_model.init_weight_update(
-                    snippet=plas_instance.model_class, 
+                    snippet=plas_instance.snippet, 
                     params=plas_instance.params, 
                     vars=plas_instance.vars,
                     pre_vars=plas_instance.pre_vars,
                     post_vars=plas_instance.post_vars,
-                    pre_var_refs={},
-                    post_var_refs={},
-                    psm_var_refs={}
-                    )
+                    pre_var_refs=plas_instance.pre_var_refs,
+                    post_var_refs=plas_instance.post_var_refs,
+                    psm_var_refs=plas_instance.psm_var_refs   
+                )
                 
-                # SynClass = SYNAPSE_MODELS.get(syn_cfg.synapse.type)
-                # syn_instance = SynClass(syn_cfg.synapse, self.config.simulation.dt)
+                SynClass = SYNAPSE_MODELS.get(syn_cfg.synapse.type)
+                syn_instance = SynClass(
+                    config=syn_cfg.synapse, 
+                    dt=self.config.simulation.dt,
+                    pop=tgt_pop
+                )
+                self._component_lifeline.append(syn_instance)
                 post_init = pygenn.genn_model.init_postsynaptic(
-                    snippet="ExpCurr", 
-                    params={"tau": 15.0},
-                    vars={},
-                    var_refs={}
-                    )
+                    snippet=syn_instance.snippet, 
+                    params=syn_instance.params,
+                    vars=syn_instance.vars,
+                    var_refs=syn_instance.var_refs
+                )
 
                 sg = self.genn_model.add_synapse_population(
                     pop_name=f"{src_name}_to_{tgt_name}", 
@@ -221,12 +232,15 @@ if __name__ == "__main__":
     from src.core.config_manager import ConfigManager
     import src.models.neurons.pqn_float
     import src.models.neurons.pqn_int
+    import src.models.neurons.lif
     import src.models.network.space
     import src.models.network.connectors
     import src.models.network.weights
     import src.models.network.delays
     import src.models.plasticity.standard_models
     import src.models.plasticity.custom_Akita
+    import src.models.synapses.standard_models
+    import src.models.synapses.custom
     import src.data.test_data
 
     print("=== NetworkBuilder 動作検証テストを開始します ===")

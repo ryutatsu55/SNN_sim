@@ -1,0 +1,59 @@
+simulation:
+  dt: 0.1
+  N: 150
+  seed: null
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 10.0
+    sd: 1.0
+neurons:
+  Layer_Exc:
+    type: LIF
+    mode: excitatory
+    num: 1
+    C: 1.0
+    TauM: 20.0
+    Vrest: -60.0
+    Vthresh: -50.0
+    Vreset: -65.0
+    Ioffset: 0.7
+    TauRefrac: 5.0
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    synapse:
+      type: ExpCurr
+      mode: excitatory
+      tau: 2.0
+    plasticity:
+      type: StaticPulse
+      mode: default
+network:
+  space:
+    profile_name: block_2d
+    x_range:
+    - 0.0
+    - 10.0
+    y_range:
+    - 0.0
+    - 10.0
+    num_modules: 1
+    margin: 0.9
+  connection:
+    profile_name: constant_prob
+    p: 1.0
+  weight:
+    profile_name: constant
+    base_weight: 0.0
+  delay:
+    profile_name: constant
+    value: 5.0
+task:
+  profile_name: pqn_test
+  input: 0.0
+  input_type: step
+  duration: 100.0
+  graph_name: PQN_V_test
+meta:
+  timestamp: 2026-05-01_13-20-09

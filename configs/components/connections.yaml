@@ -1,9 +1,6 @@
-
 constant_prob:
-  num_modules: 4
-  e_rate: 0.75
-  p_in: 0.1
-  p_out: 0.05
+  p: 0.5
+  allow_self_connections: false
 
 distance_based:
   sigma: 0.75
@@ -14,3 +11,7 @@ prob_based_block:
   within_module_connection_prob: 0.1
   between_module_connection_prob: 0.01
   allow_self_connections: true
+
+optional_connect:
+  src_ID: 1
+  tgt_ID: 0

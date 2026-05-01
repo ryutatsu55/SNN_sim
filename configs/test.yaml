@@ -11,34 +11,34 @@ inputs:
 
 neurons:
   Layer_Exc:
-    type: PQN_float
-    mode: RSexci
-    num: 80
-  Layer_Inh:
-    type: PQN_int
-    mode: RSinhi
-    num: 20
+    type: LIF
+    mode: excitatory
+    num: 2
+  # Layer_Inh:
+  #   type: LIF
+  #   mode: inhibitory
+  #   num: 1
 
 synapses:
   from_Exc:
     source: Layer_Exc
     plasticity: 
-      type: custom_Akita
-      mode: e-stdp
+      type: StaticPulse
+      mode: default
     synapse:
-      type: ExpCond
+      type: ExpCurr
       mode: excitatory
-  from_Inh:
-    source: Layer_Inh
-    plasticity: 
-      type: custom_Akita
-      mode: i-stdp
-    synapse:
-      type: ExpCond
-      mode: inhibitory
+  # from_Inh:
+  #   source: Layer_Inh
+  #   plasticity: 
+  #     type: StaticPulse
+  #     mode: default
+  #   synapse:
+  #     type: ExpCurr
+  #     mode: inhibitory
 
 network:
   space: block_2d
-  connection: distance_based
-  weight: distance_dependent
-  delay: distance_based 
+  connection: optional_connect
+  weight: constant
+  delay: constant 

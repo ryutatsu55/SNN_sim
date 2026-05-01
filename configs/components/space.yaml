@@ -12,5 +12,5 @@ random_2d:
 block_2d:
   x_range: [0.0, 10.0]  # um
   y_range: [0.0, 10.0]  # um
-  num_modules: 4
-  margin: 0.3
+  num_modules: 1
+  margin: 0.6

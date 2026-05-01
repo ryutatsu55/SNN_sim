@@ -36,13 +36,28 @@ PQN_float:
 
 LIF:
   excitatory:
-    in_var: "Iext"
-    C: 1.0             # 膜容量
-    TauM: 20.0         # 膜時定数
-    Vrest: -70.0       # 静止膜電位
-    Vthresh: -50.0     # 閾値
+    C: 1.0             # 膜容量[nF]
+    TauM: 20.0         # 膜時定数[mV]
+    Vrest: -60.0       # 静止膜電位[mV]
+    Vthresh: -50.0     # 閾値[mV]
+    Vreset: -65.0      
+    Ioffset: 0.0       # オフセット電流[nA]
+    TauRefrac: 5.0
   inhibitory:
     C: 1.0             # 膜容量
     TauM: 20.0         # 膜時定数
-    Vrest: -70.0       # 静止膜電位
+    Vrest: -60.0       # 静止膜電位
     Vthresh: -50.0     # 閾値
+    Vreset: -60.0
+    Ioffset: 0.0
+    TauRefrac: 5.0
+
+test_LIF:
+  excitatory:
+    C: 1.0             # 膜容量[nF]
+    TauM: 20.0         # 膜時定数[mV]
+    Vrest: -60.0       # 静止膜電位[mV]
+    Vthresh: -50.0     # 閾値[mV]
+    Vreset: -65.0      
+    Ioffset: 0.0       # オフセット電流[nA]
+    TauRefrac: 5.0

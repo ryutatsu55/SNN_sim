@@ -1,10 +1,9 @@
 constant:
-  base_weight: 0.09    # 興奮性の基本重み (RESERVOIR_CONN)
-  g_scale: 0.5         # G (分散スケール)
+  base_weight: 1.0    # 興奮性の基本重み (RESERVOIR_CONN)
 
 normal_broad:
-  mean: 0.09
-  std: 0.02
+  mean: 0.9
+  std: 0.2
   
 lognormal_broad:
   mean: 0.09

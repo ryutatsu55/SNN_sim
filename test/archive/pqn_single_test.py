@@ -6,7 +6,7 @@ from pathlib import Path
 # プロジェクトルートにパスを通す
 root_path = Path(__file__).resolve().parent.parent
 sys.path.append(str(root_path))
-from simulator_V_test import Simulator
+from test.archive.simulator_V_test import Simulator
 
 def main():
     # 本来は ConfigManager が YAML から生成する辞書を模倣

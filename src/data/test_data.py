@@ -79,3 +79,35 @@ class pqn_test_loader(BaseDataLoader):
             current_step += duration
 
         return result_array
+    
+@DATA_LOADERS.register("lif_test")
+class lif_test(BaseDataLoader):
+    def __init__(self, config: 'AppConfig', group_info: dict):
+        super().__init__(config, group_info)
+        
+        self.num_neurons = sum(info["num"] for _, info in self.group_info.items())
+        
+        self.zero_array = np.full(self.num_neurons, self.config.neurons["Layer_Exc"].Vrest, dtype=np.float32)
+        self.stim_array = np.copy(self.zero_array)
+        self.stim_array[self.config.task.tgt_ID] = self.config.task.input
+        
+        self.steps = self.total_steps // self.config.task.devide
+        
+        print(f"  [DataLoader] pqn_test Ready.")
+        print(f"               (Neurons: {self.num_neurons}, Total steps: {self.total_steps})")
+
+    def generate(self) -> Iterator[Tuple[List[Tuple[Dict[str, np.ndarray], int]], Dict[str, Any]]]:
+        """
+        テスト用の1トライアル分のデータを生成する。
+        """
+
+        inputs = [(self.stim_array, self.steps) for _ in range(self.config.task.devide)]
+        # inputs[0] = (self.zero_array, self.steps)
+        # テスト用なのでメタデータはシンプルに
+        metadata = {
+            "phase": "test",
+            "trial_idx": 0,
+            "total_steps": self.total_steps
+        }
+        
+        yield inputs, metadata

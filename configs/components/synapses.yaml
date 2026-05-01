@@ -1,37 +1,56 @@
-tsodyks_doubleExponential:
-  facilitate:
-    tau_rec: 0.8
-    tau_inact: 0.05
-    U: 0.1
-    tr: 0.002
-    td: 0.01    
-  depress:
-    tau_rec: 0.8
-    tau_inact: 0.05
-    tau_faci: 0.2
-    U: 0.1
-    tr: 0.002
-    td: 0.01
+# =================================================================
+# Post-Synaptic Mechanism Configurations
+# =================================================================
 
-tsodyks_markram:
-  facilitate:
-    tau_rec: 0.5
-    tau_inact: 0.1
-    U: 0.2
-  depress:
-    tau_rec: 0.5
-    tau_inact: 0.1
-    tau_faci: 0.1
-    U: 0.2
-
+# 1. ExpCond (Conductance-based Exponential Synapse)
+# standard_models.py の ExpCond クラスに対応
 ExpCond:
   excitatory:
-    tau: 2.0        # [ms]
-    Erev: 0.0       # [mV]
+    tau: 2.0        # [ms] 減衰時定数
+    E: 0.0          # [mV] 反転電位 (※コード内のself.config.Eに準拠)
   inhibitory:
     tau: 4.0        # [ms]
-    Erev: -80.0     # [mV]
+    E: -80.0        # [mV]
 
-static_synapse:
-  type: "static"
-  # 可塑性なしの単純なシナプス
+# 2. ExpCurr (Current-based Exponential Synapse)
+# standard_models.py の ExpCurrSynapse クラスに対応
+ExpCurr:
+  excitatory:
+    tau: 2.0        # [ms] 減衰時定数
+  inhibitory:
+    tau: 5.0        # [ms]
+
+# 3. custom_example (Custom Post-Synaptic Model)
+# custom.py の CustomSynapseExample クラスに対応
+custom_example:
+  default:
+    tau_decay: 10.0 # [ms] (※コード内のself.config.tau_decayに準拠)
+  fast:
+    tau_decay: 2.0  # [ms]
+
+
+# tsodyks_doubleExponential:
+#   facilitate:
+#     tau_rec: 0.8
+#     tau_inact: 0.05
+#     U: 0.1
+#     tr: 0.002
+#     td: 0.01
+#   depress:
+#     tau_rec: 0.8
+#     tau_inact: 0.05
+#     tau_faci: 0.2
+#     U: 0.1
+#     tr: 0.002
+#     td: 0.01
+
+# tsodyks_markram:
+#   facilitate:
+#     tau_rec: 0.5
+#     tau_inact: 0.1
+#     U: 0.2
+#   depress:
+#     tau_rec: 0.5
+#     tau_inact: 0.1
+#     tau_faci: 0.1
+#     U: 0.2

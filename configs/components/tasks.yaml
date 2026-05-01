@@ -1,9 +1,15 @@
 pqn_test:
-    input: 0.15         # [nA]
-    input_type: "step"  # (step or continuous)
-    duration: 2000.0    # [ms]
-    graph_name: "PQN_V_test"
+  input: 0.00         # [nA]
+  input_type: "step"  # (step or continuous)
+  duration: 2000.0    # [ms]
+  graph_name: "PQN_V_test"
     
+lif_test:
+  duration: 100.0
+  input: -49.0
+  devide: 5
+  tgt_ID: 1
+
 spatial_recognition:
   duration: 10000.0
   input:

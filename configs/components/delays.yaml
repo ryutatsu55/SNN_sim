@@ -1,5 +1,5 @@
 constant:
-  value: 1.0
+  value: 10.0
 
 distance_based:
   velocity: 2.0  # [mm/ms] etc.

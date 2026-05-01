@@ -195,7 +195,7 @@ if __name__ == "__main__":
 
     # 1. ConfigManagerの初期化
     # test.yamlを読み込み、active_taskとして 'pqn_test' を指定
-    manager = ConfigManager(config_source="test.yaml", active_task="pqn_test")
+    manager = ConfigManager(config_source="test.yaml", active_task="lif_test")
 
     # 2. 設定の統合と検証を実行
     print("--- Resolving Config ---")

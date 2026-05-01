@@ -24,10 +24,19 @@ class BaseConnection(ABC):
 class ConstantProbabilityTopology(BaseConnection):
     def generate(self):
         """空間配置を無視し、純粋な確率で結合マスクを生成"""
-        prob = self.config.p_out
+        prob = self.config.p
         
         mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob
-        np.fill_diagonal(mask, 0) # 自己結合（自分自身へのシナプス）を排除
+        if not self.config.allow_self_connections:
+            np.fill_diagonal(mask, 0) # 自己結合（自分自身へのシナプス）を排除
+        return mask.astype(np.int8)
+
+@CONNECTION_MODELS.register("optional_connect")
+class OptionalConnection(BaseConnection):
+    def generate(self):
+        """任意の結合を指定する"""        
+        mask = np.zeros((self.num_neurons, self.num_neurons))
+        mask[self.config.src_ID, self.config.tgt_ID] = 1
         return mask.astype(np.int8)
 
 @CONNECTION_MODELS.register("distance_based")

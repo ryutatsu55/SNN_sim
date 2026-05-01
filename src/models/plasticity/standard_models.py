@@ -5,9 +5,11 @@ from .BASE_plasticity import BasePlasticityModel
 
 @PLASTICITY_MODELS.register("STDP")
 class STDP(BasePlasticityModel):
-    def __init__(self, config, dt, weight, delay):
-        super().__init__(config, dt, weight, delay)
+    def __init__(self, config, dt, weight, delay, num_pre, num_post):
+        super().__init__(config, dt, weight, delay, num_pre, num_post)
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
+        # 初期化時に一度だけオブジェクトを生成して保持する
+        self._snippet = "STDP"
 
     def _prepare_genn_data(self):
         params = {
@@ -18,82 +20,60 @@ class STDP(BasePlasticityModel):
             "Wmin": float(self.config.Wmin),
             "Wmax": float(self.config.Wmax)
         }
-        vars = {
-            "g": self.weight.astype('float32')
-        }
+        vars = {"g": self.weight.astype('float32')}
         pre_vars = {}
         post_vars = {}
 
         return params, vars, pre_vars, post_vars
-    
+
     @property
-    def model_class(self):
-        return pygenn.weight_update_models.STDP()
-    
+    def snippet(self): return self._snippet
     @property
     def params(self): return self._params
-
     @property
     def vars(self): return self._vars
-
     @property
     def pre_vars(self): return self._pre_vars
-    
     @property
     def post_vars(self): return self._post_vars
+
 
 @PLASTICITY_MODELS.register("StaticPulse")
 class StaticPulse(BasePlasticityModel):
-    """
-    Pulse-coupled, static synapse with heterogeneous weight. 
-    No learning rule is applied to the synapse and for each pre-synaptic spikes,
-    the synaptic conductances are simply added to the postsynaptic input variable.
-    """
-    def __init__(self, config, dt, weight, delay):
-        super().__init__(config, dt, weight, delay)
+    def __init__(self, config, dt, weight, delay, num_pre, num_post):
+        super().__init__(config, dt, weight, delay, num_pre, num_post)
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
+        self._snippet = "StaticPulse"
 
     def _prepare_genn_data(self):
         params = {}
-        vars = {
-            "g": self.weight.astype('float32')
-        }
+        vars = {"g": self.weight.astype('float32')}
         pre_vars = {}
         post_vars = {}
 
         return params, vars, pre_vars, post_vars
     
     @property
-    def model_class(self):
-        return pygenn.weight_update_models.StaticPulse()
-    
+    def snippet(self): return self._snippet
     @property
     def params(self): return self._params
-
     @property
     def vars(self): return self._vars
-
     @property
     def pre_vars(self): return self._pre_vars
-    
     @property
     def post_vars(self): return self._post_vars
 
+
 @PLASTICITY_MODELS.register("StaticPulseConstantWeight")
 class StaticPulseConstantWeight(BasePlasticityModel):
-    """
-    Pulse-coupled, static synapse with homogeneous weight. 
-    No learning rule is applied to the synapse and for each pre-synaptic spikes,
-    the synaptic conductances are simply added to the postsynaptic input variable.
-    """
-    def __init__(self, config, dt, weight, delay):
-        super().__init__(config, dt, weight, delay)
+    def __init__(self, config, dt, weight, delay, num_pre, num_post):
+        super().__init__(config, dt, weight, delay, num_pre, num_post)
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
+        self._snippet = "StaticPulseConstantWeight"
 
     def _prepare_genn_data(self):
-        params = {
-            "g": float(self.config.g)  # 全シナプスで同じ重み
-        }
+        params = {"g": float(self.config.g)}
         vars = {}
         pre_vars = {}
         post_vars = {}
@@ -101,17 +81,12 @@ class StaticPulseConstantWeight(BasePlasticityModel):
         return params, vars, pre_vars, post_vars
     
     @property
-    def model_class(self):
-        return pygenn.weight_update_models.StaticPulseConstantWeight()
-    
+    def snippet(self): return self._snippet
     @property
     def params(self): return self._params
-
     @property
     def vars(self): return self._vars
-
     @property
     def pre_vars(self): return self._pre_vars
-    
     @property
     def post_vars(self): return self._post_vars

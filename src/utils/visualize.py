@@ -54,6 +54,31 @@ def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     plt.tight_layout()
     plt.savefig(f"{title}.png")
 
+def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuron_test"):
+    V_data = V_data[:, id]
+    I_in = I_in[:,id]
+    tmax = config.task.duration/1000
+    time_axis = np.arange(len(V_data)) * config.simulation.dt / 1000.0
+    
+    fig, (ax0, ax1, ax2) = plt.subplots(3, 1, gridspec_kw={'height_ratios': [1, 4, 1]}, figsize=(9, 4), sharex=True)
+    
+    spike_times = spike_times/1000.0
+    ax0.scatter(spike_times, spike_ids, s=10)
+    ax0.set_ylabel("Neuron ID")
+    ax0.set_ylim(id-0.5, id+0.5)
+
+    ax1.plot(time_axis, V_data, color='tab:blue')
+    ax1.set_ylabel('v [mV]')
+    ax1.set_xlim(0, tmax)
+    
+    ax2.plot(time_axis, I_in, color='black')
+    ax2.set_ylabel('I [nA]')
+    ax2.set_xlabel('Time [s]')
+    ax2.set_xlim(0, tmax)
+    
+    plt.tight_layout()
+    plt.savefig(f"{title}.png")
+
 def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title="Network", save_path="network.png"):
     """
     ニューロンの空間配置と重み行列からネットワーク構造を可視化する。

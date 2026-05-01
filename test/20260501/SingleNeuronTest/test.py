@@ -29,8 +29,7 @@ import src.models.plasticity.standard_models
 import src.data.test_data
 # import src.models.neurons.lif  
 
-# TASK_NAME = "pqn_test"
-TASK_NAME = "lif_test"
+TASK_NAME = "pqn_test"
 
 def main():
     print("=== SNN_sim Test Pipeline Started ===")
@@ -38,7 +37,7 @@ def main():
     # 1. 設定の読み込み
     config_src = "test.yaml"
     print(f"Loading config from {config_src}...")
-    manager = ConfigManager(config_src, TASK_NAME) 
+    manager = ConfigManager(config_src, "pqn_test") 
     config = manager.resolve()
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
@@ -76,13 +75,11 @@ def main():
         for inputs, duration_steps in trial_inputs:
             # 1. スパイク入力データをGPUに転送
             # ※連続値(Iextなど)をスナップショットで渡したい場合は sim.push() を併用
-            if not step==0:
-                inputs[config.network.connection.tgt_ID] = results[step-1, config.network.connection.tgt_ID]
-            sim.push(inputs, target_var="V")
+            # sim.push(inputs, target_var="V")
             for i in range(duration_steps):
                 sim.step()
                 results[step,:] = sim.pull("V")
-                I_in[step,:] = sim.pull("Isyn_rec")
+                # I_in[step,:] = sim.pull("Isyn")
                 step += 1
 
         # 3. デバイスから記録バッファを一括で引き出す
@@ -98,34 +95,18 @@ def main():
     
     manager.save_resolved(config)
 
-    # 6. Readout (学習)
-    # print("Training Readout layer...")
-    # readout = RidgeReadout()
-    # weights = readout.fit(all_results, target_data)
-
     # 7. 評価と可視化
-    # I_in = data_loader.reconstruct(trial_inputs)
-    I_in[:] += config.neurons["Layer_Exc"].Ioffset
-    # visualize.PQN_test(results[:,0], I_in[:,0], config)
+    I_in[:] = config.neurons["Layer_Exc"].Ioffset
 
     visualize.neuron_test(
-        results,
-        I_in,
+        results[:,0],
+        I_in[:,0],
         trial_results["times"],
         trial_results["ids"], 
-        config,
-        id = 0
+        config
     )
 
     visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
-
-    # visualize.raster(
-    #     trial_results["times"], 
-    #     trial_results["ids"], 
-    #     tmax=config.task.duration/1000, 
-    #     idmax=builder.total_neurons, 
-    #     save_path="raster.png"
-    #     )
 
 if __name__ == "__main__":
     main()
