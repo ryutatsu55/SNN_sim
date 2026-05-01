@@ -11,7 +11,7 @@ inputs:
 
 neurons:
   Layer_Exc:
-    type: LIF
+    type: test_LIF
     mode: excitatory
     num: 2
   # Layer_Inh:
