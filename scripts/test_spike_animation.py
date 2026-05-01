@@ -23,6 +23,7 @@ TASK_NAME = "pqn_test"
 TARGET_POPULATION = "Layer_Exc"
 OUTPUT_VIDEO = f"{TARGET_POPULATION}_spike_animation.mp4"
 OUTPUT_RASTER = f"{TARGET_POPULATION}_raster"
+OUTPUT_SPIKE_CSV = f"{TARGET_POPULATION}_spikes.csv"
 
 
 def main():
@@ -74,6 +75,9 @@ def main():
 
     coords = io_map["meta"]["global_coords"]
     duration_ms = float(config.task.duration)
+
+    print(f"Saving spike csv to {OUTPUT_SPIKE_CSV} ...")
+    visualize.export_spike_csv(spike_times, spike_ids, output_path=OUTPUT_SPIKE_CSV)
 
     print(f"Saving raster plot to {OUTPUT_RASTER}.png ...")
     visualize.raster(spike_times, spike_ids, title=OUTPUT_RASTER)

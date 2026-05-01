@@ -2,6 +2,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+def export_spike_csv(spike_time: np.ndarray, neuron_id: np.ndarray, output_path="spikes.csv"):
+    """発火時刻とニューロンIDをCSVとして保存する関数"""
+
+    spike_time = np.asarray(spike_time, dtype=float).reshape(-1)
+    neuron_id = np.asarray(neuron_id).reshape(-1)
+
+    if spike_time.size == 0 or neuron_id.size == 0:
+        raise ValueError("spike_time and neuron_id arrays must not be empty.")
+    if spike_time.shape[0] != neuron_id.shape[0]:
+        raise ValueError("spike_time and neuron_id arrays must have the same length.")
+
+    spike_table = np.column_stack((spike_time, neuron_id.astype(int, copy=False)))
+    np.savetxt(
+        output_path,
+        spike_table,
+        delimiter=",",
+        header="spike_time,neuron_id",
+        comments="",
+        fmt=["%.10f", "%d"],
+    )
+
+
 def raster(spike_time: np.ndarray, neuron_id: np.ndarray, title="Raster"):
     """発火時刻とニューロンIDからラスタープロットを作成・保存する関数"""
 
