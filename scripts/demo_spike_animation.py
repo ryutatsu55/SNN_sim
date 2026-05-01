@@ -4,20 +4,20 @@ import sys
 # プロジェクトルートにパスを通す
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.core.registry import DATA_LOADERS
-from src.core.config_manager import ConfigManager
-from src.core.NetworkBuilder import NetworkBuilder
-from src.core.simulator import GeNNSimulator
-import src.utils.visualize as visualize
+import src.data.test_data
+import src.models.network.connectors
+import src.models.network.delays
+import src.models.network.space
+import src.models.network.weights
 
 # --- プラグイン(モデル)の登録トリガー ---
 import src.models.neurons.PQN_float
 import src.models.neurons.PQN_int
-import src.models.network.space
-import src.models.network.connectors
-import src.models.network.weights
-import src.models.network.delays
-import src.data.test_data
+import src.utils.visualize as visualize
+from src.core.config_manager import ConfigManager
+from src.core.NetworkBuilder import NetworkBuilder
+from src.core.registry import DATA_LOADERS
+from src.core.simulator import GeNNSimulator
 
 TASK_NAME = "pqn_test"
 TARGET_POPULATION = "Layer_Exc"
