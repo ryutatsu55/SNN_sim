@@ -43,6 +43,7 @@ network:
   connection:
     profile_name: constant_prob
     p: 1.0
+    allow_self_connections: false
   weight:
     profile_name: constant
     base_weight: 0.0

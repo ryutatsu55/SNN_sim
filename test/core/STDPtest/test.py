@@ -2,9 +2,13 @@ import os
 import sys
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 
 # プロジェクトルートにパスを通す
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from src.core.registry import DATA_LOADERS
 from src.core.config_manager import ConfigManager
@@ -36,10 +40,10 @@ def main():
     print("=== SNN_sim Test Pipeline Started ===")
 
     # 1. 設定の読み込み
-    config_src = "configs/test.yaml"
+    config_src = "test/core/STDPtest/test.yaml"
     print(f"Loading config from {config_src}...")
     manager = ConfigManager() 
-    config = manager.resolve(config_src, TASK_NAME)
+    config = manager.load_resolved(config_src)
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
     print("Building Network with GeNN...")
@@ -129,9 +133,18 @@ def main():
     #     id = 0
     # )
 
-    visualize.stdp_window(dw, dt)
+    visualize.stdp_window(
+        dw, 
+        dt, 
+        save_path="test/core/STDPtest"
+        )
 
-    visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
+    visualize.network(
+        weights=builder.global_weights, 
+        coords=builder.global_coords, 
+        config=config, 
+        save_path="test/core/STDPtest"
+        )
 
 if __name__ == "__main__":
     main()

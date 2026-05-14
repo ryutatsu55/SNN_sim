@@ -137,6 +137,9 @@ class NetworkBuilder:
                 sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
 
                 local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
+                if len(local_src_idx) == 0:
+                    print(f"    Skipping SynapseGroup: {src_name}_to_{tgt_name} (No connections found)")
+                    continue
                 weights_flat = sub_weights[local_src_idx, local_tgt_idx]
                 delays_flat = sub_delays[local_src_idx, local_tgt_idx]
                 delays_flat = delays_flat // self.config.simulation.dt
@@ -210,7 +213,7 @@ class NetworkBuilder:
                 )
                 print(f"    Added Gaussian Noise Current Source '{cs_name}' to '{pop_name}'")
             
-        print(f"  Added Input Groups for {self.total_neurons} global neurons.")
+            print(f"  Added Input Groups for {self.total_neurons} global neurons.")
             
 
     def _build_output_ports(self, rec_spike: bool):

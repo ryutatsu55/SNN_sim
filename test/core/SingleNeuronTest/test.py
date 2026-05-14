@@ -2,9 +2,13 @@ import os
 import sys
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 
 # プロジェクトルートにパスを通す
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from src.core.registry import DATA_LOADERS
 from src.core.config_manager import ConfigManager
@@ -35,10 +39,10 @@ def main():
     print("=== SNN_sim Test Pipeline Started ===")
 
     # 1. 設定の読み込み
-    config_src = "test.yaml"
+    config_src = "test/core/SingleNeuronTest/test.yaml"
     print(f"Loading config from {config_src}...")
-    manager = ConfigManager(config_src, "pqn_test") 
-    config = manager.resolve()
+    manager = ConfigManager() 
+    config = manager.load_resolved(config_src)
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
     print("Building Network with GeNN...")
@@ -57,7 +61,7 @@ def main():
     
     # 4. シミュレーターの初期化とビルド
     print("Initializing Simulator...")
-    sim = GeNNSimulator(genn_model, config, group_info)
+    sim = GeNNSimulator(genn_model, config, builder)
     sim.setup() # GeNNのコンパイルとGPUメモリ確保
     
     # 5. シミュレーション実行 (トライアルごとのループ)
@@ -99,14 +103,20 @@ def main():
     I_in[:] = config.neurons["Layer_Exc"].Ioffset
 
     visualize.neuron_test(
-        results[:,0],
-        I_in[:,0],
+        results,
+        I_in,
         trial_results["times"],
         trial_results["ids"], 
-        config
+        config,
+        save_path="test/core/SingleNeuronTest"
     )
 
-    visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
+    visualize.network(
+        weights=builder.global_weights, 
+        coords=builder.global_coords, 
+        config=config,
+        save_path="test/core/SingleNeuronTest"
+    )
 
 if __name__ == "__main__":
     main()

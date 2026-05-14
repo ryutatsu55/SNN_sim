@@ -30,7 +30,7 @@ class CustomAkitaModel(BasePlasticityModel):
     def _prepare_genn_data(self):
         # 変数設定 (モード共通)
         vars_dict = {
-            "g": self.weight.astype('float32'),
+            "w": self.weight.astype('float32'),
             "d": self.delay.astype('uint8')
         }
         pre_vars_dict = {
@@ -85,7 +85,7 @@ class CustomAkitaModel(BasePlasticityModel):
         snippet = pygenn.create_weight_update_model(
             class_name=f"custom_Akita_{self.mode}",
             params=list(self._params.keys()),
-            vars=[("g", "scalar"), ("d", "uint8_t")],
+            vars=[("w", "scalar"), ("d", "uint8_t")],
             pre_vars=[("x", "scalar"), ("t_last_pre", "scalar")],
             pre_spike_code=pre_code,
             pre_spike_syn_code=pre_syn_code,
@@ -107,23 +107,23 @@ class CustomAkitaModel(BasePlasticityModel):
         """
         
         # 伝播の基本コード (共通)
-        pre_spike_syn_code = "addToPostDelay(U * x * g * g_max, d);\n"
+        pre_spike_syn_code = "addToPostDelay(U * x * w * g_max, d);\n"
 
         if self.mode == "e-stdp":
             pre_spike_syn_code += f"""
                 const scalar dt = t - st_post; 
                 if (dt > 0.0) {{
                     const scalar timing = exp(-dt / tau_E);
-                    const scalar newWeight = g - (A_E * beta_E * timing);
-                    g = fmax(wMin, fmin(wMax, newWeight));
+                    const scalar newWeight = w - (A_E * beta_E * timing);
+                    w = fmax(wMin, fmin(wMax, newWeight));
                 }}
             """
             post_spike_syn_code = f"""
                 const scalar dt = t - st_pre;
                 if (dt >= 0.0) {{
                     const scalar timing = exp(-dt / tau_E);
-                    const scalar newWeight = g + (A_E * timing);
-                    g = fmax(wMin, fmin(wMax, newWeight));
+                    const scalar newWeight = w + (A_E * timing);
+                    w = fmax(wMin, fmin(wMax, newWeight));
                 }}
             """
         else: # i-stdp
@@ -133,16 +133,16 @@ class CustomAkitaModel(BasePlasticityModel):
                     const scalar timing1 = exp(-dt / tau_I1);
                     const scalar timing2 = exp(-dt / tau_I2);
                     const scalar dW = C_I * (timing1 - C_I_beta * timing2);
-                    g = fmax(wMin, fmin(wMax, g + dW));
+                    w = fmax(wMin, fmin(wMax, w + dW));
                 }}
             """
             post_spike_syn_code = f"""
                 const scalar dt = t - st_pre;
-                if (dt > 0.0) {{
+                if (dt >= 0.0) {{
                     const scalar timing1 = exp(-dt / tau_I1);
                     const scalar timing2 = exp(-dt / tau_I2);
                     const scalar dW = C_I * (timing1 - C_I_beta * timing2);
-                    g = fmax(wMin, fmin(wMax, g + dW));
+                    w = fmax(wMin, fmin(wMax, w + dW));
                 }}
             """
             

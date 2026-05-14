@@ -10,32 +10,32 @@ inputs:
     sd: 1.0        # [nA]
 
 neurons:
-  Layer_Exc:
+  # Layer_Exc:
+  #   type: test_LIF
+  #   mode: excitatory
+  #   num: 2
+  Layer_Inh:
     type: test_LIF
-    mode: excitatory
+    mode: inhibitory
     num: 2
-  # Layer_Inh:
-  #   type: LIF
-  #   mode: inhibitory
-  #   num: 1
 
 synapses:
-  from_Exc:
-    source: Layer_Exc
-    plasticity: 
-      type: StaticPulse
-      mode: default
-    synapse:
-      type: ExpCurr
-      mode: excitatory
-  # from_Inh:
-  #   source: Layer_Inh
+  # from_Exc:
+  #   source: Layer_Exc
   #   plasticity: 
-  #     type: StaticPulse
-  #     mode: default
+  #     type: custom_Akita
+  #     mode: e-stdp
   #   synapse:
-  #     type: ExpCurr
-  #     mode: inhibitory
+  #     type: ExpCond
+  #     mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity: 
+      type: custom_Akita
+      mode: i-stdp
+    synapse:
+      type: ExpCond
+      mode: inhibitory
 
 network:
   space: block_2d

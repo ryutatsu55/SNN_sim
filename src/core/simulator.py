@@ -1,12 +1,14 @@
 import pygenn
 import numpy as np
 from typing import Dict, Any, List, Tuple
+from src.core.NetworkBuilder import NetworkBuilder
 
 class GeNNSimulator:
-    def __init__(self, genn_model: pygenn.GeNNModel, config: Any, group_info: Dict[str, Any]):
+    def __init__(self, genn_model: pygenn.GeNNModel, config: Any, builder: NetworkBuilder):
         self.model = genn_model
         self.config = config
-        self.group_info = group_info
+        self.group_info = builder.group_info
+        self.builder = builder
 
         self.dt = self.config.simulation.dt
         # 1トライアルあたりの最大ステップ数 (事前メモリ確保用)
@@ -22,17 +24,50 @@ class GeNNSimulator:
         self.model.build()
         
         # 【重要】GPU上に記録用バッファを事前確保してロード
+        # この時点で各変数の初期値がホスト側のメモリ(view)に展開されます
         self.model.load(num_recording_timesteps=self.max_timesteps)
 
-        self.initial_states = {}
+        # 全ての初期状態を階層的に保存するための辞書を初期化
+        self.initial_states = {
+            'neurons': {},
+            'synapses': {},
+            'current_sources': {}
+        }
+
+        # 1. ニューロンの初期状態保存
         for pop_name, pop in self.model.neuron_populations.items():
-            self.initial_states[pop_name] = {}
+            self.initial_states['neurons'][pop_name] = {}
             for var_name, var in pop.vars.items():
-                self.initial_states[pop_name][var_name] = np.copy(var.view)
+                self.initial_states['neurons'][pop_name][var_name] = np.copy(var.view)
+
+        # 2. シナプスの初期状態保存 (vars, pre_vars, post_vars)
+        # STDPのトレース(x)や発火時刻(t_last_pre)をリセットするために必須
+        for pop_name, pop in self.model.synapse_populations.items():
+            self.initial_states['synapses'][pop_name] = {
+                'vars': {},
+                'pre_vars': {},
+                'post_vars': {}
+            }
+            # 接続ごとの変数 (重みgなど)
+            for var_name, var in pop.vars.items():
+                self.initial_states['synapses'][pop_name]['vars'][var_name] = np.copy(var.values)
+            
+            # Preニューロンごとの変数 (STDPトレースなど)
+            for var_name, var in pop.pre_vars.items():
+                self.initial_states['synapses'][pop_name]['pre_vars'][var_name] = np.copy(var.values)
+            
+            # Postニューロンごとの変数
+            for var_name, var in pop.post_vars.items():
+                self.initial_states['synapses'][pop_name]['post_vars'][var_name] = np.copy(var.values)
+
+        # 3. カレントソース（入力源）の初期状態保存
+        for cs_name, cs in self.model.current_sources.items():
+            self.initial_states['current_sources'][cs_name] = {}
+            for var_name, var in cs.vars.items():
+                self.initial_states['current_sources'][cs_name][var_name] = np.copy(var.values)
 
         self.is_setup = True
-        
-        print(f"  [Simulator] Setup complete. Allocated buffer for {self.max_timesteps} steps.")
+        print("  [Simulator] Setup complete. All initial states backed up for multi-trial reset.")
 
     # def flush_recording(self):
     #     """
@@ -101,6 +136,42 @@ class GeNNSimulator:
         # グローバル配列に再構築して返す
         return self._merge_local_to_global(local_data_dict)
 
+    def pull_synapse(self, var_name: str) -> np.ndarray:
+        """
+        ネットワーク全体のシナプス変数の現在状態を、
+        (total_neurons, total_neurons) のグローバル行列の形状で引き上げる
+        """
+        # 1. 現在のグローバル行列の雛形を作成 (初期値0)
+        global_matrix = np.zeros((self.total_neurons, self.total_neurons), dtype=np.float32)
+        
+        # 2. 全てのシナプスポピュレーションを走査
+        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
+            # GPUから最新の値を引き上げる
+            syn_pop.vars[var_name].pull_from_device()
+            
+            # このポピュレーションにおける各接続の現在の値 (flatな配列)
+            current_values = syn_pop.vars[var_name].values
+            
+            # NetworkBuilder側で保持している「どのグローバル座標にマッピングするか」の情報を使用
+            # syn_pop_name は "src_to_tgt" の形式であることを前提とする
+            src_name, _, tgt_name = syn_pop_name.partition("_to_")
+            
+            src_indices = self.group_info[src_name]["global_indices"]
+            tgt_indices = self.group_info[tgt_name]["global_indices"]
+            
+            # SPARSE接続のインデックスを取得 (NetworkBuilderの _build_synapses で指定したもの)
+            # ※もしシミュレーター側で保持していない場合は、再計算が必要
+            sub_mask = self.builder.global_mask[np.ix_(src_indices, tgt_indices)]
+            local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
+            
+            # グローバル行列の該当箇所に値を書き戻す
+            global_indices_src = src_indices[local_src_idx]
+            global_indices_tgt = tgt_indices[local_tgt_idx]
+            
+            global_matrix[global_indices_src, global_indices_tgt] = current_values
+            
+        return global_matrix
+
     def get_global_spikes(self) -> Dict[str, np.ndarray]:
         """
         全Populationのスパイク記録を収集し、グローバルIDに変換して時間順にソートした結果を返す
@@ -137,18 +208,45 @@ class GeNNSimulator:
 
     def reset(self):
         """
-        次のトライアルに向けてシミュレータの状態をリセット
+        次のトライアルに向けてシミュレータの状態（ニューロン、シナプス、入力源）を完全にリセット
         """
         self.model.timestep = 0
         # self.model.t = 0.0
 
-        # バックアップしておいた初期値で view を上書きしてから GPU へ送る
+        # 1. ニューロン変数のリセット (V, RefracTime など)
         for pop_name, pop in self.model.neuron_populations.items():
-            for var_name, var in pop.vars.items():
-                var.view[:] = self.initial_states[pop_name][var_name]
-                var.push_to_device()
+            if pop_name in self.initial_states['neurons']:
+                for var_name, var in pop.vars.items():
+                    var.view[:] = self.initial_states['neurons'][pop_name][var_name]
+                    var.push_to_device()
+
+        # 2. シナプス変数のリセット (g, d, x, t_last_pre など)
+        # STDPモデルなどの学習状態を初期化するために必須です
+        for pop_name, pop in self.model.synapse_populations.items():
+            if pop_name in self.initial_states['synapses']:
+                # 接続ごとの変数 (g, d など)
+                for var_name, var in pop.vars.items():
+                    var.values = self.initial_states['synapses'][pop_name]['vars'][var_name]
+                    var.push_to_device()
                 
-        print("  [Simulator] Network time and variables safely reset to initial states.")
+                # プレニューロンごとの変数 (STDPトレース x, t_last_pre など)
+                for var_name, var in pop.pre_vars.items():
+                    var.values = self.initial_states['synapses'][pop_name]['pre_vars'][var_name]
+                    var.push_to_device()
+                
+                # ポストニューロンごとの変数 (もし定義されていれば)
+                for var_name, var in pop.post_vars.items():
+                    var.values = self.initial_states['synapses'][pop_name]['post_vars'][var_name]
+                    var.push_to_device()
+
+        # 3. カレントソース（入力源）変数のリセット
+        for cs_name, cs in self.model.current_sources.items():
+            if cs_name in self.initial_states['current_sources']:
+                for var_name, var in cs.vars.items():
+                    var.view[:] = self.initial_states['current_sources'][cs_name][var_name]
+                    var.push_to_device()
+                    
+        print("  [Simulator] All network variables (Neurons, Synapses, Inputs) safely reset.")
 
     def _split_global_to_local(self, global_data: np.ndarray) -> Dict[str, np.ndarray]:
         """

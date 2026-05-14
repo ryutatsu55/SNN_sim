@@ -90,3 +90,32 @@ class StaticPulseConstantWeight(BasePlasticityModel):
     def pre_vars(self): return self._pre_vars
     @property
     def post_vars(self): return self._post_vars
+
+@PLASTICITY_MODELS.register("StaticPulseDendriticDelay")
+class StaticPulseDendriticDelay(BasePlasticityModel):
+    def __init__(self, config, dt, weight, delay, num_pre, num_post):
+        super().__init__(config, dt, weight, delay, num_pre, num_post)
+        self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
+        self._snippet = "StaticPulseDendriticDelay"
+
+    def _prepare_genn_data(self):
+        params = {}
+        vars = {
+            "g": self.weight.astype('float32'),
+            "d": self.delay.astype('uint8')
+        }
+        pre_vars = {}
+        post_vars = {}
+
+        return params, vars, pre_vars, post_vars
+    
+    @property
+    def snippet(self): return self._snippet
+    @property
+    def params(self): return self._params
+    @property
+    def vars(self): return self._vars
+    @property
+    def pre_vars(self): return self._pre_vars
+    @property
+    def post_vars(self): return self._post_vars

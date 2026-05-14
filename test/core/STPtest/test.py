@@ -2,9 +2,13 @@ import os
 import sys
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 
 # プロジェクトルートにパスを通す
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from src.core.registry import DATA_LOADERS
 from src.core.config_manager import ConfigManager
@@ -36,15 +40,16 @@ def main():
     print("=== SNN_sim Test Pipeline Started ===")
 
     # 1. 設定の読み込み
-    config_src = "test.yaml"
+    config_src = "test/core/STPtest/test.yaml"
     print(f"Loading config from {config_src}...")
-    manager = ConfigManager(config_src, TASK_NAME) 
-    config = manager.resolve()
+    manager = ConfigManager() 
+    config = manager.load_resolved(config_src)
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
     genn_model, group_info = builder.build(rec_spike=True)
+    print(group_info)
     
     # 3. データの準備 (io_mapを渡してグローバル→ローカルの変換ルールを教える)
     print("Preparing Input Data...")
@@ -58,7 +63,7 @@ def main():
     
     # 4. シミュレーターの初期化とビルド
     print("Initializing Simulator...")
-    sim = GeNNSimulator(genn_model, config, group_info)
+    sim = GeNNSimulator(genn_model, config, builder)
     sim.setup() # GeNNのコンパイルとGPUメモリ確保
     
     # 5. シミュレーション実行 (トライアルごとのループ)
@@ -82,7 +87,7 @@ def main():
             for i in range(duration_steps):
                 sim.step()
                 results[step,:] = sim.pull("V")
-                # I_in[step,:] = sim.pull("Isyn")
+                I_in[step,:] = sim.pull("Isyn_rec")
                 step += 1
 
         # 3. デバイスから記録バッファを一括で引き出す
@@ -96,7 +101,7 @@ def main():
         
     print("=== Simulation Complete! ===")
     
-    manager.save_resolved(config)
+    # manager.save_resolved(config)
 
     # 6. Readout (学習)
     # print("Training Readout layer...")
@@ -109,22 +114,21 @@ def main():
     # visualize.PQN_test(results[:,0], I_in[:,0], config)
 
     visualize.neuron_test(
-        results[:,0],
-        I_in[:,0],
+        results,
+        I_in,
         trial_results["times"],
         trial_results["ids"], 
-        config
+        config,
+        id = 0,
+        save_path="test/core/STPtest"
     )
 
-    visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
-
-    # visualize.raster(
-    #     trial_results["times"], 
-    #     trial_results["ids"], 
-    #     tmax=config.task.duration/1000, 
-    #     idmax=builder.total_neurons, 
-    #     save_path="raster.png"
-    #     )
+    visualize.network(
+        weights=builder.global_weights, 
+        coords=builder.global_coords, 
+        config=config,
+        save_path="test/core/STPtest"
+        )
 
 if __name__ == "__main__":
     main()

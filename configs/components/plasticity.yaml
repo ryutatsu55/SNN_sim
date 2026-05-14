@@ -1,4 +1,3 @@
-
 custom_Akita:
   e-stdp:
     tau_rec: 150.0  # [ms]
@@ -20,6 +19,7 @@ custom_Akita:
     Wmin: 0.0
     Wmax: 1.0
 
+# 伝搬遅延があるのとないのがある。plasticityモデルでそれが決まる！！
 # =================================================================
 # Standard Plasticity Models Configuration
 # =================================================================
@@ -49,6 +49,11 @@ StaticPulse:
   default:
     # 実際の実装では config から値を取得していないため空でOK
     # モード切り替えが必要な場合のためにセクションのみ定義
+    {}
+
+# staticPulseの伝搬遅延を含むバージョン
+StaticPulseDendriticDelay:
+  default:
     {}
 
 # 3. StaticPulseConstantWeight (全結合で共通の固定重みを使用)

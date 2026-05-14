@@ -10,6 +10,13 @@ lif_test:
   devide: 5
   tgt_ID: 1
 
+stdp_test:
+  duration: 100.0
+  input: -49.0    # lifの膜電位を想定
+  dt_max: 50
+  dt_min: -50
+  ddt: 2
+
 spatial_recognition:
   duration: 10000.0
   input:

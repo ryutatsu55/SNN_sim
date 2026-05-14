@@ -10,9 +10,7 @@ class BaseDataLoader(ABC):
         self.group_info = group_info
         
         # ネットワーク全体のニューロン数を取得
-        self.total_neurons = 0
-        for _, info in group_info.items():
-            self.total_neurons += info["num"]
+        self.total_neurons = sum(info["num"] for _, info in self.group_info.items())
 
         self.dt = self.config.simulation.dt
         self.duration = config.task.duration

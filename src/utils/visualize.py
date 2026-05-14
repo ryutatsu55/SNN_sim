@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+import os
 
 def raster(times, ids, title="Raster Plot", tmax=None, idmax=None, s=10.0, save_path=None):
     """
@@ -54,7 +55,7 @@ def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     plt.tight_layout()
     plt.savefig(f"{title}.png")
 
-def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuron_test"):
+def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuron_test",save_path="."):
     V_data = V_data[:, id]
     I_in = I_in[:,id]
     tmax = config.task.duration/1000
@@ -77,9 +78,9 @@ def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuro
     ax2.set_xlim(0, tmax)
     
     plt.tight_layout()
-    plt.savefig(f"{title}.png")
+    plt.savefig(f"{save_path}/{title}.png")
 
-def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title="Network", save_path="network.png"):
+def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title="network", save_path="."):
     """
     ニューロンの空間配置と重み行列からネットワーク構造を可視化する。
     
@@ -146,7 +147,52 @@ def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title
 
     plt.tight_layout()
     
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Network visualization saved to {save_path}")
+    plt.savefig(f"{save_path}/{title}.png", dpi=300, bbox_inches='tight')
+    print(f"Network visualization saved to {save_path}/{title}.png")
         
     plt.close()
+
+def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="."):
+    """
+    STDPの学習特性（Δt vs Δw）をプロットし、画像として保存する関数。
+    
+    Args:
+        dw: 重みの変化量 (Δw = w_after - w_before) の配列
+        dt: スパイク時間差 (Δt = t_post - t_pre) [ms] の配列
+        title: グラフ/ファイル名
+        save_path: 画像の保存先ディレクトリ
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # 0点を強調するガイドライン
+    plt.axhline(0, color='black', linewidth=1, linestyle='--')
+    plt.axvline(0, color='black', linewidth=1, linestyle='--')
+    
+    # データの散布図と近似線
+    plt.scatter(dt, dw, color='blue', alpha=0.6, label='Measured Data')
+    
+    # スムーズな曲線を描くためのソート処理（プロット用）
+    sort_idx = np.argsort(dt)
+    plt.plot(dt[sort_idx], dw[sort_idx], color='red', linewidth=2, label='STDP Curve')
+    
+    # 軸ラベルの設定
+    plt.xlabel('Spike Timing Difference: $\Delta t$ [ms]', fontsize=12)
+    plt.ylabel('Weight Change: $\Delta w$ (or $\Delta g$)', fontsize=12)
+    plt.title(title, fontsize=14)
+    
+    # 領域の解説（LTP/LTD）
+    plt.text(max(dt)*0.7, max(dw)*0.1, 'LTP (Potentiation)', fontsize=10, color='green', fontweight='bold')
+    plt.text(min(dt)*0.7, max(dw)*0.1, 'LTD (Depression)', fontsize=10, color='orange', fontweight='bold')
+    
+    plt.grid(True, which='both', linestyle=':', alpha=0.5)
+    plt.legend()
+    
+    # 保存処理
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    
+    file_full_path = os.path.join(save_path, f"{title}.png")
+    plt.savefig(file_full_path, dpi=300)
+    plt.close()
+    
+    print(f"  [Visualization] STDP window plot saved to: {file_full_path}")

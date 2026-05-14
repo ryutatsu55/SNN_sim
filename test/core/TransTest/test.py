@@ -2,9 +2,14 @@ import os
 import sys
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
+
 
 # プロジェクトルートにパスを通す
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from src.core.registry import DATA_LOADERS
 from src.core.config_manager import ConfigManager
@@ -30,22 +35,21 @@ import src.data.test_data
 # import src.models.neurons.lif  
 
 # TASK_NAME = "pqn_test"
-TASK_NAME = "stdp_test"
+TASK_NAME = "lif_test"
 
 def main():
     print("=== SNN_sim Test Pipeline Started ===")
 
     # 1. 設定の読み込み
-    config_src = "configs/test.yaml"
+    config_src = "test/core/TransTest/test.yaml"
     print(f"Loading config from {config_src}...")
     manager = ConfigManager() 
-    config = manager.resolve(config_src, TASK_NAME)
+    config = manager.load_resolved(config_src)
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
     genn_model, group_info = builder.build(rec_spike=True)
-    print(group_info)
     
     # 3. データの準備 (io_mapを渡してグローバル→ローカルの変換ルールを教える)
     print("Preparing Input Data...")
@@ -66,50 +70,39 @@ def main():
     print("Running Simulation Trials...")
     
     # 結果保存用のコンテナ (実験スクリプトで柔軟に取捨選択する想定)
-    # results = np.zeros((data_loader.total_steps, builder.total_neurons))  # 例: 全ニューロンの膜電位を保存する場合
-    # I_in = np.zeros((data_loader.total_steps, builder.total_neurons))
-    dw = np.zeros(len(data_loader.dt_steps))
-    dt = np.zeros(len(data_loader.dt_steps))
-    src_ID = config.network.connection.src_ID
-    tgt_ID = config.network.connection.tgt_ID
+    results = np.zeros((data_loader.total_steps, builder.total_neurons))  # 例: 全ニューロンの膜電位を保存する場合
+    I_in = np.zeros((data_loader.total_steps, builder.total_neurons))
     
     for trial_idx, (trial_inputs, meta) in enumerate(data_loader.generate()):
         print(f"  --- Trial {trial_idx + 1} ---")
         
-        # --- 新しい制御フロー ---     
+        # --- 新しい制御フロー ---
         step=0
         for inputs, duration_steps in trial_inputs:
             # 1. スパイク入力データをGPUに転送
             # ※連続値(Iextなど)をスナップショットで渡したい場合は sim.push() を併用
+            if not step==0:
+                # スパイクを受け取る側のニューロンはその時の値を維持
+                inputs[config.network.connection.tgt_ID] = results[step-1, config.network.connection.tgt_ID]
             sim.push(inputs, target_var="V")
             for i in range(duration_steps):
                 sim.step()
-                # results[step,:] = sim.pull("V")
-                # I_in[step,:] = sim.pull("Isyn_rec")
+                results[step,:] = sim.pull("V")
+                I_in[step,:] = sim.pull("Isyn_rec")
                 step += 1
 
-        post_weight = sim.pull_synapse("w")
         # 3. デバイスから記録バッファを一括で引き出す
         trial_results = sim.get_global_spikes()
 
-        src_indices = np.where(trial_results["ids"] == src_ID)[0]
-        tgt_indices = np.where(trial_results["ids"] == tgt_ID)[0]
         indices = np.where(trial_results["ids"] == 0)[0]
-        # print(trial_results["times"][indices])
+        print(trial_results["times"][indices])
         
-        dw[trial_idx] = post_weight[src_ID][tgt_ID] - config.network.weight.base_weight
-        dt[trial_idx] = trial_results["times"][tgt_indices[0]] - trial_results["times"][src_indices[0]]
-        if dt[trial_idx] != meta["delta_t_ms"]:
-            print(f"setting value of delta dt is {meta["delta_t_ms"]} [ms]")
-            print(f"but measured value was {dt[trial_idx]} [ms]")
-            print(f"dw : {dw[trial_idx]}")
-            return
         # 4. 次のトライアルに向けて、ネットワーク時間と変数を初期化
         sim.reset()
         
     print("=== Simulation Complete! ===")
     
-    # manager.save_resolved(config)
+    manager.save_resolved(config)
 
     # 6. Readout (学習)
     # print("Training Readout layer...")
@@ -117,21 +110,34 @@ def main():
     # weights = readout.fit(all_results, target_data)
 
     # 7. 評価と可視化
-    # I_in[:] += config.neurons["Layer_Exc"].Ioffset
+    # I_in = data_loader.reconstruct(trial_inputs)
+    I_in[:] += config.neurons["Layer_Exc"].Ioffset
     # visualize.PQN_test(results[:,0], I_in[:,0], config)
 
-    # visualize.stdp_window(
-    #     results,
-    #     I_in,
-    #     trial_results["times"],
+    visualize.neuron_test(
+        results,
+        I_in,
+        trial_results["times"],
+        trial_results["ids"], 
+        config,
+        id = 0,
+        save_path="test/core/TransTest"
+    )
+
+    visualize.network(
+        weights=builder.global_weights, 
+        coords=builder.global_coords, 
+        config=config,
+        save_path="test/core/TransTest"
+        )
+
+    # visualize.raster(
+    #     trial_results["times"], 
     #     trial_results["ids"], 
-    #     config,
-    #     id = 0
-    # )
-
-    visualize.stdp_window(dw, dt)
-
-    visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
+    #     tmax=config.task.duration/1000, 
+    #     idmax=builder.total_neurons, 
+    #     save_path="raster.png"
+    #     )
 
 if __name__ == "__main__":
     main()

@@ -84,12 +84,8 @@ class AppConfig(BaseModel):
 # ==========================================
 
 class ConfigManager:
-    def __init__(self, config_source: str, active_task: str ):
-        self.config_dir = Path("configs")
-        # サブファイルをまとめるディレクトリ
-        self.components_dir = self.config_dir / "components" 
-        self.main_config_path = self.config_dir / config_source
-        self.active_task = active_task
+    def __init__(self):
+        pass
 
     def _load_yaml(self, filepath: Path) -> Dict[str, Any]:
         """指定されたPathのYAMLファイルを読み込む（ファイルがない場合は空辞書を返す）"""
@@ -99,11 +95,15 @@ class ConfigManager:
         with open(filepath, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
-    def resolve(self) -> AppConfig:
+    def resolve(self, main_path: str, active_task: str ) -> AppConfig:
         """
         全YAMLファイルを統合し、Pydanticで型検証された AppConfig を生成する。
         """
-        main_cfg = self._load_yaml(self.main_config_path)
+        config_dir = Path("configs")
+        # サブファイルをまとめるディレクトリ
+        components_dir = config_dir / "components" 
+        main_config_path = Path(main_path)
+        main_cfg = self._load_yaml(main_config_path)
         
         # 統合用の辞書を構築
         resolved = {
@@ -117,9 +117,9 @@ class ConfigManager:
         }
 
         # コンポーネントYAMLの事前読み込み
-        neurons_data = self._load_yaml(self.components_dir / "neurons.yaml")
-        synapses_data = self._load_yaml(self.components_dir / "synapses.yaml")
-        plasticity_data = self._load_yaml(self.components_dir / "plasticity.yaml")
+        neurons_data = self._load_yaml(components_dir / "neurons.yaml")
+        synapses_data = self._load_yaml(components_dir / "synapses.yaml")
+        plasticity_data = self._load_yaml(components_dir / "plasticity.yaml")
 
         # --- 1. ニューロン設定の解決 ---
         for group_name, n_cfg in main_cfg["neurons"].items():
@@ -157,15 +157,15 @@ class ConfigManager:
         }
 
         for yaml_file, (key_name, profile_name) in network_map.items():
-            data = self._load_yaml(self.components_dir / yaml_file)
+            data = self._load_yaml(components_dir / yaml_file)
             profile_data = data[profile_name].copy()
             profile_data["profile_name"] = profile_name
             resolved["network"][key_name] = profile_data
 
         # タスク設定の読み込み
-        tasks_data = self._load_yaml(self.components_dir / "tasks.yaml")
-        profile_data = tasks_data[self.active_task].copy()
-        profile_data["profile_name"] = self.active_task
+        tasks_data = self._load_yaml(components_dir / "tasks.yaml")
+        profile_data = tasks_data[active_task].copy()
+        profile_data["profile_name"] = active_task
         resolved["task"] = profile_data
         # ★ 最後にPydanticモデルに流し込んで検証（Validation）を行う
         try:
@@ -173,6 +173,19 @@ class ConfigManager:
             return validated_config
         except Exception as e:
             raise ValueError(f"Config validation failed: {e}")
+
+    def load_resolved(self, resolved_config) -> AppConfig:
+        """
+        過去にresolveした.yamlファイルを読み込む
+        """
+        config_path = Path(resolved_config)
+        resolved = self._load_yaml(config_path)
+        try:
+            validated_config = AppConfig(**resolved)
+            return validated_config
+        except Exception as e:
+            raise ValueError(f"Config validation failed: {e}")
+
 
     def save_resolved(self, resolved_config: AppConfig, save_dir: str = "results") -> Path:
         """実験の証拠として、結合済みのコンフィグを保存する"""
@@ -195,11 +208,11 @@ if __name__ == "__main__":
 
     # 1. ConfigManagerの初期化
     # test.yamlを読み込み、active_taskとして 'pqn_test' を指定
-    manager = ConfigManager(config_source="test.yaml", active_task="lif_test")
+    manager = ConfigManager()
 
     # 2. 設定の統合と検証を実行
     print("--- Resolving Config ---")
-    config = manager.resolve()
+    config = manager.resolve("configs/test.yaml", "lif_test")
 
     # 3. 読み込み結果の確認
     print(f"Successfully loaded timestamp: {config.meta.timestamp}")
