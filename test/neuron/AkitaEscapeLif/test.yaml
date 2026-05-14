@@ -1,0 +1,61 @@
+simulation:
+  dt: 0.1
+  N: 150
+  seed: null
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 10.0
+    sd: 1.0
+neurons:
+  Layer_Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    num: 1
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 4.0
+    f_rest: 0.4
+    tau_refrac: 3.0
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    synapse:
+      type: ExpCurr
+      mode: excitatory
+      tau: 2.0
+    plasticity:
+      type: StaticPulse
+      mode: default
+network:
+  space:
+    profile_name: block_2d
+    x_range:
+    - 0.0
+    - 10.0
+    y_range:
+    - 0.0
+    - 10.0
+    num_modules: 1
+    margin: 0.9
+  connection:
+    profile_name: constant_prob
+    p: 1.0
+    allow_self_connections: false
+  weight:
+    profile_name: constant
+    base_weight: 0.0
+  delay:
+    profile_name: constant
+    value: 5.0
+task:
+  profile_name: pqn_test
+  input: 5.0
+  input_type: step
+  duration: 100.0
+  graph_name: PQN_V_test
+meta:
+  timestamp: 2026-05-01_13-20-09
