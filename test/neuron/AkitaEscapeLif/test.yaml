@@ -53,9 +53,9 @@ network:
     value: 5.0
 task:
   profile_name: pqn_test
-  input: 5.0
+  input: 10.0
   input_type: step
-  duration: 100.0
+  duration: 10000.0
   graph_name: PQN_V_test
 meta:
   timestamp: 2026-05-01_13-20-09

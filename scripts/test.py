@@ -18,6 +18,7 @@ import src.utils.visualize.visualize as visualize
 import src.models.neurons.pqn_float
 import src.models.neurons.pqn_int
 import src.models.neurons.lif
+import src.models.neurons.akita_escape_lif
 import src.models.network.space
 import src.models.network.connectors
 import src.models.network.weights
@@ -29,8 +30,13 @@ import src.models.plasticity.standard_models
 import src.data.test_data
 # import src.models.neurons.lif  
 
-# TASK_NAME = "pqn_test"
-TASK_NAME = "stdp_test"
+TASK_NAME = "lif_test"
+# TASK_NAME = "stdp_test"
+
+OUTPUT_DIR = "output"
+OUTPUT_VIDEO = f"{OUTPUT_DIR}/spike_animation.mp4"
+OUTPUT_RASTER = f"{OUTPUT_DIR}/raster"
+OUTPUT_SPIKE_CSV = f"{OUTPUT_DIR}/spikes.csv"
 
 def main():
     print("=== SNN_sim Test Pipeline Started ===")
@@ -49,12 +55,7 @@ def main():
     
     # 3. データの準備 (io_mapを渡してグローバル→ローカルの変換ルールを教える)
     print("Preparing Input Data...")
-    # config.data から使用するローダー名を取得（例: "input_type"）
     data_loader_class = DATA_LOADERS.get(TASK_NAME)
-    
-    if data_loader_class is None:
-        raise ValueError(f"DataLoader '{TASK_NAME}' not found in registry.")
-        
     data_loader = data_loader_class(config, group_info)
     
     # 4. シミュレーターの初期化とビルド
@@ -66,12 +67,12 @@ def main():
     print("Running Simulation Trials...")
     
     # 結果保存用のコンテナ (実験スクリプトで柔軟に取捨選択する想定)
-    # results = np.zeros((data_loader.total_steps, builder.total_neurons))  # 例: 全ニューロンの膜電位を保存する場合
-    # I_in = np.zeros((data_loader.total_steps, builder.total_neurons))
-    dw = np.zeros(len(data_loader.dt_steps))
-    dt = np.zeros(len(data_loader.dt_steps))
-    src_ID = config.network.connection.src_ID
-    tgt_ID = config.network.connection.tgt_ID
+    results = np.zeros((data_loader.total_steps, builder.total_neurons))  # 例: 全ニューロンの膜電位を保存する場合
+    I_in = np.zeros((data_loader.total_steps, builder.total_neurons))
+    # dw = np.zeros(len(data_loader.dt_steps))
+    # dt = np.zeros(len(data_loader.dt_steps))
+    # src_ID = config.network.connection.src_ID
+    # tgt_ID = config.network.connection.tgt_ID
     
     for trial_idx, (trial_inputs, meta) in enumerate(data_loader.generate()):
         print(f"  --- Trial {trial_idx + 1} ---")
@@ -84,26 +85,14 @@ def main():
             sim.push(inputs, target_var="V")
             for i in range(duration_steps):
                 sim.step()
-                # results[step,:] = sim.pull("V")
-                # I_in[step,:] = sim.pull("Isyn_rec")
+                results[step,:] = sim.pull("V")
+                I_in[step,:] = sim.pull("Isyn_rec")
                 step += 1
 
-        post_weight = sim.pull_synapse("w")
+        # post_weight = sim.pull_synapse("w")
         # 3. デバイスから記録バッファを一括で引き出す
         trial_results = sim.get_global_spikes()
-
-        src_indices = np.where(trial_results["ids"] == src_ID)[0]
-        tgt_indices = np.where(trial_results["ids"] == tgt_ID)[0]
-        indices = np.where(trial_results["ids"] == 0)[0]
-        # print(trial_results["times"][indices])
         
-        dw[trial_idx] = post_weight[src_ID][tgt_ID] - config.network.weight.base_weight
-        dt[trial_idx] = trial_results["times"][tgt_indices[0]] - trial_results["times"][src_indices[0]]
-        if dt[trial_idx] != meta["delta_t_ms"]:
-            print(f"setting value of delta dt is {meta["delta_t_ms"]} [ms]")
-            print(f"but measured value was {dt[trial_idx]} [ms]")
-            print(f"dw : {dw[trial_idx]}")
-            return
         # 4. 次のトライアルに向けて、ネットワーク時間と変数を初期化
         sim.reset()
         
@@ -118,8 +107,14 @@ def main():
 
     # 7. 評価と可視化
     # I_in[:] += config.neurons["Layer_Exc"].Ioffset
-    # visualize.PQN_test(results[:,0], I_in[:,0], config)
-
+    visualize.neuron_test(
+        results, 
+        I_in, 
+        trial_results["times"],
+        trial_results["ids"],
+        config
+        )
+    visualize.raster(trial_results["times"], trial_results["ids"])
     # visualize.stdp_window(
     #     results,
     #     I_in,
@@ -129,7 +124,7 @@ def main():
     #     id = 0
     # )
 
-    visualize.stdp_window(dw, dt)
+    # visualize.stdp_window(dw, dt)
 
     visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config)
 

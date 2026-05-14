@@ -2,15 +2,15 @@ no_space:
   hoge: null
 
 grid_2d:
-  x_range: [0.0, 10.0]  # um
-  y_range: [0.0, 10.0]  # um
+  x_range: [0.0, 100.0]  # um
+  y_range: [0.0, 100.0]  # um
 
 random_2d:
-  x_range: [0.0, 10.0]  # um
-  y_range: [0.0, 10.0]  # um
+  x_range: [0.0, 100.0]  # um
+  y_range: [0.0, 100.0]  # um
 
 block_2d:
-  x_range: [0.0, 10.0]  # um
-  y_range: [0.0, 10.0]  # um
-  num_modules: 1
-  margin: 0.6
+  x_range: [0.0, 100.0]  # um
+  y_range: [0.0, 100.0]  # um
+  num_modules: 4
+  margin: 0.3

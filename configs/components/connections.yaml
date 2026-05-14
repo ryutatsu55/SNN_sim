@@ -3,8 +3,8 @@ constant_prob:
   allow_self_connections: false
 
 distance_based:
-  sigma: 0.75
-  max_prob: 0.5
+  sigma: 10   # [um]
+  max_prob: 0.8
 
 prob_based_block:
   num_modules: 4

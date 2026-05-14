@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from pathlib import Path
 
 
 def export_spike_csv(spike_time: np.ndarray, neuron_id: np.ndarray, output_path="spikes.csv"):
@@ -14,6 +15,9 @@ def export_spike_csv(spike_time: np.ndarray, neuron_id: np.ndarray, output_path=
     if spike_time.shape[0] != neuron_id.shape[0]:
         raise ValueError("spike_time and neuron_id arrays must have the same length.")
 
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     spike_table = np.column_stack((spike_time, neuron_id.astype(int, copy=False)))
     np.savetxt(
         output_path,
@@ -24,8 +28,7 @@ def export_spike_csv(spike_time: np.ndarray, neuron_id: np.ndarray, output_path=
         fmt=["%.10f", "%d"],
     )
 
-
-def raster(times, ids, title="Raster Plot", tmax=None, idmax=None, s=10.0, save_path=None):
+def raster(times, ids, title="Raster Plot", tmax=None, idmax=None, s=10.0, save_path="."):
     """
     スパイク時刻とニューロンIDの配列からラスタープロットを作成する。
     
@@ -54,7 +57,7 @@ def raster(times, ids, title="Raster Plot", tmax=None, idmax=None, s=10.0, save_
 
     plt.tight_layout()
     
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.savefig(f"{save_path}/{title}", dpi=300, bbox_inches='tight')
     print(f"Raster plot saved to {save_path}")
         
     plt.close()

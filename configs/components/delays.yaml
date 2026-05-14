@@ -1,9 +1,9 @@
 constant:
-  value: 10.0
+  value: 1.0
 
 distance_based:
-  velocity: 2.0  # [mm/ms] etc.
-  min_delay: 0.1
+  velocity: 2.0  # [um/ms] etc.
+  min_delay: 0.8
 
 random:
   mean: 7.0
