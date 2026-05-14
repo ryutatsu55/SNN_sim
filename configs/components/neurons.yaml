@@ -69,3 +69,23 @@ test_LIF:
     Vreset: -65.0      
     Ioffset: 0.0       # オフセット電流[nA]
     TauRefrac: 5.0
+
+akita_escape_lif:
+  excitatory:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 4.0
+    f_rest: 0.4
+    tau_refrac: 3.0
+  inhibitory:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 4.0
+    f_rest: 0.4
+    tau_refrac: 2.0

@@ -1,8 +1,39 @@
-import pygenn
 import numpy as np
 from src.core.registry import PLASTICITY_MODELS
 from .BASE_plasticity import BasePlasticityModel
+try:
+    import pygenn
+except ImportError:  # pragma: no cover - GeNN未導入環境では数式検証のみ行う
+    pygenn = None
 
+
+def recover_synaptic_resource(x: float, delta_t: float, tau_rec: float) -> float:
+    """Supplementary Eq. S11 の閉形式。"""
+    return 1.0 - ((1.0 - x) * np.exp(-delta_t / tau_rec))
+
+
+def consume_synaptic_resource(x: float, utilization: float) -> tuple[float, float]:
+    """Supplementary Eq. S12 に従い資源を消費する。"""
+    released = utilization * x
+    return x - released, released
+
+
+def e_stdp_kernel(delta_t: float, a_e: float, tau_e: float, beta_e: float) -> float:
+    """Supplementary Eq. S16。"""
+    if delta_t >= 0.0:
+        return a_e * np.exp(-delta_t / tau_e)
+    return -a_e * beta_e * np.exp(delta_t / tau_e)
+
+
+def i_stdp_kernel(delta_t: float, a_i: float, tau_i1: float, tau_i2: float, beta_i: float) -> float:
+    """Supplementary Eq. S17。"""
+    coeff = a_i / (1.0 - ((tau_i1 / tau_i2) * beta_i))
+    abs_dt = abs(delta_t)
+    return coeff * (
+        np.exp(-abs_dt / tau_i1) - ((tau_i1 / tau_i2) * beta_i * np.exp(-abs_dt / tau_i2))
+    )
+
+@PLASTICITY_MODELS.register("akita_stdp_stp")
 @PLASTICITY_MODELS.register("custom_Akita")
 class CustomAkitaModel(BasePlasticityModel):
     """
@@ -13,6 +44,8 @@ class CustomAkitaModel(BasePlasticityModel):
 
     def __init__(self, config, dt, weight, delay, num_pre, num_post):
         super().__init__(config, dt, weight, delay, num_pre, num_post)
+        if pygenn is None:
+            raise ImportError("pygenn is required to instantiate CustomAkitaModel.")
         self.mode = self.config.mode
         if self.mode not in ["e-stdp", "i-stdp"]:
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
@@ -34,7 +67,8 @@ class CustomAkitaModel(BasePlasticityModel):
             "d": self.delay.astype('uint8')
         }
         pre_vars_dict = {
-            "x": np.ones(self.num_pre, dtype='float32'), 
+            "x": np.ones(self.num_pre, dtype='float32'),
+            "release": np.zeros(self.num_pre, dtype='float32'),
             "t_last_pre": np.full(self.num_pre, -1e9, dtype='float32')
         }
         
@@ -100,9 +134,10 @@ class CustomAkitaModel(BasePlasticityModel):
         
         # ① プレニューロン発火時 (共通)
         pre_spike_code = f"""
-            x = x * (1.0 - {cfg.U});
             const scalar dt_pre = t - t_last_pre;
             x = 1.0 - ((1.0 - x) * exp(-dt_pre / {cfg.tau_rec}));
+            release = {cfg.U} * x;
+            x -= release;
             t_last_pre = t;
         """
         
