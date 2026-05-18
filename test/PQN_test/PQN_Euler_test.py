@@ -4,9 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # プロジェクトルートにパスを通す
-root_path = Path(__file__).resolve().parent.parent
+root_path = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(root_path))
-from models.neurons.pqn_origin import PQNengine
+from src.models.neurons.pqn_origin import PQNengine
 
 
 class PQNFloatEngine:
@@ -85,7 +85,7 @@ def run_simulation():
     ax2.set_xlim(0, T_total)
     
     plt.tight_layout()
-    plt.savefig("PQN_Euler_test.png")
+    plt.savefig("test/PQN_test/PQN_Euler_test.png")
     # plt.show()
 
 if __name__ == '__main__':

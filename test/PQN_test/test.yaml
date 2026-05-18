@@ -1,0 +1,64 @@
+simulation:
+  dt: 0.1
+  N: 1
+  seed: null
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 10.0
+    sd: 1.0
+neurons:
+  Layer_Exc:
+    type: PQN_float
+    mode: RSexci
+    num: 1
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    synapse:
+      type: ExpCond
+      mode: excitatory
+      tau: 2.0
+      E: 0.0
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp
+      tau_rec: 150.0
+      U: 0.4
+      g_max: 4.0
+      A_E: 0.02
+      tau_E: 20.0
+      beta_E: 1.12
+      Wmin: 0.0
+      Wmax: 1.0
+network:
+  space:
+    profile_name: block_2d
+    x_range:
+    - 0.0
+    - 100.0
+    y_range:
+    - 0.0
+    - 100.0
+    num_modules: 4
+    margin: 0.3
+  connection:
+    profile_name: distance_based
+    sigma: 10
+    max_prob: 0.8
+  weight:
+    profile_name: lognormal_broad
+    mean: 0.5
+    std: 0.02
+  delay:
+    profile_name: distance_based
+    velocity: 2.0
+    min_delay: 0.8
+task:
+  profile_name: pqn_test
+  input: 0.11
+  input_type: step
+  duration: 2000.0
+  graph_name: PQN_V_test
+meta:
+  timestamp: 2026-05-18_20-16-02

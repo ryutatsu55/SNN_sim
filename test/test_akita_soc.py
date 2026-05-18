@@ -1,7 +1,12 @@
 import math
 import unittest
+import sys
+from pathlib import Path
 
 import numpy as np
+
+root_path = Path(__file__).resolve().parent.parent
+sys.path.append(str(root_path))
 
 from src.models.neurons.akita_escape_lif import (
     calculate_escape_noise_scale,
