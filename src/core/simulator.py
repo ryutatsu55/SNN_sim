@@ -11,8 +11,11 @@ class GeNNSimulator:
         self.builder = builder
 
         self.dt = self.config.simulation.dt
-        # 1トライアルあたりの最大ステップ数 (事前メモリ確保用)
-        self.max_timesteps = int(self.config.task.duration / self.dt)
+        # スパイク記録バッファ長。長時間実験では記録窓ぶんだけ確保する。
+        recording_buffer_ms = getattr(self.config.task, "record_buffer_ms", None)
+        if recording_buffer_ms is None:
+            recording_buffer_ms = getattr(self.config.task, "record_window_ms", self.config.task.duration)
+        self.max_timesteps = int(recording_buffer_ms / self.dt)
         self.total_neurons = sum(info["num"] for _, info in self.group_info.items())
         
         self.is_setup = False
@@ -69,18 +72,13 @@ class GeNNSimulator:
         self.is_setup = True
         print("  [Simulator] Setup complete. All initial states backed up for multi-trial reset.")
 
-    # def flush_recording(self):
-    #     """
-    #     GPU上の記録バッファをCPUに転送し、内部カウンタをリセットして『捨てる』
-    #     これにより、次のステップからバッファの先頭に上書きされるようになる
-    #     """
-    #     # GPUからデータを引き上げる（これを行わないとGPU側で上書きが起きるか停止する）
-    #     self.model.pull_recording_buffers_from_device()
-        
-    #     # 重要：ホスト（CPU）側の記録カウンタを0リセットする
-    #     # これにより、これまでにpullしたスパイクデータがクリアされる
-    #     self.model.reset_recording_counters()
-    #     # print("  [Simulator] Recording buffer flushed and reset.")
+    def flush_recording(self):
+        """
+        GPU上の記録バッファをCPUに転送し、内部カウンタをリセットして捨てる。
+        長時間の自発活動で記録バッファを小さく保つために使う。
+        """
+        if getattr(self.model, "_recording_in_use", False):
+            self.model.pull_recording_buffers_from_device()
 
     # def load_input_spikes(self, spike_data: Dict[str, Dict[str, np.ndarray]]):
     #     """
