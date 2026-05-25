@@ -11,6 +11,8 @@ sys.path.append(str(root_path))
 from src.models.neurons.akita_escape_lif import (
     calculate_escape_noise_scale,
     conductance_lif_delta,
+    conductance_lif_delta_from_conductances,
+    conductance_synaptic_current,
     escape_noise_probability,
     evolve_escape_lif_step,
 )
@@ -26,6 +28,29 @@ class AkitaEscapeLIFTest(unittest.TestCase):
     def test_conductance_lif_delta_matches_equation(self):
         delta = conductance_lif_delta(v=-70.0, isyn=5.0, dt=0.1, tau_m=30.0, v_rest=-74.0)
         expected = (0.1 / 30.0) * ((-74.0 + 70.0) + 5.0)
+        self.assertAlmostEqual(delta, expected)
+
+    def test_conductance_terms_match_supplementary_equation(self):
+        isyn = conductance_synaptic_current(
+            v=-70.0,
+            g_exc=0.2,
+            g_inh=0.1,
+            e_exc=0.0,
+            e_inh=-80.0,
+        )
+        self.assertAlmostEqual(isyn, ((0.0 + 70.0) * 0.2) + ((-80.0 + 70.0) * 0.1))
+
+        delta = conductance_lif_delta_from_conductances(
+            v=-70.0,
+            g_exc=0.2,
+            g_inh=0.1,
+            dt=0.1,
+            tau_m=30.0,
+            v_rest=-74.0,
+            e_exc=0.0,
+            e_inh=-80.0,
+        )
+        expected = (0.1 / 30.0) * ((-74.0 + 70.0) + isyn)
         self.assertAlmostEqual(delta, expected)
 
     def test_escape_noise_probability_increases_with_voltage(self):

@@ -3,11 +3,6 @@ import numpy as np
 from src.core.registry import PLASTICITY_MODELS
 from .BASE_plasticity import BasePlasticityModel
 
-try:
-    import pygenn
-except ImportError:  # pragma: no cover - GeNN未導入環境では数式検証のみ行う
-    pygenn = None
-
 def recover_synaptic_resource(x: float, delta_t: float, tau_rec: float) -> float:
     """Supplementary Eq. S11 の閉形式。"""
     return 1.0 - ((1.0 - x) * np.exp(-delta_t / tau_rec))
@@ -46,7 +41,7 @@ class CustomAkitaModel(BasePlasticityModel):
     def __init__(self, config, dt, weight, delay, num_pre, num_post):
         super().__init__(config, dt, weight, delay, num_pre, num_post)
         self.mode = self.config.mode
-        if self.mode not in ["e-stdp", "i-stdp"]:
+        if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
 
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
@@ -67,11 +62,12 @@ class CustomAkitaModel(BasePlasticityModel):
         }
         pre_vars_dict = {
             "x": np.ones(self.num_pre, dtype='float32'), 
+            "x_release": np.zeros(self.num_pre, dtype='float32'),
             "t_last_pre": np.full(self.num_pre, -1e9, dtype='float32')
         }
         
         # モードに応じたパラメータ取得メソッドへディスパッチ
-        if self.mode == "e-stdp":
+        if self.mode.startswith("e-stdp"):
             params = self._get_e_stdp_params()
         else:
             params = self._get_i_stdp_params()
@@ -114,11 +110,12 @@ class CustomAkitaModel(BasePlasticityModel):
     def _create_snippet(self):
         pre_code, pre_syn_code, post_syn_code = self._build_cpp_codes()
 
+        safe_mode = self.mode.replace("-", "_")
         snippet = pygenn.create_weight_update_model(
-            class_name=f"custom_Akita_{self.mode}",
+            class_name=f"custom_Akita_{safe_mode}",
             params=list(self._params.keys()),
             vars=[("w", "scalar"), ("d", "uint8_t")],
-            pre_vars=[("x", "scalar"), ("t_last_pre", "scalar")],
+            pre_vars=[("x", "scalar"), ("x_release", "scalar"), ("t_last_pre", "scalar")],
             pre_spike_code=pre_code,
             pre_spike_syn_code=pre_syn_code,
             post_spike_syn_code=post_syn_code
@@ -130,18 +127,19 @@ class CustomAkitaModel(BasePlasticityModel):
         """C++のロジックコードを生成する"""
         cfg = self.config
         
-        # ① プレニューロン発火時 (共通)
+        # プレニューロン発火時: Eq. S11で回復し、Eq. S12で放出分を消費する。
         pre_spike_code = f"""
-            x = x * (1.0 - {cfg.U});
             const scalar dt_pre = t - t_last_pre;
             x = 1.0 - ((1.0 - x) * exp(-dt_pre / {cfg.tau_rec}));
+            x_release = {cfg.U} * x;
+            x -= x_release;
             t_last_pre = t;
         """
         
         # 伝播の基本コード (共通)
-        pre_spike_syn_code = "addToPostDelay(U * x * w * g_max, d);\n"
+        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max, d);\n"
 
-        if self.mode == "e-stdp":
+        if self.mode.startswith("e-stdp"):
             pre_spike_syn_code += f"""
                 const scalar dt = t - st_post; 
                 if (dt > 0.0) {{

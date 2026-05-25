@@ -1,12 +1,9 @@
 import math
 
+import pygenn
+
 from src.core.registry import NEURON_MODELS
 from .BASE_neuron import BaseNeuronModel
-
-try:
-    import pygenn
-except ImportError:  # pragma: no cover - GeNN未導入環境では数式検証のみ行う
-    pygenn = None
 
 
 def calculate_escape_noise_scale(dt: float, frest: float, v_rest: float, v_th: float, b: float) -> float:
@@ -15,8 +12,29 @@ def calculate_escape_noise_scale(dt: float, frest: float, v_rest: float, v_th: f
 
 
 def conductance_lif_delta(v: float, isyn: float, dt: float, tau_m: float, v_rest: float, i_ext: float = 0.0) -> float:
-    """Supplementary Eq. S1 を Euler 法で 1 ステップ進める。"""
+    """Supplementary Eq. S1 を Isyn 入力として Euler 法で 1 ステップ進める。"""
     return (dt / tau_m) * ((v_rest - v) + isyn + i_ext)
+
+
+def conductance_synaptic_current(v: float, g_exc: float, g_inh: float, e_exc: float, e_inh: float) -> float:
+    """Supplementary Eq. S1 のシナプス項を計算する。"""
+    return ((e_exc - v) * g_exc) + ((e_inh - v) * g_inh)
+
+
+def conductance_lif_delta_from_conductances(
+    v: float,
+    g_exc: float,
+    g_inh: float,
+    dt: float,
+    tau_m: float,
+    v_rest: float,
+    e_exc: float,
+    e_inh: float,
+    i_ext: float = 0.0,
+) -> float:
+    """Supplementary Eq. S1 を conductance 入力から Euler 法で 1 ステップ進める。"""
+    isyn = conductance_synaptic_current(v, g_exc, g_inh, e_exc, e_inh)
+    return conductance_lif_delta(v=v, isyn=isyn, dt=dt, tau_m=tau_m, v_rest=v_rest, i_ext=i_ext)
 
 
 def escape_noise_probability(v: float, v_th: float, b: float, scale_c: float) -> float:
@@ -68,9 +86,6 @@ class AkitaEscapeLIF(BaseNeuronModel):
 
     @property
     def model_class(self):
-        if pygenn is None:
-            raise ImportError("pygenn is required to build akita_escape_lif.")
-
         sim_code = """
             if (RefracTime <= 0.0) {
                 V += ((Vrest - V) + Isyn + Iext) * (dt / TauM);
