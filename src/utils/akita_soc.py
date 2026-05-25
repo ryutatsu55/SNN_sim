@@ -130,6 +130,119 @@ def firing_rates(spike_ids: np.ndarray, num_neurons: int, duration_ms: float) ->
     return counts[:num_neurons] / (duration_ms / 1000.0)
 
 
+def spike_group_metrics(
+    spike_ids: np.ndarray,
+    excitatory_ids: np.ndarray,
+    inhibitory_ids: np.ndarray,
+    duration_ms: float,
+) -> dict[str, float | int]:
+    """グローバルIDのスパイク列からE/I別発火メトリクスを計算する。"""
+    ids = np.asarray(spike_ids, dtype=np.int32)
+    exc_ids = np.asarray(excitatory_ids, dtype=np.int32)
+    inh_ids = np.asarray(inhibitory_ids, dtype=np.int32)
+    duration_s = duration_ms / 1000.0
+
+    exc_spikes = int(np.isin(ids, exc_ids).sum())
+    inh_spikes = int(np.isin(ids, inh_ids).sum())
+    if duration_s <= 0.0:
+        exc_rate = np.nan
+        inh_rate = np.nan
+    else:
+        exc_rate = exc_spikes / (max(exc_ids.size, 1) * duration_s)
+        inh_rate = inh_spikes / (max(inh_ids.size, 1) * duration_s)
+
+    return {
+        "exc_spikes": exc_spikes,
+        "inh_spikes": inh_spikes,
+        "exc_rate_hz": float(exc_rate),
+        "inh_rate_hz": float(inh_rate),
+    }
+
+
+def _weight_block_stats(block: np.ndarray, wmax: float, at_max_tolerance: float) -> dict[str, float]:
+    block = np.asarray(block, dtype=np.float64)
+    if block.size == 0:
+        return {
+            "mean": np.nan,
+            "nonzero_fraction": np.nan,
+            "at_max_fraction": np.nan,
+        }
+    return {
+        "mean": float(np.mean(block)),
+        "nonzero_fraction": float(np.mean(block > 0.0)),
+        "at_max_fraction": float(np.mean(block >= (wmax - at_max_tolerance))),
+    }
+
+
+def weight_block_metrics(
+    weights: np.ndarray,
+    excitatory_ids: np.ndarray,
+    inhibitory_ids: np.ndarray,
+    wmax: float,
+    connection_mask: np.ndarray | None = None,
+    at_max_tolerance: float = 1e-3,
+) -> dict[str, float]:
+    """グローバル重み行列から全体およびE/Iブロック別の統計を計算する。"""
+    matrix = np.asarray(weights, dtype=np.float64)
+    mask = None if connection_mask is None else np.asarray(connection_mask) != 0
+    exc_ids = np.asarray(excitatory_ids, dtype=np.int32)
+    inh_ids = np.asarray(inhibitory_ids, dtype=np.int32)
+
+    all_values = matrix[mask] if mask is not None else matrix
+    all_stats = _weight_block_stats(all_values, wmax=wmax, at_max_tolerance=at_max_tolerance)
+    metrics = {
+        "weight_mean": all_stats["mean"],
+        "weight_nonzero_fraction": all_stats["nonzero_fraction"],
+        "weight_at_max_fraction": all_stats["at_max_fraction"],
+    }
+
+    blocks = {
+        "ee": (exc_ids, exc_ids),
+        "ei": (exc_ids, inh_ids),
+        "ie": (inh_ids, exc_ids),
+        "ii": (inh_ids, inh_ids),
+    }
+    for name, (source_ids, target_ids) in blocks.items():
+        block = matrix[np.ix_(source_ids, target_ids)]
+        if mask is not None:
+            block_mask = mask[np.ix_(source_ids, target_ids)]
+            block = block[block_mask]
+        stats = _weight_block_stats(block, wmax=wmax, at_max_tolerance=at_max_tolerance)
+        metrics[f"weight_{name}_mean"] = stats["mean"]
+        metrics[f"weight_{name}_at_max_fraction"] = stats["at_max_fraction"]
+
+    return metrics
+
+
+def diagnose_activity(
+    mean_rate_hz: float,
+    weight_at_max_fraction: float,
+    overactive_rate_hz: float = 20.0,
+    weight_saturation_fraction: float = 0.5,
+) -> dict[str, bool | str]:
+    """平均発火率と重み飽和率から実験状態を簡易診断する。"""
+    is_overactive = bool(np.isfinite(mean_rate_hz) and mean_rate_hz >= overactive_rate_hz)
+    is_weight_saturated = bool(
+        np.isfinite(weight_at_max_fraction)
+        and weight_at_max_fraction >= weight_saturation_fraction
+    )
+
+    if is_overactive and is_weight_saturated:
+        diagnosis = "overactive_and_weight_saturated"
+    elif is_overactive:
+        diagnosis = "overactive"
+    elif is_weight_saturated:
+        diagnosis = "weight_saturated"
+    else:
+        diagnosis = "ok"
+
+    return {
+        "is_overactive": is_overactive,
+        "is_weight_saturated": is_weight_saturated,
+        "diagnosis": diagnosis,
+    }
+
+
 def plot_raster(times: np.ndarray, ids: np.ndarray, out_path: Path, title: str) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 4))

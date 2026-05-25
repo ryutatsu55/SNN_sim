@@ -21,3 +21,16 @@ def create_run_output_dir(
     output_dir = Path(base_dir) / _sanitize_dir_name(simulation_name) / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def create_timestamped_output_dir(
+    base_dir: str | Path,
+    timestamp: str | None = None,
+) -> Path:
+    """指定されたベースディレクトリ直下に日時ディレクトリを作成する。"""
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    output_dir = Path(base_dir) / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir

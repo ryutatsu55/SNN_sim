@@ -16,17 +16,20 @@ if str(project_root) not in sys.path:
 
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import create_run_output_dir
+from src.core.output_manager import create_run_output_dir, create_timestamped_output_dir
 from src.core.simulator import GeNNSimulator
 from src.utils.akita_soc import (
     bimodality_d,
     burstiness_index,
     criticality_index_delta_cr,
+    diagnose_activity,
     firing_rates,
+    spike_group_metrics,
     log_likelihood_ratio_power_vs_exponential,
     plot_avalanche_distribution,
     plot_raster,
     split_avalanches,
+    weight_block_metrics,
 )
 
 import src.models.neurons.akita_escape_lif
@@ -49,7 +52,8 @@ def parse_args():
     parser.add_argument("--record-window-ms", type=float, default=None)
     parser.add_argument("--record-buffer-ms", type=float, default=None)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--out-dir", default=None)
+    parser.add_argument("--out-dir", default=None, help="日時付き実行ディレクトリを作るベースディレクトリ")
+    parser.add_argument("--task-name", default=TASK_NAME)
     return parser.parse_args()
 
 
@@ -97,14 +101,45 @@ def save_config(config, out_dir: Path):
         yaml.safe_dump(config.model_dump(), f, allow_unicode=True, sort_keys=False)
 
 
+def resolve_output_dir(out_dir_arg: str | None) -> Path:
+    if out_dir_arg:
+        return create_timestamped_output_dir(out_dir_arg)
+    return create_run_output_dir("akita_soc")
+
+
+def get_group_ids(config, group_info):
+    excitatory_ids = []
+    inhibitory_ids = []
+    for group_name, neuron_cfg in config.neurons.items():
+        mode = getattr(neuron_cfg, "mode", None)
+        ids = group_info[group_name]["global_indices"]
+        if mode == "excitatory":
+            excitatory_ids.append(ids)
+        elif mode == "inhibitory":
+            inhibitory_ids.append(ids)
+
+    return {
+        "excitatory": np.concatenate(excitatory_ids) if excitatory_ids else np.array([], dtype=np.int32),
+        "inhibitory": np.concatenate(inhibitory_ids) if inhibitory_ids else np.array([], dtype=np.int32),
+    }
+
+
+def max_plasticity_weight(config) -> float:
+    wmax_values = []
+    for syn_cfg in config.synapses.values():
+        wmax = getattr(syn_cfg.plasticity, "Wmax", None)
+        if wmax is not None:
+            wmax_values.append(float(wmax))
+    return max(wmax_values) if wmax_values else 1.0
+
+
 def main():
     args = parse_args()
     manager = ConfigManager()
-    config = manager.resolve(args.config, TASK_NAME)
+    config = manager.resolve(args.config, args.task_name)
     apply_overrides(config, args)
 
-    out_dir = Path(args.out_dir) if args.out_dir else create_run_output_dir("akita_soc")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = resolve_output_dir(args.out_dir)
     save_config(config, out_dir)
     shutil.copy2(args.config, out_dir / "source_config.yaml")
 
@@ -113,6 +148,8 @@ def main():
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
 
+    group_ids = get_group_ids(config, group_info)
+    wmax = max_plasticity_weight(config)
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
     buffer_ms = float(getattr(config.task, "record_buffer_ms", record_window_ms))
@@ -152,6 +189,29 @@ def main():
             "burstiness_index": burstiness_index(local_times, record_window_ms),
             "bimodality_d": bimodality_d(avalanche.sizes),
         }
+        row.update(
+            spike_group_metrics(
+                spikes["ids"],
+                group_ids["excitatory"],
+                group_ids["inhibitory"],
+                record_window_ms,
+            )
+        )
+        row.update(
+            weight_block_metrics(
+                weights,
+                group_ids["excitatory"],
+                group_ids["inhibitory"],
+                wmax=wmax,
+                connection_mask=builder.global_mask,
+            )
+        )
+        row.update(
+            diagnose_activity(
+                mean_rate_hz=row["mean_rate_hz"],
+                weight_at_max_fraction=row["weight_at_max_fraction"],
+            )
+        )
         metrics_rows.append(row)
 
         plot_raster(local_times, spikes["ids"], out_dir / f"raster_{hour:g}h.png", f"Raster {hour:g} h")

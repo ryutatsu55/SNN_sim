@@ -37,6 +37,25 @@ custom_Akita:
     beta_I: 1.15
     Wmin: 0.0
     Wmax: 1.0
+  e-stdp_akita_stable_probe:
+    tau_rec: 150.0
+    U: 0.4
+    g_max: 1.5
+    A_E: 0.005
+    tau_E: 20.0
+    beta_E: 1.05
+    Wmin: 0.0
+    Wmax: 1.0
+  i-stdp_akita_stable_probe:
+    tau_rec: 150.0
+    U: 0.4
+    g_max: 1.5
+    A_I: 0.005
+    tau_I1: 10.0
+    tau_I2: 20.0
+    beta_I: 1.2
+    Wmin: 0.0
+    Wmax: 1.0
 
 # 伝搬遅延があるのとないのがある。plasticityモデルでそれが決まる！！
 # =================================================================

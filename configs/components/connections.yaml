@@ -6,6 +6,10 @@ constant_prob_full:
   p: 1.0
   allow_self_connections: false
 
+constant_prob_sparse:
+  p: 0.2
+  allow_self_connections: false
+
 distance_based:
   sigma: 10   # [um]
   max_prob: 0.8

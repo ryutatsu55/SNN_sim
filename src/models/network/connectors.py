@@ -36,6 +36,11 @@ class FullProbabilityTopology(ConstantProbabilityTopology):
     """論文再現用の全ペア結合候補。具体値はYAMLプロファイルから読む。"""
     pass
 
+@CONNECTION_MODELS.register("constant_prob_sparse")
+class SparseProbabilityTopology(ConstantProbabilityTopology):
+    """Akita SoC安定化候補用の疎な確率結合。具体値はYAMLプロファイルから読む。"""
+    pass
+
 @CONNECTION_MODELS.register("optional_connect")
 class OptionalConnection(BaseConnection):
     def generate(self):

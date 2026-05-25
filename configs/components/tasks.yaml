@@ -10,6 +10,13 @@ akita_soc_fig2:
   record_window_ms: 600000.0  # 10 min
   record_buffer_ms: 10000.0
   graph_name: "akita_soc_fig2"
+
+akita_soc_fig2_stable_probe:
+  duration: 259200000.0  # 72 h [ms]
+  record_hours: [0, 1, 3, 6, 12, 24, 48, 72]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  graph_name: "akita_soc_fig2_stable_probe"
     
 lif_test:
   duration: 10000.0
