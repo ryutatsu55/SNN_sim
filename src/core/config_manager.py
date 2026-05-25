@@ -187,7 +187,7 @@ class ConfigManager:
             raise ValueError(f"Config validation failed: {e}")
 
 
-    def save_resolved(self, resolved_config: AppConfig, save_dir: str = "results") -> Path:
+    def save_resolved(self, resolved_config: AppConfig, save_dir: str | Path = "results") -> Path:
         """実験の証拠として、結合済みのコンフィグを保存する"""
         out_dir = Path(save_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,6 @@ import csv
 import os
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +16,7 @@ if str(project_root) not in sys.path:
 
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
+from src.core.output_manager import create_run_output_dir
 from src.core.simulator import GeNNSimulator
 from src.utils.akita_soc import (
     bimodality_d,
@@ -103,8 +103,7 @@ def main():
     config = manager.resolve(args.config, TASK_NAME)
     apply_overrides(config, args)
 
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    out_dir = Path(args.out_dir) if args.out_dir else Path("results") / "akita_soc" / timestamp
+    out_dir = Path(args.out_dir) if args.out_dir else create_run_output_dir("akita_soc")
     out_dir.mkdir(parents=True, exist_ok=True)
     save_config(config, out_dir)
     shutil.copy2(args.config, out_dir / "source_config.yaml")

@@ -22,14 +22,11 @@ import src.models.plasticity.standard_models
 import src.utils.visualize as visualize
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
+from src.core.output_manager import create_run_output_dir
 from src.core.registry import DATA_LOADERS
 from src.core.simulator import GeNNSimulator
 
 TASK_NAME = "pqn_test"
-OUTPUT_DIR = "output"
-OUTPUT_VIDEO = f"{OUTPUT_DIR}/spike_animation.mp4"
-OUTPUT_RASTER = f"{OUTPUT_DIR}/raster"
-OUTPUT_SPIKE_CSV = f"{OUTPUT_DIR}/spikes.csv"
 
 
 def main():
@@ -39,6 +36,8 @@ def main():
     print(f"Loading config from {config_src}...")
     manager = ConfigManager()
     config = manager.resolve(config_src, TASK_NAME)
+    output_dir = create_run_output_dir("spike_animation")
+    print(f"Output directory: {output_dir}")
 
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
@@ -78,32 +77,36 @@ def main():
     coords = builder.global_coords
     duration_ms = float(config.task.duration)
 
-    print(f"Saving spike csv to {OUTPUT_SPIKE_CSV} ...")
-    visualize.export_spike_csv(spike_times, spike_ids, output_path=OUTPUT_SPIKE_CSV)
+    spike_csv_path = output_dir / "spikes.csv"
+    raster_title = "raster.png"
+    video_path = output_dir / "spike_animation.mp4"
 
-    print(f"Saving raster plot to {OUTPUT_RASTER}.png ...")
-    visualize.raster(spike_times, spike_ids, title=OUTPUT_RASTER)
+    print(f"Saving spike csv to {spike_csv_path} ...")
+    visualize.export_spike_csv(spike_times, spike_ids, output_path=spike_csv_path)
+
+    print(f"Saving raster plot to {output_dir / raster_title} ...")
+    visualize.raster(spike_times, spike_ids, title=raster_title, save_path=output_dir)
 
     visualize.network(
         weights=builder.global_weights, 
         coords=builder.global_coords, 
         config=config,
-        save_path=OUTPUT_DIR
+        save_path=output_dir
     )
 
-    print(f"Saving spike animation to {OUTPUT_VIDEO} ...")
+    print(f"Saving spike animation to {video_path} ...")
     visualize.spike_animation(
         spike_time=spike_times,
         neuron_id=spike_ids,
         coords=coords,
-        output_path=OUTPUT_VIDEO,
+        output_path=video_path,
         fps=60,
         decay_tau_ms=500.0,
         duration_ms=duration_ms,
         title=f"Spike Animation",
     )
 
-    print("=== Spike Animation Pipeline Complete! ===")
+    print(f"=== Spike Animation Pipeline Complete! Results saved to: {output_dir} ===")
 
 
 if __name__ == "__main__":

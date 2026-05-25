@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.core.registry import DATA_LOADERS
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
+from src.core.output_manager import create_run_output_dir
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
 import src.utils.visualize as visualize
@@ -41,6 +42,8 @@ def main():
     print(f"Loading config from {config_src}...")
     manager = ConfigManager() 
     config = manager.resolve(config_src, TASK_NAME)
+    output_dir = create_run_output_dir(TASK_NAME)
+    print(f"Output directory: {output_dir}")
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
     print("Building Network with GeNN...")
@@ -96,7 +99,7 @@ def main():
         
     print("=== Simulation Complete! ===")
     
-    manager.save_resolved(config)
+    manager.save_resolved(config, save_dir=output_dir)
 
     # 7. 評価と可視化
     # I_in[:] = config.neurons["Layer_Exc"].Ioffset
@@ -106,14 +109,18 @@ def main():
         I_in,
         trial_results["times"],
         trial_results["ids"], 
-        config
+        config,
+        save_path=output_dir
     )
 
     visualize.network(
         weights=builder.global_weights, 
         coords=builder.global_coords, 
-        config=config
+        config=config,
+        save_path=output_dir
     )
+
+    print(f"Results saved to: {output_dir}")
 
 if __name__ == "__main__":
     main()
