@@ -31,6 +31,11 @@ class ConstantProbabilityTopology(BaseConnection):
             np.fill_diagonal(mask, 0) # 自己結合（自分自身へのシナプス）を排除
         return mask.astype(np.int8)
 
+@CONNECTION_MODELS.register("constant_prob_full")
+class FullProbabilityTopology(ConstantProbabilityTopology):
+    """論文再現用の全ペア結合候補。具体値はYAMLプロファイルから読む。"""
+    pass
+
 @CONNECTION_MODELS.register("optional_connect")
 class OptionalConnection(BaseConnection):
     def generate(self):

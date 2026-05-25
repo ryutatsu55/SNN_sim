@@ -1,6 +1,9 @@
 constant:
   base_weight: 1.5    # 興奮性の基本重み (RESERVOIR_CONN)
 
+constant_zero:
+  base_weight: 0.0
+
 normal_broad:
   mean: 0.9
   std: 0.2

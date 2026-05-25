@@ -44,7 +44,7 @@ class SynapseGroupConfig(BaseModel):
     # weight_scale: float = Field(default=1.0, description="初期重みのスケーリング係数")
     synapse: SynapseParamsConfig
     plasticity: PlasticityConfig
-    # model_config = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow')
 
 class ComponentConfig(BaseModel):
     """ネットワーク生成(空間、結合確率、重み、遅延)のベーススキーマ"""

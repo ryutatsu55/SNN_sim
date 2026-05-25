@@ -31,6 +31,11 @@ class ConstantWeight(BaseWeight):
         weights[self.mask != 0] = val
         return weights
 
+@WEIGHT_MODELS.register("constant_zero")
+class ConstantZeroWeight(ConstantWeight):
+    """論文再現用の初期重み0プロファイル。具体値はYAMLから読む。"""
+    pass
+
 @WEIGHT_MODELS.register("normal_broad")
 class NormalRandomWeight(BaseWeight):
     def generate(self):

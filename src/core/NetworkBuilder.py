@@ -136,13 +136,19 @@ class NetworkBuilder:
                 sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
                 sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
 
+                delay_by_target = getattr(syn_cfg, "delay_by_target", None)
+                if delay_by_target is not None and tgt_name in delay_by_target:
+                    sub_delays[sub_mask != 0] = float(delay_by_target[tgt_name])
+                elif hasattr(syn_cfg, "delay"):
+                    sub_delays[sub_mask != 0] = float(syn_cfg.delay)
+
                 local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
                 if len(local_src_idx) == 0:
                     print(f"    Skipping SynapseGroup: {src_name}_to_{tgt_name} (No connections found)")
                     continue
                 weights_flat = sub_weights[local_src_idx, local_tgt_idx]
                 delays_flat = sub_delays[local_src_idx, local_tgt_idx]
-                delays_flat = delays_flat // self.config.simulation.dt
+                delays_flat = np.rint(delays_flat / self.config.simulation.dt).astype(np.uint8)
 
                 src_pop = self.genn_model.neuron_populations[src_name]
                 tgt_pop = self.genn_model.neuron_populations[tgt_name]

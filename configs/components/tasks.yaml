@@ -3,6 +3,13 @@ pqn_test:
   input_type: "step"  # (step or continuous)
   duration: 10000.0    # [ms]
   graph_name: "PQN_V_test"
+
+akita_soc_fig2:
+  duration: 259200000.0  # 72 h [ms]
+  record_hours: [0, 6, 72]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  graph_name: "akita_soc_fig2"
     
 lif_test:
   duration: 10000.0
