@@ -1,6 +1,7 @@
 import argparse
 import csv
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -51,6 +52,7 @@ PAPER_AVALANCHE_YLIM = (1e-5, 1.0)
 def parse_args():
     parser = argparse.ArgumentParser(description="AkitaDai APL 2023 Fig.2相当の代表条件を実行します。")
     parser.add_argument("--config", default="configs/akita_soc_fig2.yaml")
+    parser.add_argument("--replot-from", default=None, help="既存の実験出力ディレクトリからPNGだけを再生成する")
     parser.add_argument("--duration-hours", type=float, default=None)
     parser.add_argument("--record-hours", type=float, nargs="*", default=None)
     parser.add_argument("--record-window-ms", type=float, default=None)
@@ -137,8 +139,87 @@ def max_plasticity_weight(config) -> float:
     return max(wmax_values) if wmax_values else 1.0
 
 
+def parse_hour_from_spike_path(path: Path) -> float:
+    match = re.fullmatch(r"spikes_(.+)h\.npz", path.name)
+    if match is None:
+        raise ValueError(f"Invalid spike filename: {path.name}")
+    return float(match.group(1))
+
+
+def discover_spike_files(run_dir: Path) -> list[tuple[float, Path]]:
+    spike_files = []
+    for path in run_dir.glob("spikes_*h.npz"):
+        spike_files.append((parse_hour_from_spike_path(path), path))
+    return sorted(spike_files, key=lambda item: item[0])
+
+
+def replot_existing_output(run_dir: Path) -> None:
+    config_path = run_dir / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Missing resolved config: {config_path}")
+
+    manager = ConfigManager()
+    config = manager.load_resolved(config_path)
+    record_window_ms = float(config.task.record_window_ms)
+    total_neurons = int(config.simulation.N)
+    spike_files = discover_spike_files(run_dir)
+    if not spike_files:
+        raise FileNotFoundError(f"No spikes_*h.npz files found in: {run_dir}")
+
+    metrics_rows = []
+    for hour, spike_path in spike_files:
+        spikes_npz = np.load(spike_path)
+        times = spikes_npz["times"]
+        ids = spikes_npz["ids"]
+        record_start_ms = hour * 60.0 * 60.0 * 1000.0
+        local_times = times - record_start_ms
+
+        avalanche = split_avalanches(local_times)
+        rates = firing_rates(ids, total_neurons, record_window_ms)
+        metrics_rows.append(
+            {
+                "hour": hour,
+                "num_spikes": int(times.size),
+                "mean_rate_hz": float(np.mean(rates)),
+                "avalanche_threshold_ms": avalanche.threshold_ms,
+                "num_avalanches": int(avalanche.sizes.size),
+                "llr": log_likelihood_ratio_power_vs_exponential(avalanche.sizes),
+                "delta_cr": criticality_index_delta_cr(avalanche.sizes),
+                "burstiness_index": burstiness_index(local_times, record_window_ms),
+                "bimodality_d": bimodality_d(avalanche.sizes),
+            }
+        )
+
+        plot_raster(
+            local_times,
+            ids,
+            run_dir / f"raster_{hour:g}h.png",
+            f"Raster {hour:g} h",
+            xlim_s=PAPER_RASTER_XLIM_S,
+            ylim_neuron=PAPER_RASTER_YLIM_NEURON,
+        )
+        plot_avalanche_distribution(
+            avalanche.sizes,
+            run_dir / f"avalanche_{hour:g}h.png",
+            f"Avalanche distribution {hour:g} h",
+            xlim=PAPER_AVALANCHE_XLIM,
+            ylim=PAPER_AVALANCHE_YLIM,
+        )
+
+    with open(run_dir / "metrics_replot.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(metrics_rows)
+
+    print(f"Akita SoC plots regenerated from: {run_dir}")
+
+
 def main():
     args = parse_args()
+    if args.replot_from is not None:
+        replot_existing_output(Path(args.replot_from))
+        return
+
     manager = ConfigManager()
     config = manager.resolve(args.config, args.task_name)
     apply_overrides(config, args)

@@ -30,6 +30,7 @@ from src.utils.akita_soc import (
     spike_group_metrics,
     weight_block_metrics,
 )
+from scripts.akita_soc_fig2 import discover_spike_files, parse_hour_from_spike_path, replot_existing_output
 
 
 class AkitaEscapeLIFTest(unittest.TestCase):
@@ -192,6 +193,44 @@ class AkitaSocPlotTest(unittest.TestCase):
 
             self.assertTrue(out_path.exists())
             self.assertGreater(out_path.stat().st_size, 0)
+
+
+class AkitaSocReplotTest(unittest.TestCase):
+    def test_parse_hour_from_spike_path(self):
+        self.assertEqual(parse_hour_from_spike_path(Path("spikes_0h.npz")), 0.0)
+        self.assertEqual(parse_hour_from_spike_path(Path("spikes_1.5h.npz")), 1.5)
+        self.assertEqual(parse_hour_from_spike_path(Path("spikes_72h.npz")), 72.0)
+
+    def test_discover_spike_files_sorts_by_hour(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            for name in ("spikes_72h.npz", "spikes_0h.npz", "spikes_6h.npz"):
+                np.savez_compressed(run_dir / name, times=np.array([]), ids=np.array([]))
+
+            discovered = discover_spike_files(run_dir)
+
+            self.assertEqual([hour for hour, _ in discovered], [0.0, 6.0, 72.0])
+
+    def test_replot_existing_output_generates_plots_without_simulation(self):
+        source_config = root_path / "outputs" / "akita_soc_72h" / "20260525-180915" / "config.yaml"
+        if not source_config.exists():
+            self.skipTest("既存のAkita出力config.yamlがありません。")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            (run_dir / "config.yaml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
+            np.savez_compressed(
+                run_dir / "spikes_0h.npz",
+                times=np.array([0.0, 1000.0, 29000.0, 31000.0]),
+                ids=np.array([0, 20, 99, 10]),
+            )
+
+            replot_existing_output(run_dir)
+
+            self.assertTrue((run_dir / "raster_0h.png").exists())
+            self.assertTrue((run_dir / "avalanche_0h.png").exists())
+            self.assertTrue((run_dir / "metrics_replot.csv").exists())
+            self.assertTrue((run_dir / "spikes_0h.npz").exists())
 
     def test_plot_avalanche_accepts_paper_axis_ranges_with_empty_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
