@@ -1,4 +1,5 @@
 import math
+import tempfile
 import unittest
 import sys
 from pathlib import Path
@@ -24,6 +25,8 @@ from src.models.plasticity.custom_Akita import (
 )
 from src.utils.akita_soc import (
     diagnose_activity,
+    plot_avalanche_distribution,
+    plot_raster,
     spike_group_metrics,
     weight_block_metrics,
 )
@@ -171,6 +174,39 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertTrue(diagnosis["is_overactive"])
         self.assertTrue(diagnosis["is_weight_saturated"])
         self.assertEqual(diagnosis["diagnosis"], "overactive_and_weight_saturated")
+
+
+class AkitaSocPlotTest(unittest.TestCase):
+    def test_plot_raster_accepts_paper_axis_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_path = Path(tmp_dir) / "raster.png"
+
+            plot_raster(
+                times=np.array([0.0, 1000.0, 29000.0, 31000.0]),
+                ids=np.array([0, 20, 99, 10]),
+                out_path=out_path,
+                title="Raster",
+                xlim_s=(0.0, 30.0),
+                ylim_neuron=(0.0, 100.0),
+            )
+
+            self.assertTrue(out_path.exists())
+            self.assertGreater(out_path.stat().st_size, 0)
+
+    def test_plot_avalanche_accepts_paper_axis_ranges_with_empty_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_path = Path(tmp_dir) / "avalanche.png"
+
+            plot_avalanche_distribution(
+                sizes=np.array([], dtype=np.int32),
+                out_path=out_path,
+                title="Avalanche",
+                xlim=(1.0, 1000.0),
+                ylim=(1e-5, 1.0),
+            )
+
+            self.assertTrue(out_path.exists())
+            self.assertGreater(out_path.stat().st_size, 0)
 
 
 if __name__ == "__main__":

@@ -243,19 +243,36 @@ def diagnose_activity(
     }
 
 
-def plot_raster(times: np.ndarray, ids: np.ndarray, out_path: Path, title: str) -> None:
+def plot_raster(
+    times: np.ndarray,
+    ids: np.ndarray,
+    out_path: Path,
+    title: str,
+    xlim_s: tuple[float, float] | None = None,
+    ylim_neuron: tuple[float, float] | None = None,
+) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.scatter(times / 1000.0, ids, s=2.0, color="black")
     ax.set_title(title)
     ax.set_xlabel("Time [s]")
     ax.set_ylabel("Neuron ID")
+    if xlim_s is not None:
+        ax.set_xlim(*xlim_s)
+    if ylim_neuron is not None:
+        ax.set_ylim(*ylim_neuron)
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
 
-def plot_avalanche_distribution(sizes: np.ndarray, out_path: Path, title: str) -> None:
+def plot_avalanche_distribution(
+    sizes: np.ndarray,
+    out_path: Path,
+    title: str,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     support, prob = avalanche_distribution(sizes)
     fig, ax = plt.subplots(figsize=(5, 4))
@@ -263,9 +280,16 @@ def plot_avalanche_distribution(sizes: np.ndarray, out_path: Path, title: str) -
         ax.scatter(support, prob, s=12)
         ax.set_xscale("log")
         ax.set_yscale("log")
+    elif xlim is not None or ylim is not None:
+        ax.set_xscale("log")
+        ax.set_yscale("log")
     ax.set_title(title)
     ax.set_xlabel("Avalanche size")
     ax.set_ylabel("Probability")
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)

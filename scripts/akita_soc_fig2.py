@@ -42,6 +42,10 @@ import src.models.synapses.standard_models
 
 
 TASK_NAME = "akita_soc_fig2"
+PAPER_RASTER_XLIM_S = (0.0, 30.0)
+PAPER_RASTER_YLIM_NEURON = (0.0, 100.0)
+PAPER_AVALANCHE_XLIM = (1.0, 1000.0)
+PAPER_AVALANCHE_YLIM = (1e-5, 1.0)
 
 
 def parse_args():
@@ -214,11 +218,20 @@ def main():
         )
         metrics_rows.append(row)
 
-        plot_raster(local_times, spikes["ids"], out_dir / f"raster_{hour:g}h.png", f"Raster {hour:g} h")
+        plot_raster(
+            local_times,
+            spikes["ids"],
+            out_dir / f"raster_{hour:g}h.png",
+            f"Raster {hour:g} h",
+            xlim_s=PAPER_RASTER_XLIM_S,
+            ylim_neuron=PAPER_RASTER_YLIM_NEURON,
+        )
         plot_avalanche_distribution(
             avalanche.sizes,
             out_dir / f"avalanche_{hour:g}h.png",
             f"Avalanche distribution {hour:g} h",
+            xlim=PAPER_AVALANCHE_XLIM,
+            ylim=PAPER_AVALANCHE_YLIM,
         )
 
     with open(out_dir / "metrics.csv", "w", newline="", encoding="utf-8") as f:
