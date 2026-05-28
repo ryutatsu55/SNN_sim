@@ -14,6 +14,18 @@ def consume_synaptic_resource(x: float, utilization: float) -> tuple[float, floa
     return x - released, released
 
 
+def calculate_gmax_scale(num_synapses: int, num_post: int, normalize_by_fan_in: bool) -> float:
+    """g_maxを入力総量として扱うための平均fan-in正規化係数。"""
+    if not normalize_by_fan_in:
+        return 1.0
+    if num_synapses <= 0 or num_post <= 0:
+        return 1.0
+    fan_in = num_synapses / num_post
+    if fan_in <= 0.0:
+        return 1.0
+    return 1.0 / fan_in
+
+
 def e_stdp_kernel(delta_t: float, a_e: float, tau_e: float, beta_e: float) -> float:
     """Supplementary Eq. S16。"""
     if delta_t >= 0.0:
@@ -43,13 +55,19 @@ class CustomAkitaModel(BasePlasticityModel):
         self.mode = self.config.mode
         if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
+        self._gmax_scale = calculate_gmax_scale(
+            num_synapses=len(self.weight),
+            num_post=self.num_post,
+            normalize_by_fan_in=bool(getattr(self.config, "normalize_gmax_by_fan_in", False)),
+        )
 
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
 
-        if self.mode not in CustomAkitaModel._snippet_cache:
+        cache_key = (self.mode, "g_scale_param")
+        if cache_key not in CustomAkitaModel._snippet_cache:
             # 未登録の場合のみ生成
-            CustomAkitaModel._snippet_cache[self.mode] = self._create_snippet()
-        self._custom_snippet_obj = CustomAkitaModel._snippet_cache[self.mode]
+            CustomAkitaModel._snippet_cache[cache_key] = self._create_snippet()
+        self._custom_snippet_obj = CustomAkitaModel._snippet_cache[cache_key]
 
     # ==========================================
     # 1. パラメータと変数の準備
@@ -79,6 +97,7 @@ class CustomAkitaModel(BasePlasticityModel):
             "tau_rec": float(self.config.tau_rec),
             "U": float(self.config.U),
             "g_max": float(self.config.g_max),
+            "g_scale": float(self._gmax_scale),
             "A_E": float(self.config.A_E),
             "tau_E": float(self.config.tau_E),
             "beta_E": float(self.config.beta_E),
@@ -99,6 +118,7 @@ class CustomAkitaModel(BasePlasticityModel):
             "tau_rec": float(self.config.tau_rec),
             "U": float(self.config.U),
             "g_max": float(self.config.g_max),
+            "g_scale": float(self._gmax_scale),
             "tau_I1": tau_I1,
             "tau_I2": tau_I2,
             "C_I": C_I,
@@ -112,7 +132,7 @@ class CustomAkitaModel(BasePlasticityModel):
 
         safe_mode = self.mode.replace("-", "_")
         snippet = pygenn.create_weight_update_model(
-            class_name=f"custom_Akita_{safe_mode}",
+            class_name=f"custom_Akita_{safe_mode}_gscaled",
             params=list(self._params.keys()),
             vars=[("w", "scalar"), ("d", "uint8_t")],
             pre_vars=[("x", "scalar"), ("x_release", "scalar"), ("t_last_pre", "scalar")],
@@ -137,7 +157,7 @@ class CustomAkitaModel(BasePlasticityModel):
         """
         
         # 伝播の基本コード (共通)
-        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max, d);\n"
+        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
 
         if self.mode.startswith("e-stdp"):
             pre_spike_syn_code += f"""

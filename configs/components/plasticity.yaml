@@ -12,6 +12,7 @@ custom_Akita:
     tau_rec: 150.0
     U: 0.4
     g_max: 4.0
+    normalize_gmax_by_fan_in: true
     A_E: 0.02
     tau_E: 20.0
     beta_E: 1.00
@@ -31,6 +32,7 @@ custom_Akita:
     tau_rec: 150.0
     U: 0.4
     g_max: 4.0
+    normalize_gmax_by_fan_in: true
     A_I: 0.02
     tau_I1: 10.0
     tau_I2: 20.0

@@ -18,6 +18,7 @@ from src.models.neurons.akita_escape_lif import (
     evolve_escape_lif_step,
 )
 from src.models.plasticity.custom_Akita import (
+    calculate_gmax_scale,
     consume_synaptic_resource,
     e_stdp_kernel,
     i_stdp_kernel,
@@ -90,6 +91,28 @@ class AkitaEscapeLIFTest(unittest.TestCase):
 
 
 class AkitaPlasticityTest(unittest.TestCase):
+    def test_gmax_scale_defaults_to_unscaled(self):
+        self.assertAlmostEqual(
+            calculate_gmax_scale(num_synapses=6320, num_post=80, normalize_by_fan_in=False),
+            1.0,
+        )
+
+    def test_gmax_scale_uses_average_fan_in(self):
+        self.assertAlmostEqual(
+            calculate_gmax_scale(num_synapses=6320, num_post=80, normalize_by_fan_in=True),
+            1.0 / 79.0,
+        )
+        self.assertAlmostEqual(
+            calculate_gmax_scale(num_synapses=1600, num_post=20, normalize_by_fan_in=True),
+            1.0 / 80.0,
+        )
+
+    def test_gmax_scale_handles_empty_connections(self):
+        self.assertAlmostEqual(
+            calculate_gmax_scale(num_synapses=0, num_post=20, normalize_by_fan_in=True),
+            1.0,
+        )
+
     def test_stp_recovers_then_depletes(self):
         recovered = recover_synaptic_resource(x=0.2, delta_t=150.0, tau_rec=150.0)
         remaining, released = consume_synaptic_resource(recovered, utilization=0.4)
