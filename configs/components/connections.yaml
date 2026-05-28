@@ -6,6 +6,10 @@ constant_prob_full:
   p: 1.0
   allow_self_connections: false
 
+constant_prob_full_autapse:
+  p: 1.0
+  allow_self_connections: true
+
 constant_prob_sparse:
   p: 0.2
   allow_self_connections: false
