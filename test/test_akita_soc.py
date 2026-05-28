@@ -32,6 +32,13 @@ from src.utils.akita_soc import (
     weight_block_metrics,
 )
 from scripts.akita_soc_fig2 import discover_spike_files, parse_hour_from_spike_path, replot_existing_output
+from scripts.visualize_weight_matrix import (
+    compute_block_metrics,
+    discover_weight_files,
+    infer_group_ids,
+    parse_hour_from_weight_path,
+    visualize_run,
+)
 
 
 class AkitaEscapeLIFTest(unittest.TestCase):
@@ -198,6 +205,100 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertTrue(diagnosis["is_overactive"])
         self.assertTrue(diagnosis["is_weight_saturated"])
         self.assertEqual(diagnosis["diagnosis"], "overactive_and_weight_saturated")
+
+
+class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
+    def test_parse_hour_from_weight_path(self):
+        self.assertEqual(parse_hour_from_weight_path(Path("weights_0h.npz")), 0.0)
+        self.assertEqual(parse_hour_from_weight_path(Path("weights_6h.npz")), 6.0)
+        self.assertEqual(parse_hour_from_weight_path(Path("weights_72h.npz")), 72.0)
+
+    def test_discover_weight_files_sorts_by_hour(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            for name in ("weights_72h.npz", "weights_0h.npz", "weights_6h.npz"):
+                np.savez_compressed(run_dir / name, weights=np.zeros((4, 4), dtype=np.float32))
+
+            discovered = discover_weight_files(run_dir)
+
+            self.assertEqual([item.hour for item in discovered], [0.0, 6.0, 72.0])
+
+    def test_compute_block_metrics_reports_all_blocks(self):
+        weights = np.array(
+            [
+                [0.0, 1.0, 0.5, 0.0],
+                [0.2, 0.0, 0.7, 0.0],
+                [0.1, 0.3, 0.0, 1.0],
+                [0.0, 0.4, 0.6, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        group_ids = infer_group_ids(Path("missing"), matrix_size=4)
+        group_ids = type(group_ids)(
+            excitatory=np.array([0, 1], dtype=np.int32),
+            inhibitory=np.array([2, 3], dtype=np.int32),
+            total_neurons=4,
+            source="test",
+        )
+
+        rows = compute_block_metrics(hour=6.0, weights=weights, group_ids=group_ids)
+        by_block = {row["block"]: row for row in rows}
+
+        self.assertEqual(set(by_block), {"all", "ee", "ei", "ie", "ii"})
+        self.assertAlmostEqual(by_block["ee"]["mean"], 0.3)
+        self.assertAlmostEqual(by_block["ei"]["mean"], 0.3)
+        self.assertAlmostEqual(by_block["ie"]["mean"], 0.2)
+        self.assertAlmostEqual(by_block["ii"]["mean"], 0.4)
+
+    def test_visualize_run_generates_weight_matrix_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            config = """
+simulation:
+  N: 4
+  dt: 0.1
+  seed: 1
+inputs:
+  GaussianNoise:
+    enable: false
+neurons:
+  Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    num: 2
+  Inh:
+    type: akita_escape_lif
+    mode: inhibitory
+    num: 2
+synapses: {}
+network:
+  space:
+    profile_name: no_space
+  connection:
+    profile_name: constant_prob_full
+    p: 1.0
+    allow_self_connections: false
+  weight:
+    profile_name: constant_zero
+  delay:
+    profile_name: constant
+task:
+  profile_name: test
+meta:
+  timestamp: test
+"""
+            (run_dir / "config.yaml").write_text(config, encoding="utf-8")
+            np.savez_compressed(run_dir / "weights_0h.npz", weights=np.zeros((4, 4), dtype=np.float32))
+            np.savez_compressed(run_dir / "weights_6h.npz", weights=np.ones((4, 4), dtype=np.float32))
+
+            out_dir = visualize_run(run_dir)
+
+            self.assertTrue((out_dir / "weight_matrix_0h.png").exists())
+            self.assertTrue((out_dir / "weight_matrix_6h.png").exists())
+            self.assertTrue((out_dir / "weight_matrix_panel.png").exists())
+            self.assertTrue((out_dir / "weight_delta_panel.png").exists())
+            self.assertTrue((out_dir / "weight_block_metrics.csv").exists())
+            self.assertFalse((out_dir / "weight_matrix_report.md").exists())
 
 
 class AkitaSocPlotTest(unittest.TestCase):
