@@ -31,13 +31,16 @@ def split_avalanches(spike_times: np.ndarray) -> AvalancheResult:
     return AvalancheResult(sizes=sizes, starts=starts, threshold_ms=threshold)
 
 
-def avalanche_distribution(sizes: np.ndarray, smax: int = 100) -> tuple[np.ndarray, np.ndarray]:
+def avalanche_distribution(sizes: np.ndarray, smax: int | None = 100) -> tuple[np.ndarray, np.ndarray]:
     valid = np.asarray(sizes, dtype=np.int32)
-    valid = valid[(valid >= 1) & (valid <= smax)]
+    valid = valid[valid >= 1]
+    if smax is not None:
+        valid = valid[valid <= smax]
     if valid.size == 0:
         return np.array([], dtype=np.int32), np.array([], dtype=np.float64)
-    counts = np.bincount(valid, minlength=smax + 1)[1:]
-    support = np.arange(1, smax + 1)
+    max_size = int(np.max(valid)) if smax is None else int(smax)
+    counts = np.bincount(valid, minlength=max_size + 1)[1:]
+    support = np.arange(1, max_size + 1)
     mask = counts > 0
     return support[mask], counts[mask] / valid.size
 
@@ -272,9 +275,10 @@ def plot_avalanche_distribution(
     title: str,
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
+    smax: int | None = None,
 ) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    support, prob = avalanche_distribution(sizes)
+    support, prob = avalanche_distribution(sizes, smax=smax)
     fig, ax = plt.subplots(figsize=(5, 4))
     if support.size > 0:
         ax.scatter(support, prob, s=12)

@@ -25,6 +25,7 @@ from src.models.plasticity.custom_Akita import (
     recover_synaptic_resource,
 )
 from src.utils.akita_soc import (
+    avalanche_distribution,
     diagnose_activity,
     plot_avalanche_distribution,
     plot_raster,
@@ -139,6 +140,22 @@ class AkitaPlasticityTest(unittest.TestCase):
 
 
 class AkitaSocMetricsTest(unittest.TestCase):
+    def test_avalanche_distribution_can_include_sizes_above_fitting_limit(self):
+        sizes = np.array([1, 2, 100, 101, 150], dtype=np.int32)
+
+        support, prob = avalanche_distribution(sizes, smax=None)
+
+        self.assertTrue(np.array_equal(support, np.array([1, 2, 100, 101, 150])))
+        self.assertTrue(np.allclose(prob, np.full(5, 0.2)))
+
+    def test_avalanche_distribution_keeps_explicit_fitting_limit(self):
+        sizes = np.array([1, 2, 100, 101, 150], dtype=np.int32)
+
+        support, prob = avalanche_distribution(sizes, smax=100)
+
+        self.assertTrue(np.array_equal(support, np.array([1, 2, 100])))
+        self.assertTrue(np.allclose(prob, np.full(3, 1 / 3)))
+
     def test_spike_group_metrics_uses_global_group_ids(self):
         spike_ids = np.array([2, 5, 5, 7, 9, 9, 9])
         excitatory_ids = np.array([5, 9])
