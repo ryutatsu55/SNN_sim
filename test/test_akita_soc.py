@@ -20,8 +20,12 @@ from src.models.neurons.akita_escape_lif import (
 from src.models.plasticity.custom_Akita import (
     calculate_gmax_scale,
     consume_synaptic_resource,
+    decay_trace,
     e_stdp_kernel,
+    e_trace_post_delta,
+    e_trace_pre_delta,
     i_stdp_kernel,
+    i_trace_delta,
     recover_synaptic_resource,
 )
 from src.utils.akita_soc import (
@@ -137,6 +141,28 @@ class AkitaPlasticityTest(unittest.TestCase):
         positive = i_stdp_kernel(delta_t=8.0, a_i=0.02, tau_i1=10.0, tau_i2=20.0, beta_i=1.15)
         negative = i_stdp_kernel(delta_t=-8.0, a_i=0.02, tau_i1=10.0, tau_i2=20.0, beta_i=1.15)
         self.assertAlmostEqual(positive, negative)
+
+    def test_trace_decay_matches_exponential_sum_term(self):
+        self.assertAlmostEqual(decay_trace(trace=2.0, elapsed=20.0, tau=20.0), 2.0 * math.exp(-1.0))
+        self.assertAlmostEqual(decay_trace(trace=2.0, elapsed=0.0, tau=20.0), 2.0)
+
+    def test_e_trace_deltas_match_accumulated_stdp_window(self):
+        pre_trace = math.exp(-10.0 / 20.0) + math.exp(-30.0 / 20.0)
+        post_trace = math.exp(-5.0 / 20.0) + math.exp(-25.0 / 20.0)
+
+        self.assertAlmostEqual(e_trace_post_delta(pre_trace, a_e=0.02), 0.02 * pre_trace)
+        self.assertAlmostEqual(e_trace_pre_delta(post_trace, a_e=0.02, beta_e=1.0), -0.02 * post_trace)
+
+    def test_i_trace_delta_matches_accumulated_symmetric_window(self):
+        tau_i1 = 10.0
+        tau_i2 = 20.0
+        beta_i = 1.15
+        trace1 = math.exp(-8.0 / tau_i1) + math.exp(-18.0 / tau_i1)
+        trace2 = math.exp(-8.0 / tau_i2) + math.exp(-18.0 / tau_i2)
+        expected = i_stdp_kernel(8.0, 0.02, tau_i1, tau_i2, beta_i)
+        expected += i_stdp_kernel(18.0, 0.02, tau_i1, tau_i2, beta_i)
+
+        self.assertAlmostEqual(i_trace_delta(trace1, trace2, 0.02, tau_i1, tau_i2, beta_i), expected)
 
 
 class AkitaSocMetricsTest(unittest.TestCase):

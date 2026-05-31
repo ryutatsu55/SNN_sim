@@ -42,6 +42,30 @@ def i_stdp_kernel(delta_t: float, a_i: float, tau_i1: float, tau_i2: float, beta
     )
 
 
+def decay_trace(trace: float, elapsed: float, tau: float) -> float:
+    """指数減衰traceをelapsedだけ進める。"""
+    if elapsed <= 0.0:
+        return trace
+    return trace * np.exp(-elapsed / tau)
+
+
+def e_trace_pre_delta(post_trace: float, a_e: float, beta_e: float) -> float:
+    """E-STDP trace型でpre spike時に適用する重み変化。"""
+    return -a_e * beta_e * post_trace
+
+
+def e_trace_post_delta(pre_trace: float, a_e: float) -> float:
+    """E-STDP trace型でpost spike時に適用する重み変化。"""
+    return a_e * pre_trace
+
+
+def i_trace_delta(trace1: float, trace2: float, a_i: float, tau_i1: float, tau_i2: float, beta_i: float) -> float:
+    """I-STDP trace型で相手側traceから重み変化を計算する。"""
+    c_i_beta = (tau_i1 / tau_i2) * beta_i
+    c_i = a_i / (1.0 - c_i_beta)
+    return c_i * (trace1 - (c_i_beta * trace2))
+
+
 @PLASTICITY_MODELS.register("custom_Akita")
 class CustomAkitaModel(BasePlasticityModel):
     """
@@ -55,6 +79,7 @@ class CustomAkitaModel(BasePlasticityModel):
         self.mode = self.config.mode
         if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
+        self.trace_mode = self.mode.endswith("_trace")
         self._gmax_scale = calculate_gmax_scale(
             num_synapses=len(self.weight),
             num_post=self.num_post,
@@ -63,7 +88,7 @@ class CustomAkitaModel(BasePlasticityModel):
 
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
 
-        cache_key = (self.mode, "g_scale_param")
+        cache_key = (self.mode, "trace" if self.trace_mode else "nearest", "g_scale_param")
         if cache_key not in CustomAkitaModel._snippet_cache:
             # 未登録の場合のみ生成
             CustomAkitaModel._snippet_cache[cache_key] = self._create_snippet()
@@ -83,6 +108,29 @@ class CustomAkitaModel(BasePlasticityModel):
             "x_release": np.zeros(self.num_pre, dtype='float32'),
             "t_last_pre": np.full(self.num_pre, -1e9, dtype='float32')
         }
+        post_vars_dict = {}
+
+        if self.trace_mode:
+            if self.mode.startswith("e-stdp"):
+                pre_vars_dict.update({
+                    "pre_trace": np.zeros(self.num_pre, dtype='float32'),
+                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float32'),
+                })
+                post_vars_dict.update({
+                    "post_trace": np.zeros(self.num_post, dtype='float32'),
+                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float32'),
+                })
+            else:
+                pre_vars_dict.update({
+                    "pre_trace1": np.zeros(self.num_pre, dtype='float32'),
+                    "pre_trace2": np.zeros(self.num_pre, dtype='float32'),
+                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float32'),
+                })
+                post_vars_dict.update({
+                    "post_trace1": np.zeros(self.num_post, dtype='float32'),
+                    "post_trace2": np.zeros(self.num_post, dtype='float32'),
+                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float32'),
+                })
         
         # モードに応じたパラメータ取得メソッドへディスパッチ
         if self.mode.startswith("e-stdp"):
@@ -90,7 +138,7 @@ class CustomAkitaModel(BasePlasticityModel):
         else:
             params = self._get_i_stdp_params()
 
-        return params, vars_dict, pre_vars_dict, {}
+        return params, vars_dict, pre_vars_dict, post_vars_dict
 
     def _get_e_stdp_params(self):
         return {
@@ -128,15 +176,41 @@ class CustomAkitaModel(BasePlasticityModel):
         }
 
     def _create_snippet(self):
-        pre_code, pre_syn_code, post_syn_code = self._build_cpp_codes()
+        pre_code, post_code, pre_syn_code, post_syn_code = self._build_cpp_codes()
 
         safe_mode = self.mode.replace("-", "_")
+        pre_var_defs = [("x", "scalar"), ("x_release", "scalar"), ("t_last_pre", "scalar")]
+        post_var_defs = []
+        if self.trace_mode:
+            if self.mode.startswith("e-stdp"):
+                pre_var_defs.extend([
+                    ("pre_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_pre_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                ])
+                post_var_defs.extend([
+                    ("post_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_post_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                ])
+            else:
+                pre_var_defs.extend([
+                    ("pre_trace1", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("pre_trace2", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_pre_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                ])
+                post_var_defs.extend([
+                    ("post_trace1", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("post_trace2", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_post_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                ])
+
         snippet = pygenn.create_weight_update_model(
             class_name=f"custom_Akita_{safe_mode}_gscaled",
             params=list(self._params.keys()),
             vars=[("w", "scalar"), ("d", "uint8_t")],
-            pre_vars=[("x", "scalar"), ("x_release", "scalar"), ("t_last_pre", "scalar")],
+            pre_vars=pre_var_defs,
+            post_vars=post_var_defs,
             pre_spike_code=pre_code,
+            post_spike_code=post_code,
             pre_spike_syn_code=pre_syn_code,
             post_spike_syn_code=post_syn_code
         )
@@ -155,11 +229,70 @@ class CustomAkitaModel(BasePlasticityModel):
             x -= x_release;
             t_last_pre = t;
         """
+
+        post_spike_code = ""
+
+        if self.trace_mode:
+            if self.mode.startswith("e-stdp"):
+                pre_spike_code += f"""
+                    pre_trace *= exp(-(t - t_last_pre_trace) / {cfg.tau_E});
+                    pre_trace += 1.0;
+                    t_last_pre_trace = t;
+                """
+                post_spike_code = f"""
+                    post_trace *= exp(-(t - t_last_post_trace) / {cfg.tau_E});
+                    post_trace += 1.0;
+                    t_last_post_trace = t;
+                """
+            else:
+                pre_spike_code += f"""
+                    const scalar dt_pre_trace = t - t_last_pre_trace;
+                    pre_trace1 *= exp(-dt_pre_trace / {cfg.tau_I1});
+                    pre_trace2 *= exp(-dt_pre_trace / {cfg.tau_I2});
+                    pre_trace1 += 1.0;
+                    pre_trace2 += 1.0;
+                    t_last_pre_trace = t;
+                """
+                post_spike_code = f"""
+                    const scalar dt_post_trace = t - t_last_post_trace;
+                    post_trace1 *= exp(-dt_post_trace / {cfg.tau_I1});
+                    post_trace2 *= exp(-dt_post_trace / {cfg.tau_I2});
+                    post_trace1 += 1.0;
+                    post_trace2 += 1.0;
+                    t_last_post_trace = t;
+                """
         
         # 伝播の基本コード (共通)
         pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
 
-        if self.mode.startswith("e-stdp"):
+        if self.trace_mode:
+            if self.mode.startswith("e-stdp"):
+                pre_spike_syn_code += f"""
+                    const scalar post_trace_now = post_trace * exp(-(t - t_last_post_trace) / tau_E);
+                    const scalar newWeight = w - (A_E * beta_E * post_trace_now);
+                    w = fmax(wMin, fmin(wMax, newWeight));
+                """
+                post_spike_syn_code = f"""
+                    const scalar pre_trace_now = pre_trace * exp(-(t - t_last_pre_trace) / tau_E);
+                    const scalar newWeight = w + (A_E * pre_trace_now);
+                    w = fmax(wMin, fmin(wMax, newWeight));
+                """
+            else:
+                pre_spike_syn_code += f"""
+                    const scalar dt_post_trace = t - t_last_post_trace;
+                    const scalar post_trace1_now = post_trace1 * exp(-dt_post_trace / tau_I1);
+                    const scalar post_trace2_now = post_trace2 * exp(-dt_post_trace / tau_I2);
+                    const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
+                    w = fmax(wMin, fmin(wMax, w + dW));
+                """
+                post_spike_syn_code = f"""
+                    const scalar dt_pre_trace = t - t_last_pre_trace;
+                    const scalar pre_trace1_now = pre_trace1 * exp(-dt_pre_trace / tau_I1);
+                    const scalar pre_trace2_now = pre_trace2 * exp(-dt_pre_trace / tau_I2);
+                    const scalar dW = C_I * (pre_trace1_now - C_I_beta * pre_trace2_now);
+                    w = fmax(wMin, fmin(wMax, w + dW));
+                """
+        elif self.mode.startswith("e-stdp"):
             pre_spike_syn_code += f"""
                 const scalar dt = t - st_post; 
                 if (dt > 0.0) {{
@@ -196,7 +329,7 @@ class CustomAkitaModel(BasePlasticityModel):
                 }}
             """
             
-        return pre_spike_code, pre_spike_syn_code, post_spike_syn_code
+        return pre_spike_code, post_spike_code, pre_spike_syn_code, post_spike_syn_code
 
     # ==========================================
     # 3. プロパティ (BasePlasticityModel の実装)
