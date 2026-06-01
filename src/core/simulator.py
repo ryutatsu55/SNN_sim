@@ -192,7 +192,7 @@ class GeNNSimulator:
 
         # スパイクが0件の場合の早期リターン
         if not all_times:
-            return {"times": np.array([], dtype=np.float32), "ids": np.array([], dtype=np.int32)}
+            return {"times": np.array([], dtype=np.float64), "ids": np.array([], dtype=np.int32)}
 
         # 結合とソート（複数Populationの混在を時間軸で整列）
         flat_times = np.concatenate(all_times)

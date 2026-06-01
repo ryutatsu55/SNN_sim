@@ -104,32 +104,32 @@ class CustomAkitaModel(BasePlasticityModel):
             "d": self.delay.astype('uint8')
         }
         pre_vars_dict = {
-            "x": np.ones(self.num_pre, dtype='float32'), 
+            "x": np.ones(self.num_pre, dtype='float32'),
             "x_release": np.zeros(self.num_pre, dtype='float32'),
-            "t_last_pre": np.full(self.num_pre, -1e9, dtype='float32')
+            "t_last_pre": np.full(self.num_pre, -1e9, dtype='float64')
         }
         post_vars_dict = {}
 
         if self.trace_mode:
             if self.mode.startswith("e-stdp"):
                 pre_vars_dict.update({
-                    "pre_trace": np.zeros(self.num_pre, dtype='float32'),
-                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float32'),
+                    "pre_trace": np.zeros(self.num_pre, dtype='float64'),
+                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float64'),
                 })
                 post_vars_dict.update({
-                    "post_trace": np.zeros(self.num_post, dtype='float32'),
-                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float32'),
+                    "post_trace": np.zeros(self.num_post, dtype='float64'),
+                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float64'),
                 })
             else:
                 pre_vars_dict.update({
-                    "pre_trace1": np.zeros(self.num_pre, dtype='float32'),
-                    "pre_trace2": np.zeros(self.num_pre, dtype='float32'),
-                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float32'),
+                    "pre_trace1": np.zeros(self.num_pre, dtype='float64'),
+                    "pre_trace2": np.zeros(self.num_pre, dtype='float64'),
+                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float64'),
                 })
                 post_vars_dict.update({
-                    "post_trace1": np.zeros(self.num_post, dtype='float32'),
-                    "post_trace2": np.zeros(self.num_post, dtype='float32'),
-                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float32'),
+                    "post_trace1": np.zeros(self.num_post, dtype='float64'),
+                    "post_trace2": np.zeros(self.num_post, dtype='float64'),
+                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float64'),
                 })
         
         # モードに応じたパラメータ取得メソッドへディスパッチ
@@ -179,28 +179,28 @@ class CustomAkitaModel(BasePlasticityModel):
         pre_code, post_code, pre_syn_code, post_syn_code = self._build_cpp_codes()
 
         safe_mode = self.mode.replace("-", "_")
-        pre_var_defs = [("x", "scalar"), ("x_release", "scalar"), ("t_last_pre", "scalar")]
+        pre_var_defs = [("x", "scalar"), ("x_release", "scalar"), ("t_last_pre", "double")]
         post_var_defs = []
         if self.trace_mode:
             if self.mode.startswith("e-stdp"):
                 pre_var_defs.extend([
-                    ("pre_trace", "scalar", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_pre_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("pre_trace", "double", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_pre_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
                 post_var_defs.extend([
-                    ("post_trace", "scalar", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_post_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("post_trace", "double", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_post_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
             else:
                 pre_var_defs.extend([
-                    ("pre_trace1", "scalar", pygenn.VarAccess.READ_WRITE),
-                    ("pre_trace2", "scalar", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_pre_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("pre_trace1", "double", pygenn.VarAccess.READ_WRITE),
+                    ("pre_trace2", "double", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_pre_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
                 post_var_defs.extend([
-                    ("post_trace1", "scalar", pygenn.VarAccess.READ_WRITE),
-                    ("post_trace2", "scalar", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_post_trace", "scalar", pygenn.VarAccess.READ_WRITE),
+                    ("post_trace1", "double", pygenn.VarAccess.READ_WRITE),
+                    ("post_trace2", "double", pygenn.VarAccess.READ_WRITE),
+                    ("t_last_post_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
 
         snippet = pygenn.create_weight_update_model(
