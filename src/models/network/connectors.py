@@ -1,6 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
+from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from src.core.registry import CONNECTION_MODELS
 
@@ -38,6 +39,32 @@ class OptionalConnection(BaseConnection):
         mask = np.zeros((self.num_neurons, self.num_neurons))
         mask[self.config.src_ID, self.config.tgt_ID] = 1
         return mask.astype(np.int8)
+    
+@CONNECTION_MODELS.register("C.elegans")
+class C_elegansConnection(BaseConnection):
+    def generate(self):
+        """synapse_mask.csvから接続マスクを読み込む。
+        元データにおいては0以外はすべて接続（1）として定義する。
+        """
+        csv_path = Path(__file__).parent / "data" / "c_elegans" / "synapse_mask.csv"
+
+        if not csv_path.exists():
+            raise FileNotFoundError(f"synapse_mask.csv not found at {csv_path}")
+
+        # synapse_mask.csvを読み込む
+        mask_data = np.loadtxt(csv_path, delimiter=",", dtype=np.int8)
+
+        # 形状チェック
+        if mask_data.shape != (self.num_neurons, self.num_neurons):
+            raise ValueError(
+                f"synapse_mask shape {mask_data.shape} does not match "
+                f"expected ({self.num_neurons}, {self.num_neurons})"
+            )
+
+        # 0以外をすべて1に変換
+        mask = (mask_data != 0).astype(np.int8)
+
+        return mask
 
 @CONNECTION_MODELS.register("distance_based")
 class DistanceBasedTopology(BaseConnection):
