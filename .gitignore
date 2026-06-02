@@ -1,9 +1,10 @@
 .venv/
 *.pyc
 result/*
-SNN_Model_CODE/*
+SNN_Model_CODE/
 remoteSSH.md
 
 output/*
 outputs/*
 results/*
+SNN_Model_verify_quick_CODE/

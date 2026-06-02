@@ -16,8 +16,8 @@ class NetworkBuilder:
     def __init__(self, config: AppConfig):
         self.config = config
         self.rng = np.random.RandomState(config.simulation.seed)
-        
-        self.genn_model = pygenn.GeNNModel("float", "SNN_Model")
+
+        self.genn_model = pygenn.GeNNModel("double", "SNN_Model", time_precision="double")
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
 
