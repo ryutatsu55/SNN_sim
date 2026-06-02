@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from mpl_toolkits.mplot3d import Axes3D
 import os
 from pathlib import Path
 
@@ -181,7 +183,7 @@ def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title
 def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="."):
     """
     STDPの学習特性（Δt vs Δw）をプロットし、画像として保存する関数。
-    
+
     Args:
         dw: 重みの変化量 (Δw = w_after - w_before) の配列
         dt: スパイク時間差 (Δt = t_post - t_pre) [ms] の配列
@@ -189,36 +191,244 @@ def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="
         save_path: 画像の保存先ディレクトリ
     """
     plt.figure(figsize=(10, 6))
-    
+
     # 0点を強調するガイドライン
     plt.axhline(0, color='black', linewidth=1, linestyle='--')
     plt.axvline(0, color='black', linewidth=1, linestyle='--')
-    
+
     # データの散布図と近似線
     plt.scatter(dt, dw, color='blue', alpha=0.6, label='Measured Data')
-    
+
     # スムーズな曲線を描くためのソート処理（プロット用）
     sort_idx = np.argsort(dt)
     plt.plot(dt[sort_idx], dw[sort_idx], color='red', linewidth=2, label='STDP Curve')
-    
+
     # 軸ラベルの設定
     plt.xlabel('Spike Timing Difference: $\Delta t$ [ms]', fontsize=12)
     plt.ylabel('Weight Change: $\Delta w$ (or $\Delta g$)', fontsize=12)
     plt.title(title, fontsize=14)
-    
+
     # 領域の解説（LTP/LTD）
     plt.text(max(dt)*0.7, max(dw)*0.1, 'LTP (Potentiation)', fontsize=10, color='green', fontweight='bold')
     plt.text(min(dt)*0.7, max(dw)*0.1, 'LTD (Depression)', fontsize=10, color='orange', fontweight='bold')
-    
+
     plt.grid(True, which='both', linestyle=':', alpha=0.5)
     plt.legend()
-    
+
     # 保存処理
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    
+
     file_full_path = os.path.join(save_path, f"{title}.png")
     plt.savefig(file_full_path, dpi=300)
     plt.close()
-    
+
     print(f"  [Visualization] STDP window plot saved to: {file_full_path}")
+
+def c_elegans_network(coords: np.ndarray, neuron_names: list, layers: list,
+                      mask: np.ndarray, weight_chem: np.ndarray, weight_elec: np.ndarray,
+                      mode: str = "xy", title: str = "C.elegans_network", save_path: str = "."):
+    """
+    C. elegansのニューロンネットワークを可視化する。
+
+    Parameters:
+        coords (np.ndarray): ニューロンの座標配列、形状 (N, 3) [X, Y, Z]
+        neuron_names (list): ニューロン名のリスト
+        layers (list): レイヤー分類のリスト
+        mask (np.ndarray): synapse_mask 行列 (N, N)
+            0: 接続なし, 1: 化学のみ, -1: 電気のみ, 2: 両方
+        weight_chem (np.ndarray): 化学シナプス重み行列 (N, N)
+        weight_elec (np.ndarray): 電気シナプス重み行列 (N, N)
+        mode (str): "xy" for 2D or "3d" for 3D visualization
+        title (str): グラフのタイトル
+        save_path (str): 保存先ディレクトリ
+    """
+    os.makedirs(save_path, exist_ok=True)
+
+    N = coords.shape[0]
+
+    # レイヤーごとの色付け
+    layer_names = sorted(set(layers))
+    layer_colors = plt.cm.tab10(np.linspace(0, 1, len(layer_names)))
+    layer_to_color = {layer: layer_colors[i] for i, layer in enumerate(layer_names)}
+    neuron_colors = np.array([layer_to_color[layer] for layer in layers])
+
+    # 重み行列の最大値で正規化（透明度・線幅用）
+    max_weight_chem = np.max(np.abs(weight_chem)) if np.max(np.abs(weight_chem)) > 0 else 1.0
+    max_weight_elec = np.max(np.abs(weight_elec)) if np.max(np.abs(weight_elec)) > 0 else 1.0
+
+    if mode == "xy":
+        _c_elegans_network_2d(coords, neuron_names, neuron_colors, mask, weight_chem, weight_elec,
+                              max_weight_chem, max_weight_elec, layer_names, layer_colors,
+                              title, save_path)
+    elif mode == "3d":
+        _c_elegans_network_3d(coords, neuron_names, neuron_colors, mask, weight_chem, weight_elec,
+                              max_weight_chem, max_weight_elec, layer_names, layer_colors,
+                              title, save_path)
+    else:
+        raise ValueError(f"mode must be 'xy' or '3d', got {mode}")
+
+
+def _c_elegans_network_2d(coords, neuron_names, neuron_colors, mask, weight_chem, weight_elec,
+                          max_weight_chem, max_weight_elec, layer_names, layer_colors,
+                          title, save_path):
+    """2D (XY平面) ネットワーク可視化"""
+    x = coords[:, 0]
+    y = coords[:, 1]
+
+    fig, ax = plt.subplots(figsize=(20, 10))
+
+    # ノード描画
+    scatter = ax.scatter(x, y, s=100, c=neuron_colors, edgecolors='black', linewidth=1.5, zorder=3)
+
+    # ノードのマージン計算
+    node_margin = 6
+
+    # 化学シナプス（矢印付き）
+    sources, targets = np.where((mask == 1) | (mask == 2))
+    for s, t in zip(sources, targets):
+        w = weight_chem[s, t]
+        if w != 0:
+            lw = (abs(w) / max_weight_chem) * 2.0 + 0.3
+            alpha = (abs(w) / max_weight_chem) * 0.7 + 0.2
+
+            if w > 0:
+                color = (0.9, 0.2, 0.2, alpha)  # Red for excitatory
+            else:
+                color = (0.2, 0.2, 0.9, alpha)  # Blue for inhibitory
+
+            ax.annotate(
+                "",
+                xy=(x[t], y[t]),
+                xytext=(x[s], y[s]),
+                arrowprops=dict(
+                    arrowstyle="->, head_length=0.4, head_width=0.3",
+                    color=color,
+                    linewidth=lw,
+                    shrinkA=node_margin,
+                    shrinkB=node_margin,
+                    connectionstyle="arc3,rad=0.05"
+                ),
+                zorder=1
+            )
+
+    # 電気シナプス（破線、矢印なし）
+    sources, targets = np.where((mask == -1) | (mask == 2))
+    for s, t in zip(sources, targets):
+        w = weight_elec[s, t]
+        if w != 0:
+            lw = (abs(w) / max_weight_elec) * 2.0 + 0.3
+            alpha = (abs(w) / max_weight_elec) * 0.7 + 0.2
+            color = (0.2, 0.8, 0.2, alpha)  # Green for electrical
+
+            ax.plot(
+                [x[s], x[t]],
+                [y[s], y[t]],
+                linestyle='--',
+                color=color,
+                linewidth=lw,
+                zorder=1
+            )
+
+    # 凡例
+    legend_elements = [
+        mpatches.Patch(color=(0.9, 0.2, 0.2, 0.5), label='Chemical (Excitatory)'),
+        mpatches.Patch(color=(0.2, 0.2, 0.9, 0.5), label='Chemical (Inhibitory)'),
+        mpatches.Patch(color=(0.2, 0.8, 0.2, 0.5), label='Electrical (Gap Junction)'),
+    ]
+    # レイヤー凡例を追加
+    for layer_name, color in zip(layer_names, layer_colors):
+        legend_elements.append(mpatches.Patch(color=color, label=f'Layer: {layer_name}'))
+
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=14)
+
+    ax.set_title(f"{title} (XY Plane)", fontsize=18, fontweight='bold')
+    ax.set_xlabel("X Coordinate [μm]", fontsize=16)
+    ax.set_ylabel("Y Coordinate [μm]", fontsize=16)
+    ax.tick_params(labelsize=14)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path = os.path.join(save_path, f"{title}_xy.png")
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"C. elegans network (2D) visualization saved to {output_path}")
+    plt.close()
+
+
+def _c_elegans_network_3d(coords, neuron_names, neuron_colors, mask, weight_chem, weight_elec,
+                          max_weight_chem, max_weight_elec, layer_names, layer_colors,
+                          title, save_path):
+    """3D ネットワーク可視化"""
+    x = coords[:, 0]
+    y = coords[:, 1]
+    z = coords[:, 2]
+
+    fig = plt.figure(figsize=(14, 12))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # ノード描画
+    ax.scatter(x, y, z, s=100, c=neuron_colors, edgecolors='black', linewidth=1.5, zorder=3)
+
+    # 化学シナプス（矢印なし、色分け）
+    sources, targets = np.where((mask == 1) | (mask == 2))
+    for s, t in zip(sources, targets):
+        w = weight_chem[s, t]
+        if w != 0:
+            lw = (abs(w) / max_weight_chem) * 2.0 + 0.3
+            alpha = (abs(w) / max_weight_chem) * 0.7 + 0.2
+
+            if w > 0:
+                color = (0.9, 0.2, 0.2, alpha)  # Red for excitatory
+            else:
+                color = (0.2, 0.2, 0.9, alpha)  # Blue for inhibitory
+
+            ax.plot(
+                [x[s], x[t]],
+                [y[s], y[t]],
+                [z[s], z[t]],
+                color=color,
+                linewidth=lw,
+                zorder=1
+            )
+
+    # 電気シナプス（破線）
+    sources, targets = np.where((mask == -1) | (mask == 2))
+    for s, t in zip(sources, targets):
+        w = weight_elec[s, t]
+        if w != 0:
+            lw = (abs(w) / max_weight_elec) * 2.0 + 0.3
+            alpha = (abs(w) / max_weight_elec) * 0.7 + 0.2
+            color = (0.2, 0.8, 0.2, alpha)  # Green for electrical
+
+            ax.plot(
+                [x[s], x[t]],
+                [y[s], y[t]],
+                [z[s], z[t]],
+                linestyle='--',
+                color=color,
+                linewidth=lw,
+                zorder=1
+            )
+
+    # 凡例
+    legend_elements = [
+        mpatches.Patch(color=(0.9, 0.2, 0.2, 0.5), label='Chemical (Excitatory)'),
+        mpatches.Patch(color=(0.2, 0.2, 0.9, 0.5), label='Chemical (Inhibitory)'),
+        mpatches.Patch(color=(0.2, 0.8, 0.2, 0.5), label='Electrical (Gap Junction)'),
+    ]
+    for layer_name, color in zip(layer_names, layer_colors):
+        legend_elements.append(mpatches.Patch(color=color, label=f'Layer: {layer_name}'))
+
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=14)
+
+    ax.set_title(f"{title} (3D)", fontsize=18, fontweight='bold')
+    ax.set_xlabel("X [μm]", fontsize=16)
+    ax.set_ylabel("Y [μm]", fontsize=16)
+    ax.set_zlabel("Z [μm]", fontsize=16)
+    ax.tick_params(labelsize=12)
+
+    plt.tight_layout()
+    output_path = os.path.join(save_path, f"{title}_3d.png")
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"C. elegans network (3D) visualization saved to {output_path}")
+    plt.close()
