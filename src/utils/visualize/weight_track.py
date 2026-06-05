@@ -331,7 +331,7 @@ def visualize_weight_tracks(
     view_type: str = "block",
 ) -> Path:
     """
-    重み行列の時間発展を可視化する（mainとして実行も可能）。
+    重み行列の時間発展を可視化する。
 
     Args:
         run_dir: weights_*h.npz を含む実験ディレクトリ
@@ -344,7 +344,8 @@ def visualize_weight_tracks(
     """
     run_dir = run_dir.resolve()
     if output_dir is None:
-        output_dir = run_dir / "weight_matrix"
+        # output_dir = run_dir / "weight_matrix"
+        output_dir = run_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     weight_files = discover_weight_files(run_dir)
