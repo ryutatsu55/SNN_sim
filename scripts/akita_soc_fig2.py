@@ -17,7 +17,7 @@ if str(project_root) not in sys.path:
 
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import create_run_output_dir, create_timestamped_output_dir
+from src.core.output_manager import create_run_output_dir, create_timestamped_output_dir, organize_output
 from src.core.simulator import GeNNSimulator
 from src.utils.akita_soc import (
     bimodality_d,
@@ -32,6 +32,8 @@ from src.utils.akita_soc import (
     split_avalanches,
     weight_block_metrics,
 )
+from src.utils.visualize.akita_soc_fig2c import plot_figure2c
+from src.utils.visualize.weight_track import visualize_weight_tracks
 
 import src.models.neurons.akita_escape_lif
 import src.models.network.connectors
@@ -319,6 +321,27 @@ def main():
         writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))
         writer.writeheader()
         writer.writerows(metrics_rows)
+
+    # 可視化関数を呼び出し
+    print(f"\nGenerating visualizations...")
+    try:
+        print(f"  Figure 2c...")
+        plot_figure2c(str(out_dir), group_info=group_info)
+    except Exception as e:
+        print(f"  Warning: Figure 2c generation failed: {e}")
+
+    try:
+        print(f"  Weight matrix tracks...")
+        visualize_weight_tracks(out_dir, group_info=group_info)
+    except Exception as e:
+        print(f"  Warning: Weight matrix visualization failed: {e}")
+
+    # データを整理（data フォルダに npz, csv, config.yaml をまとめる）
+    print(f"\nOrganizing output data...")
+    try:
+        organize_output(out_dir)
+    except Exception as e:
+        print(f"  Warning: Data organization failed: {e}")
 
     print(f"Akita SoC results saved to: {out_dir}")
 
