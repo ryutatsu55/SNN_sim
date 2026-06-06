@@ -26,6 +26,7 @@ from src.models.plasticity.custom_Akita import (
     e_trace_pre_delta,
     i_stdp_kernel,
     i_trace_delta,
+    is_trace_mode,
     recover_synaptic_resource,
 )
 from src.utils.akita_soc import (
@@ -163,6 +164,18 @@ class AkitaPlasticityTest(unittest.TestCase):
         expected += i_stdp_kernel(18.0, 0.02, tau_i1, tau_i2, beta_i)
 
         self.assertAlmostEqual(i_trace_delta(trace1, trace2, 0.02, tau_i1, tau_i2, beta_i), expected)
+
+    def test_trace_mode_recognizes_trace_profiles_with_suffixes(self):
+        self.assertTrue(is_trace_mode("e-stdp_akita_fig2_trace"))
+        self.assertTrue(is_trace_mode("i-stdp_akita_fig2_trace"))
+        self.assertTrue(is_trace_mode("e-stdp_akita_fig2_trace_unscaled_gmax"))
+        self.assertTrue(is_trace_mode("i-stdp_akita_fig2_trace_unscaled_gmax"))
+
+    def test_trace_mode_keeps_nearest_neighbor_profiles_disabled(self):
+        self.assertFalse(is_trace_mode("e-stdp_akita_fig2_legacy"))
+        self.assertFalse(is_trace_mode("i-stdp_akita_fig2_legacy"))
+        self.assertFalse(is_trace_mode("e-stdp"))
+        self.assertFalse(is_trace_mode("i-stdp"))
 
 
 class AkitaSocMetricsTest(unittest.TestCase):

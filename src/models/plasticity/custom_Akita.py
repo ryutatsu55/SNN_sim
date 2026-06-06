@@ -66,6 +66,11 @@ def i_trace_delta(trace1: float, trace2: float, a_i: float, tau_i1: float, tau_i
     return c_i * (trace1 - (c_i_beta * trace2))
 
 
+def is_trace_mode(mode: str) -> bool:
+    """モード名の独立した要素にtraceが含まれるかを判定する。"""
+    return "trace" in mode.split("_")
+
+
 @PLASTICITY_MODELS.register("custom_Akita")
 class CustomAkitaModel(BasePlasticityModel):
     """
@@ -79,7 +84,7 @@ class CustomAkitaModel(BasePlasticityModel):
         self.mode = self.config.mode
         if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
-        self.trace_mode = self.mode.endswith("_trace")
+        self.trace_mode = is_trace_mode(self.mode)
         self._gmax_scale = calculate_gmax_scale(
             num_synapses=len(self.weight),
             num_post=self.num_post,
