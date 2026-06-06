@@ -1,6 +1,7 @@
 import pygenn
 import numpy as np
 from src.core.registry import PLASTICITY_MODELS
+from triton.language import const
 from .BASE_plasticity import BasePlasticityModel
 
 def recover_synaptic_resource(x: float, delta_t: float, tau_rec: float) -> float:
@@ -114,22 +115,18 @@ class CustomAkitaModel(BasePlasticityModel):
             if self.mode.startswith("e-stdp"):
                 pre_vars_dict.update({
                     "pre_trace": np.zeros(self.num_pre, dtype='float64'),
-                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float64'),
                 })
                 post_vars_dict.update({
                     "post_trace": np.zeros(self.num_post, dtype='float64'),
-                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float64'),
                 })
             else:
                 pre_vars_dict.update({
                     "pre_trace1": np.zeros(self.num_pre, dtype='float64'),
                     "pre_trace2": np.zeros(self.num_pre, dtype='float64'),
-                    "t_last_pre_trace": np.full(self.num_pre, -1e9, dtype='float64'),
                 })
                 post_vars_dict.update({
                     "post_trace1": np.zeros(self.num_post, dtype='float64'),
                     "post_trace2": np.zeros(self.num_post, dtype='float64'),
-                    "t_last_post_trace": np.full(self.num_post, -1e9, dtype='float64'),
                 })
         
         # モードに応じたパラメータ取得メソッドへディスパッチ
@@ -185,22 +182,18 @@ class CustomAkitaModel(BasePlasticityModel):
             if self.mode.startswith("e-stdp"):
                 pre_var_defs.extend([
                     ("pre_trace", "double", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_pre_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
                 post_var_defs.extend([
                     ("post_trace", "double", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_post_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
             else:
                 pre_var_defs.extend([
                     ("pre_trace1", "double", pygenn.VarAccess.READ_WRITE),
                     ("pre_trace2", "double", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_pre_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
                 post_var_defs.extend([
                     ("post_trace1", "double", pygenn.VarAccess.READ_WRITE),
                     ("post_trace2", "double", pygenn.VarAccess.READ_WRITE),
-                    ("t_last_post_trace", "double", pygenn.VarAccess.READ_WRITE),
                 ])
 
         snippet = pygenn.create_weight_update_model(
@@ -220,7 +213,11 @@ class CustomAkitaModel(BasePlasticityModel):
     def _build_cpp_codes(self):
         """C++のロジックコードを生成する"""
         cfg = self.config
-        
+        # d はタイムステップ単位(uint8)。GeNN の t は ms 単位なので、
+        # STDP の時間演算では d を ms に換算する必要がある (d * dt)。
+        # ※ addToPostDelay の遅延引数はタイムステップ単位のため d のまま使う。
+        dt_ms = float(self.dt)
+
         # プレニューロン発火時: Eq. S11で回復し、Eq. S12で放出分を消費する。
         pre_spike_code = f"""
             const scalar dt_pre = t - t_last_pre;
@@ -235,31 +232,27 @@ class CustomAkitaModel(BasePlasticityModel):
         if self.trace_mode:
             if self.mode.startswith("e-stdp"):
                 pre_spike_code += f"""
-                    pre_trace *= exp(-(t - t_last_pre_trace) / {cfg.tau_E});
+                    pre_trace *= exp(-(t - st_pre) / {cfg.tau_E});
                     pre_trace += 1.0;
-                    t_last_pre_trace = t;
                 """
                 post_spike_code = f"""
-                    post_trace *= exp(-(t - t_last_post_trace) / {cfg.tau_E});
+                    post_trace *= exp(-(t - st_post) / {cfg.tau_E});
                     post_trace += 1.0;
-                    t_last_post_trace = t;
                 """
             else:
                 pre_spike_code += f"""
-                    const scalar dt_pre_trace = t - t_last_pre_trace;
+                    const scalar dt_pre_trace = t - st_pre;
                     pre_trace1 *= exp(-dt_pre_trace / {cfg.tau_I1});
                     pre_trace2 *= exp(-dt_pre_trace / {cfg.tau_I2});
                     pre_trace1 += 1.0;
                     pre_trace2 += 1.0;
-                    t_last_pre_trace = t;
                 """
                 post_spike_code = f"""
-                    const scalar dt_post_trace = t - t_last_post_trace;
+                    const scalar dt_post_trace = t - st_post;
                     post_trace1 *= exp(-dt_post_trace / {cfg.tau_I1});
                     post_trace2 *= exp(-dt_post_trace / {cfg.tau_I2});
                     post_trace1 += 1.0;
                     post_trace2 += 1.0;
-                    t_last_post_trace = t;
                 """
         
         # 伝播の基本コード (共通)
@@ -267,30 +260,74 @@ class CustomAkitaModel(BasePlasticityModel):
 
         if self.trace_mode:
             if self.mode.startswith("e-stdp"):
+                # Pre発火時: 過去のPost発火に対するLTD計算 (未来のPost発火は知り得ないのでここでは計算しない)
                 pre_spike_syn_code += f"""
-                    const scalar post_trace_now = post_trace * exp(-(t - t_last_post_trace) / tau_E);
+                    const scalar dt_post = t + (d * {dt_ms}) - st_post;
+                    const scalar post_trace_now = post_trace * exp(-dt_post / tau_E);
                     const scalar newWeight = w - (A_E * beta_E * post_trace_now);
                     w = fmax(wMin, fmin(wMax, newWeight));
                 """
+                # Post発火時: PreからのLTP計算 ＋ 伝播中のPreスパイクが取りこぼしたLTDの補填
                 post_spike_syn_code = f"""
-                    const scalar pre_trace_now = pre_trace * exp(-(t - t_last_pre_trace) / tau_E);
-                    const scalar newWeight = w + (A_E * pre_trace_now);
+                    const scalar dt_pre_arrival = t - (d * {dt_ms}) - st_pre;
+                    scalar newWeight = w;
+
+                    if (dt_pre_arrival < 0.0) {{
+                        // 【ロールバック】伝播中のPreスパイクが存在する場合
+                        // 1. 伝播中のスパイク(+1.0)を除外して過去のLTPを計算
+                        const scalar pre_trace_restored = (pre_trace - 1.0) * exp(-dt_pre_arrival / tau_E);
+                        newWeight += A_E * pre_trace_restored;
+    
+                        // 2. 伝播中のPreスパイクが到着時に行うはずだったLTD計算を、今のpost_traceを使って先取り補填
+                        //    ※ t == t_last_pre_trace（pre/postの同時発火）は pre_spike_syn 側で
+                        //      既にLTD計上済みのため、ここで補填すると二重計上になる → 厳密にpost後発のみ補填
+                        if (t > st_pre) {{
+                            const scalar time_until_arrival = st_pre + (d * {dt_ms}) - t;
+                            const scalar missing_LTD = A_E * beta_E * exp(-time_until_arrival / tau_E);
+                            newWeight -= missing_LTD;
+                        }}
+                    }} else {{
+                        // 通常のLTP計算
+                        const scalar pre_trace_now = pre_trace * exp(-dt_pre_arrival / tau_E);
+                        newWeight += A_E * pre_trace_now;
+                    }}
                     w = fmax(wMin, fmin(wMax, newWeight));
                 """
             else:
                 pre_spike_syn_code += f"""
-                    const scalar dt_post_trace = t - t_last_post_trace;
+                    const scalar dt_post_trace = t + (d * {dt_ms}) - st_post;
                     const scalar post_trace1_now = post_trace1 * exp(-dt_post_trace / tau_I1);
                     const scalar post_trace2_now = post_trace2 * exp(-dt_post_trace / tau_I2);
                     const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
                     w = fmax(wMin, fmin(wMax, w + dW));
                 """
                 post_spike_syn_code = f"""
-                    const scalar dt_pre_trace = t - t_last_pre_trace;
-                    const scalar pre_trace1_now = pre_trace1 * exp(-dt_pre_trace / tau_I1);
-                    const scalar pre_trace2_now = pre_trace2 * exp(-dt_pre_trace / tau_I2);
-                    const scalar dW = C_I * (pre_trace1_now - C_I_beta * pre_trace2_now);
-                    w = fmax(wMin, fmin(wMax, w + dW));
+                    const scalar dt_pre_arrival = t - (d * {dt_ms}) - st_pre;
+                    scalar newWeight = w;
+
+                    if (dt_pre_arrival < 0.0) {{
+                        // 【ロールバック】
+                        // 1. 伝播中のスパイク(+1.0)を除外した更新
+                        const scalar pre_trace1_restored = (pre_trace1 - 1.0) * exp(-dt_pre_arrival / tau_I1);
+                        const scalar pre_trace2_restored = (pre_trace2 - 1.0) * exp(-dt_pre_arrival / tau_I2);
+                        newWeight += C_I * (pre_trace1_restored - C_I_beta * pre_trace2_restored);
+
+                        // 2. 伝播中のPreスパイクの先取り補填
+                        //    ※ t == t_last_pre_trace（pre/postの同時発火）は pre_spike_syn 側で
+                        //      既に計上済みのため、ここで補填すると二重計上になる → 厳密にpost後発のみ補填
+                        if (t > st_pre) {{
+                            const scalar time_until_arrival = st_pre + (d * {dt_ms}) - t;
+                            const scalar future_post1 = post_trace1 * exp(-time_until_arrival / tau_I1);
+                            const scalar future_post2 = post_trace2 * exp(-time_until_arrival / tau_I2);
+                            newWeight += C_I * (future_post1 - C_I_beta * future_post2);
+                        }}
+                    }} else {{
+                        // 通常の更新
+                        const scalar pre_trace1_now = pre_trace1 * exp(-dt_pre_arrival / tau_I1);
+                        const scalar pre_trace2_now = pre_trace2 * exp(-dt_pre_arrival / tau_I2);
+                        newWeight += C_I * (pre_trace1_now - C_I_beta * pre_trace2_now);
+                    }}
+                    w = fmax(wMin, fmin(wMax, newWeight));
                 """
         elif self.mode.startswith("e-stdp"):
             pre_spike_syn_code += f"""

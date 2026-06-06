@@ -217,6 +217,12 @@ class GeNNSimulator:
                 for var_name, var in pop.vars.items():
                     var.view[:] = self.initial_states['neurons'][pop_name][var_name]
                     var.push_to_device()
+            # sT (スパイク時刻) のリセット。timestep=0 で t が 0 に戻るのに sT だけ
+            # 前試行の正値が残ると dt_pre_arrival = t - d*dt - st_pre が負になり
+            # ロールバック条件を誤って満たしてしまうため -TIME_MAX に戻す。
+            if pop.spike_times is not None:
+                pop.spike_times.view[:] = -np.finfo(pop.spike_times.view.dtype).max
+                pop.spike_times.push_to_device()
 
         # 2. シナプス変数のリセット (g, d, x, t_last_pre など)
         # STDPモデルなどの学習状態を初期化するために必須です

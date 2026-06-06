@@ -111,7 +111,11 @@ def save_config(config, out_dir: Path):
 
 def resolve_output_dir(out_dir_arg: str | None) -> Path:
     if out_dir_arg:
-        return create_timestamped_output_dir(out_dir_arg)
+        output_dir = create_timestamped_output_dir(out_dir_arg)
+        # ディレクトリが実際に作成されたか確認
+        if not output_dir.exists():
+            raise RuntimeError(f"Failed to create output directory: {output_dir}")
+        return output_dir
     return create_run_output_dir("akita_soc")
 
 
@@ -255,8 +259,19 @@ def main():
             current_ms += develop_ms
 
         hour = record_start_ms / (60.0 * 60.0 * 1000.0)
+
+        # Ensure output directory exists before saving
+        if not out_dir.exists():
+            out_dir.mkdir(parents=True, exist_ok=True)
+
         weights = sim.pull_synapse("w")
-        np.savez_compressed(out_dir / f"weights_{hour:g}h.npz", weights=weights)
+        weights_path = out_dir / f"weights_{hour:g}h.npz"
+        try:
+            np.savez_compressed(weights_path, weights=weights)
+        except FileNotFoundError as e:
+            print(f"Error saving {weights_path}: {e}")
+            print(f"Output dir exists: {out_dir.exists()}, is_dir: {out_dir.is_dir()}")
+            raise
 
         spikes = run_steps(sim, record_window_steps, chunk_steps, keep_spikes=True)
         current_ms += record_window_steps * dt

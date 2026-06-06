@@ -1,3 +1,10 @@
+# 複数スパイクに対する custom_Akita (e-stdp_trace) の重み更新検証用 config
+# test/core/STDPtest/test_multi_spike.py 専用 (load_resolved で読み込む resolved 形式)
+#
+# 重要な調整点 (test.yaml との差分):
+#   - plasticity.g_max: 0.0   -> EPSP 伝播を無効化し、スパイクのタイミングを完全に制御する
+#                                (STDP 更新は A_E/beta_E を直接使うため g_max=0 でも機能する)
+#   - weight.base_weight: 0.5 -> [Wmin, Wmax]=[0,1] の中央。dw がクランプしないよう余裕を確保
 simulation:
   dt: 0.1
   N: 150
@@ -31,8 +38,8 @@ synapses:
       type: custom_Akita
       mode: e-stdp_trace
       tau_rec: 150.0  # [ms]
-      U: 0.4           
-      g_max: 4.0      # [uS]
+      U: 0.4
+      g_max: 0.0      # [uS] EPSP伝播を無効化 (発火タイミングを完全制御)
       A_E: 0.02
       tau_E: 20.0
       beta_E: 1.12
@@ -56,7 +63,7 @@ synapses:
 #     synapse:
 #       type: ExpCond
 #       mode: inhibitory
-#       tau: 4.0
+#       tau: 2.0
 #       E: -80.0
 #     plasticity:
 #       type: custom_Akita
@@ -87,16 +94,13 @@ network:
     tgt_ID: 0
   weight:
     profile_name: constant
-    base_weight: 0.05
+    base_weight: 0.5
   delay:
     profile_name: constant
-    value: 10.5
+    value: 1.5
 task:
-  profile_name: stdp_test
-  duration: 100.0
+  profile_name: stdp_multi_test
+  duration: 120.0
   input: -49.0
-  dt_max: 50
-  dt_min: -50
-  ddt: 2
 meta:
-  timestamp: 2026-05-14_09-12-11
+  timestamp: 2026-06-05_00-00-00
