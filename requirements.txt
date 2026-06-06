@@ -9,6 +9,7 @@ cuda-bindings==13.2.0
 cuda-pathfinder==1.5.2
 cuda-toolkit==13.0.2
 cycler==0.12.1
+et_xmlfile==2.0.0
 fasttext==0.9.3
 filelock==3.25.2
 fonttools==4.62.1
@@ -40,7 +41,9 @@ nvidia-nccl-cu13==2.28.9
 nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
+openpyxl==3.1.5
 packaging==26.0
+pandas==3.0.3
 pillow==12.1.1
 pkgconfig==1.6.0
 pluggy==1.6.0
