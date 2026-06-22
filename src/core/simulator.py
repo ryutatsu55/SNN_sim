@@ -38,9 +38,11 @@ class GeNNSimulator:
         }
 
         # 1. ニューロンの初期状態保存
+        # GPU で初期化された値を CPU に pull してから保存する
         for pop_name, pop in self.model.neuron_populations.items():
             self.initial_states['neurons'][pop_name] = {}
             for var_name, var in pop.vars.items():
+                var.pull_from_device()
                 self.initial_states['neurons'][pop_name][var_name] = np.copy(var.view)
 
         # 2. シナプスの初期状態保存 (vars, pre_vars, post_vars)
@@ -53,20 +55,24 @@ class GeNNSimulator:
             }
             # 接続ごとの変数 (重みgなど)
             for var_name, var in pop.vars.items():
+                var.pull_from_device()
                 self.initial_states['synapses'][pop_name]['vars'][var_name] = np.copy(var.values)
-            
+
             # Preニューロンごとの変数 (STDPトレースなど)
             for var_name, var in pop.pre_vars.items():
+                var.pull_from_device()
                 self.initial_states['synapses'][pop_name]['pre_vars'][var_name] = np.copy(var.values)
-            
+
             # Postニューロンごとの変数
             for var_name, var in pop.post_vars.items():
+                var.pull_from_device()
                 self.initial_states['synapses'][pop_name]['post_vars'][var_name] = np.copy(var.values)
 
         # 3. カレントソース（入力源）の初期状態保存
         for cs_name, cs in self.model.current_sources.items():
             self.initial_states['current_sources'][cs_name] = {}
             for var_name, var in cs.vars.items():
+                var.pull_from_device()
                 self.initial_states['current_sources'][cs_name][var_name] = np.copy(var.values)
 
         self.is_setup = True
@@ -133,6 +139,18 @@ class GeNNSimulator:
             
         # グローバル配列に再構築して返す
         return self._merge_local_to_global(local_data_dict)
+
+    def pull_pre_var(self, var_name: str, dtype=np.float32) -> np.ndarray:
+        """シナプス集団の pre-var をグローバル (total_neurons,) 配列で返す"""
+        global_data = np.full(self.total_neurons, np.nan, dtype=dtype)
+        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
+            if var_name not in syn_pop.pre_vars:
+                continue
+            syn_pop.pre_vars[var_name].pull_from_device()
+            values = np.copy(syn_pop.pre_vars[var_name].values)
+            src_name, _, _ = syn_pop_name.partition("_to_")
+            global_data[self.group_info[src_name]["global_indices"]] = values
+        return global_data
 
     def pull_synapse(self, var_name: str) -> np.ndarray:
         """
