@@ -53,10 +53,18 @@ PAPER_AVALANCHE_YLIM = (1e-5, 1.0)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="AkitaDai APL 2023 Fig.2相当の代表条件を実行します。")
-    parser.add_argument("--config", default="configs/akita_soc_fig2.yaml")
+    parser.add_argument("--config", default="configs/akita_soc.yaml")
     parser.add_argument("--replot-from", default=None, help="既存の実験出力ディレクトリからPNGだけを再生成する")
     parser.add_argument("--duration-hours", type=float, default=None)
     parser.add_argument("--record-hours", type=float, nargs="*", default=None)
+    parser.add_argument(
+        "--record-hours-range",
+        type=float,
+        nargs="+",
+        metavar=("START", "STOP"),
+        default=None,
+        help="START STOP [STEP=1] で等間隔の記録時刻リストを生成 (例: --record-hours-range 0 72 1)",
+    )
     parser.add_argument("--record-window-ms", type=float, default=None)
     parser.add_argument("--record-buffer-ms", type=float, default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -70,6 +78,12 @@ def apply_overrides(config, args):
         config.task.duration = args.duration_hours * 60.0 * 60.0 * 1000.0
     if args.record_hours is not None and len(args.record_hours) > 0:
         config.task.record_hours = args.record_hours
+    if args.record_hours_range is not None:
+        parts = args.record_hours_range
+        start = parts[0]
+        stop = parts[1] if len(parts) >= 2 else parts[0]
+        step = parts[2] if len(parts) >= 3 else 1.0
+        config.task.record_hours = list(np.arange(start, stop + step * 0.5, step))
     if args.record_window_ms is not None:
         config.task.record_window_ms = args.record_window_ms
     if args.record_buffer_ms is not None:
@@ -104,9 +118,19 @@ def run_steps(sim: GeNNSimulator, steps: int, chunk_steps: int, keep_spikes: boo
     return {"times": times[order], "ids": ids[order]}
 
 
+def _to_python_native(obj):
+    if isinstance(obj, dict):
+        return {k: _to_python_native(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_python_native(v) for v in obj]
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
+
+
 def save_config(config, out_dir: Path):
     with open(out_dir / "config.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump(config.model_dump(), f, allow_unicode=True, sort_keys=False)
+        yaml.safe_dump(_to_python_native(config.model_dump()), f, allow_unicode=True, sort_keys=False)
 
 
 def resolve_output_dir(out_dir_arg: str | None) -> Path:
@@ -234,7 +258,7 @@ def main():
     save_config(config, out_dir)
     shutil.copy2(args.config, out_dir / "source_config.yaml")
 
-    builder = NetworkBuilder(config)
+    builder = NetworkBuilder(config, model_name=Path(args.config).stem)
     genn_model, group_info = builder.build(rec_spike=True)
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()

@@ -158,6 +158,22 @@ python scripts/akita_soc_fig2.py \
   > "$LOG_PATH" 2>&1
 ```
 
+`record-hours-range`: `START STOP [STEP=1]` で等間隔リストを生成できる。例: `--record-hours-range 0 72 1` で1時間刻み73点
+```bash
+python scripts/akita_soc_fig2.py \
+  --config configs/akita_soc_autapse.yaml \
+  --record-hours-range 0 72 \
+  --record-window-ms 600000 \
+  --record-buffer-ms 10000 \
+  --out-dir outputs/autapus \
+  > "$LOG_PATH" 2>&1
+```
+
+tmuxセッションの立ち上げ、configファイルの指定、以下でディレクトリの作成、log_pathの指定、python実行まですべてやってくれる
+```bash
+tmux new -s delay   -d 'bash scripts/run_akita_soc.sh akita_soc_delay'
+```
+
 `--out-dir` は実験グループのベースディレクトリとして扱われます。実際の成果物は、その直下に作られる `YYYYmmdd-HHMMSS/` ディレクトリへ保存されます。
 
 `scripts/akita_soc_fig2.py` には `--duration-hours` もありますが、現在の処理では実際にどこまで進めるかは主に `--record-hours` の最大値で決まります。72時間相当を回す場合は、`--record-hours 0 6 72` を明示してください。

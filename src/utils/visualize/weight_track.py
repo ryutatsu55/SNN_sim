@@ -335,7 +335,7 @@ def visualize_weight_tracks(
 
     Args:
         run_dir: weights_*h.npz を含む実験ディレクトリ
-        output_dir: 出力先ディレクトリ。None の場合は run_dir/weight_matrix
+        output_dir: 出力先ディレクトリ。None の場合は run_dir
         group_info: NetworkBuilder.build() の戻り値。None の場合は config.yaml から復元
         view_type: 'block'（興奮性・抑制性でブロック化）または 'global'（グローバル ID の順序）
 
