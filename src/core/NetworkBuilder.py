@@ -1,8 +1,19 @@
+import os
 import numpy as np
 import pygenn
 from typing import Dict, Any, Tuple
 from pathlib import Path
 import sys
+
+# CUDAバックエンドを有効にするため、未設定の場合はデフォルトパスを補完する
+if not os.environ.get("CUDA_PATH"):
+    for _candidate in ["/usr/local/cuda", "/usr/cuda"]:
+        if Path(_candidate).exists():
+            os.environ["CUDA_PATH"] = _candidate
+            break
+
+# CPU/GPU切り替え: False にすると single_threaded_cpu バックエンドを使用
+USE_GPU = False
 
 project_root = str(Path(__file__).resolve().parent.parent.parent)
 if project_root not in sys.path:
@@ -13,11 +24,12 @@ from src.core.config_manager import AppConfig
 from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
 
 class NetworkBuilder:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, model_name: str = "SNN_Model"):
         self.config = config
         self.rng = np.random.RandomState(config.simulation.seed)
 
-        self.genn_model = pygenn.GeNNModel("double", "SNN_Model", time_precision="double")
+        _backend = "cuda" if USE_GPU else "single_threaded_cpu"
+        self.genn_model = pygenn.GeNNModel("double", model_name, time_precision="double", backend=_backend)
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
 
