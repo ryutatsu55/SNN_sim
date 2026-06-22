@@ -1,3 +1,10 @@
+# 複数スパイクに対する custom_Akita (e-stdp_trace) の重み更新検証用 config
+# test/core/STDPtest/test_multi_spike.py 専用 (load_resolved で読み込む resolved 形式)
+#
+# 重要な調整点 (test.yaml との差分):
+#   - plasticity.g_max: 0.0   -> EPSP 伝播を無効化し、スパイクのタイミングを完全に制御する
+#                                (STDP 更新は A_E/beta_E を直接使うため g_max=0 でも機能する)
+#   - weight.base_weight: 0.5 -> [Wmin, Wmax]=[0,1] の中央。dw がクランプしないよう余裕を確保
 simulation:
   dt: 0.1
   N: 150
@@ -7,39 +14,6 @@ inputs:
     enable: false
     mean: 10.0
     sd: 1.0
-# neurons:
-#   Layer_Exc:
-#     type: test_LIF
-#     mode: excitatory
-#     num: 2
-#     C: 1.0
-#     TauM: 20.0
-#     Vrest: -60.0
-#     Vthresh: -50.0
-#     Vreset: -65.0
-#     Ioffset: 0.0
-#     TauRefrac: 5.0
-# synapses:
-#   from_Exc:
-#     source: Layer_Exc
-#     synapse:
-#       type: ExpCond
-#       mode: excitatory
-#       tau: 2.0
-#       E: 0.0
-#     plasticity:
-#       type: custom_Akita
-#       mode: e-stdp_legacy
-#       tau_rec: 150.0  # [ms]
-#       U: 0.4           
-#       g_max: 0.0      # [uS]
-#       normalize_gmax_by_fan_in: true
-#       A_E: 0.02
-#       tau_E: 20.0
-#       beta_E: 1.12
-#       Wmin: 0.0
-#       Wmax: 1.0
-#       trace_algorithm: legacy
 neurons:
   Layer_Inh:
     type: test_LIF
@@ -58,14 +32,15 @@ synapses:
     synapse:
       type: ExpCond
       mode: inhibitory
-      tau: 4.0
+      tau: 2.0
       E: -80.0
     plasticity:
       type: custom_Akita
-      mode: i-stdp_legacy
+      mode: i-stdp_trace
+      trace_algorithm: legacy
       tau_rec: 150.0
       U: 0.4
-      g_max: 4.0
+      g_max: 0.0
       normalize_gmax_by_fan_in: true
       A_I: 0.02
       tau_I1: 10.0
@@ -73,7 +48,6 @@ synapses:
       beta_I: 1.12
       Wmin: 0.0
       Wmax: 1.0
-      trace_algorithm: legacy
 network:
   space:
     profile_name: block_2d
@@ -91,16 +65,13 @@ network:
     tgt_ID: 0
   weight:
     profile_name: constant
-    base_weight: 0.05
+    base_weight: 0.5
   delay:
     profile_name: constant
-    value: 10.0
+    value: 0.0
 task:
-  profile_name: stdp_test
-  duration: 150.0
+  profile_name: stdp_multi_test
+  duration: 120.0
   input: -49.0
-  dt_max: 100
-  dt_min: -100
-  ddt: 2
 meta:
-  timestamp: 2026-05-14_09-12-11
+  timestamp: 2026-06-05_00-00-00

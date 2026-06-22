@@ -13,12 +13,12 @@ neurons:
     mode: excitatory
     num: 2
     C: 1.0
-    TauM: 20.0
-    Vrest: -60.0
-    Vthresh: -50.0
-    Vreset: -65.0
+    TauM: 30.0
+    Vrest: -74.0
+    Vthresh: 54.0
+    Vreset: -74.0
     Ioffset: 0.0
-    TauRefrac: 5.0
+    TauRefrac: 3.0
 synapses:
   from_Exc:
     source: Layer_Exc
@@ -55,14 +55,14 @@ network:
     tgt_ID: 0
   weight:
     profile_name: constant
-    base_weight: 0.2
+    base_weight: 1.0
   delay:
     profile_name: constant
     value: 10.0
 task:
   profile_name: lif_test
-  duration: 100.0
-  input: -49.0
+  duration: 50.0
+  input: 100.0
   devide: 5
   tgt_ID: 1
 meta:

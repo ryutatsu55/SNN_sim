@@ -72,6 +72,7 @@ def main():
     # 結果保存用のコンテナ (実験スクリプトで柔軟に取捨選択する想定)
     results = np.zeros((data_loader.total_steps, builder.total_neurons))  # 例: 全ニューロンの膜電位を保存する場合
     I_in = np.zeros((data_loader.total_steps, builder.total_neurons))
+    x_data = np.full((data_loader.total_steps, builder.total_neurons), np.nan, dtype=np.float32)
     
     for trial_idx, (trial_inputs, meta) in enumerate(data_loader.generate()):
         print(f"  --- Trial {trial_idx + 1} ---")
@@ -88,6 +89,7 @@ def main():
                 sim.step()
                 results[step,:] = sim.pull("V")
                 I_in[step,:] = sim.pull("Isyn_rec")
+                x_data[step,:] = sim.pull_pre_var("x")
                 step += 1
 
         # 3. デバイスから記録バッファを一括で引き出す
@@ -117,10 +119,11 @@ def main():
         results,
         I_in,
         trial_results["times"],
-        trial_results["ids"], 
+        trial_results["ids"],
         config,
         id = 0,
-        save_path="test/core/STPtest"
+        save_path="test/core/STPtest",
+        x_data=x_data
     )
 
     visualize.network(
