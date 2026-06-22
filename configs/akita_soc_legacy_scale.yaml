@@ -27,7 +27,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: e-stdp_akita_fig2
+      mode: e-stdp_legacy
     synapse:
       type: ExpCond
       mode: excitatory
@@ -38,7 +38,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: i-stdp_akita_fig2
+      mode: i-stdp_legacy
     synapse:
       type: ExpCond
       mode: inhibitory

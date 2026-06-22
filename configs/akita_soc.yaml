@@ -27,7 +27,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: e-stdp_akita_stable_probe
+      mode: e-stdp_trace
     synapse:
       type: ExpCond
       mode: excitatory
@@ -38,13 +38,13 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: i-stdp_akita_stable_probe
+      mode: i-stdp_trace
     synapse:
       type: ExpCond
       mode: inhibitory
 
 network:
   space: no_space
-  connection: constant_prob_sparse
+  connection: constant_prob_full
   weight: constant_zero
   delay: constant
