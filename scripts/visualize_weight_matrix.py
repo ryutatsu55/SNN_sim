@@ -82,9 +82,9 @@ def infer_group_ids(run_dir: Path, matrix_size: int | None = None) -> GroupIds:
             available_indices = np.setdiff1d(available_indices, assigned)
             assigned.sort()
             mode = cfg.get("mode")
-            if mode == "excitatory":
+            if (mode or "").startswith("excitatory"):
                 excitatory.append(assigned)
-            elif mode == "inhibitory":
+            elif (mode or "").startswith("inhibitory"):
                 inhibitory.append(assigned)
 
         return GroupIds(

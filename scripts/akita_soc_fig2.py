@@ -69,6 +69,11 @@ def parse_args():
     parser.add_argument("--record-buffer-ms", type=float, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--out-dir", default=None, help="日時付き実行ディレクトリを作るベースディレクトリ")
+    parser.add_argument(
+        "--genn-code-dir",
+        default="genn_code",
+        help="GeNN生成コード(<model名>_CODE)を集約する親ディレクトリ (既定: genn_code)",
+    )
     parser.add_argument("--task-name", default=TASK_NAME)
     return parser.parse_args()
 
@@ -133,9 +138,9 @@ def save_config(config, out_dir: Path):
         yaml.safe_dump(_to_python_native(config.model_dump()), f, allow_unicode=True, sort_keys=False)
 
 
-def resolve_output_dir(out_dir_arg: str | None) -> Path:
+def resolve_output_dir(out_dir_arg: str | None, suffix: str | None = None) -> Path:
     if out_dir_arg:
-        output_dir = create_timestamped_output_dir(out_dir_arg)
+        output_dir = create_timestamped_output_dir(out_dir_arg, suffix=suffix)
         # ディレクトリが実際に作成されたか確認
         if not output_dir.exists():
             raise RuntimeError(f"Failed to create output directory: {output_dir}")
@@ -147,11 +152,12 @@ def get_group_ids(config, group_info):
     excitatory_ids = []
     inhibitory_ids = []
     for group_name, neuron_cfg in config.neurons.items():
-        mode = getattr(neuron_cfg, "mode", None)
+        mode = getattr(neuron_cfg, "mode", None) or ""
         ids = group_info[group_name]["global_indices"]
-        if mode == "excitatory":
+        # mode は "excitatory" / "excitatory_b8" 等のバリアントを許容 (prefix一致で分類)
+        if mode.startswith("excitatory"):
             excitatory_ids.append(ids)
-        elif mode == "inhibitory":
+        elif mode.startswith("inhibitory"):
             inhibitory_ids.append(ids)
 
     return {
@@ -254,11 +260,16 @@ def main():
     config = manager.resolve(args.config, args.task_name)
     apply_overrides(config, args)
 
-    out_dir = resolve_output_dir(args.out_dir)
+    # seed をモデル名・出力ディレクトリ名に反映する。
+    # → GeNNコード生成先 (<model名>_CODE) も出力先も seed ごとに分離され、
+    #   同一 config を複数 seed で並列実行しても衝突しない。
+    seed_tag = f"seed{config.simulation.seed}"
+    out_dir = resolve_output_dir(args.out_dir, suffix=seed_tag)
     save_config(config, out_dir)
     shutil.copy2(args.config, out_dir / "source_config.yaml")
 
-    builder = NetworkBuilder(config, model_name=Path(args.config).stem)
+    model_name = f"{Path(args.config).stem}_{seed_tag}"
+    builder = NetworkBuilder(config, model_name=model_name, code_gen_dir=args.genn_code_dir)
     genn_model, group_info = builder.build(rec_spike=True)
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
