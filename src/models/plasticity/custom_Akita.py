@@ -160,6 +160,16 @@ class CustomAkitaModel(BasePlasticityModel):
                     "post_trace1": np.zeros(self.num_post, dtype='float64'),
                     "post_trace2": np.zeros(self.num_post, dtype='float64'),
                 })
+        else:
+            # nearest モード: per-synapse trace + post trace（= 1.0 上書きで nearest-neighbor を実現）
+            if self._is_e_stdp:
+                vars_dict["pre_trace_syn"] = np.zeros(len(self.weight), dtype='float64')
+                post_vars_dict["post_trace"] = np.zeros(self.num_post, dtype='float64')
+            else:
+                vars_dict["pre_trace_syn1"] = np.zeros(len(self.weight), dtype='float64')
+                vars_dict["pre_trace_syn2"] = np.zeros(len(self.weight), dtype='float64')
+                post_vars_dict["post_trace1"] = np.zeros(self.num_post, dtype='float64')
+                post_vars_dict["post_trace2"] = np.zeros(self.num_post, dtype='float64')
 
         # モードに応じたパラメータ取得メソッドへディスパッチ
         if self._is_e_stdp:
@@ -215,9 +225,14 @@ class CustomAkitaModel(BasePlasticityModel):
         pre_code, post_code, pre_syn_code, post_syn_code, syn_dyn_code = self._build_cpp_codes()
 
         safe_mode = self.mode.replace("-", "_")
-        alg_suffix = "leg" if self.trace_algorithm == "legacy" else "dc"
+        if not self.trace_mode:
+            alg_suffix = "ndc"
+        elif self.trace_algorithm == "legacy":
+            alg_suffix = "leg"
+        else:
+            alg_suffix = "dc"
 
-        # per-synapse vars: w, d は共通。delay_corrected では pre_trace_syn も per-synapse
+        # per-synapse vars: w, d は共通。delay_corrected/nearest では pre_trace_syn も per-synapse
         var_defs = [("w", "scalar"), ("d", "uint8_t")]
         pre_var_defs = [("x", "scalar"), ("x_release", "scalar")]
         post_var_defs = []
@@ -236,6 +251,16 @@ class CustomAkitaModel(BasePlasticityModel):
                 else:
                     pre_var_defs.append(("pre_trace1", "double", pygenn.VarAccess.READ_WRITE))
                     pre_var_defs.append(("pre_trace2", "double", pygenn.VarAccess.READ_WRITE))
+                post_var_defs.append(("post_trace1", "double", pygenn.VarAccess.READ_WRITE))
+                post_var_defs.append(("post_trace2", "double", pygenn.VarAccess.READ_WRITE))
+        else:
+            # nearest モード: per-synapse trace + post trace
+            if self._is_e_stdp:
+                var_defs.append(("pre_trace_syn", "double"))
+                post_var_defs.append(("post_trace", "double", pygenn.VarAccess.READ_WRITE))
+            else:
+                var_defs.append(("pre_trace_syn1", "double"))
+                var_defs.append(("pre_trace_syn2", "double"))
                 post_var_defs.append(("post_trace1", "double", pygenn.VarAccess.READ_WRITE))
                 post_var_defs.append(("post_trace2", "double", pygenn.VarAccess.READ_WRITE))
 
@@ -302,9 +327,15 @@ class CustomAkitaModel(BasePlasticityModel):
         return pre_spike_code
 
     def _post_spike_code(self):
-        """ポストニューロン発火時: (trace 型なら) post trace 更新。"""
+        """ポストニューロン発火時: post trace 更新。
+        trace_mode: decay + += 1.0 (all-to-all 蓄積)
+        nearest:    = 1.0 上書き (直近スパイクのみ反映)
+        """
         if not self.trace_mode:
-            return ""
+            # nearest: = 1.0 で上書き（蓄積しない = nearest-neighbor）
+            if self._is_e_stdp:
+                return "post_trace = 1.0;\n"
+            return "post_trace1 = 1.0;\npost_trace2 = 1.0;\n"
         if self._is_e_stdp:
             return f"""
                 post_trace *= exp(-(t - st_post) / tau_E);
@@ -331,8 +362,7 @@ class CustomAkitaModel(BasePlasticityModel):
             else:
                 pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._trace_dc_syn()
         else:
-            pre_spike_syn_code, post_spike_syn_code = self._nearest_syn()
-            syn_dyn_code = None
+            pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._nearest_dc_syn()
         return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
 
     # --- nearest-neighbor (非 trace) ---
@@ -376,6 +406,60 @@ class CustomAkitaModel(BasePlasticityModel):
                 }}
             """
         return pre_spike_syn_code, post_spike_syn_code
+
+    # --- nearest: delay_corrected 構造 + = 1.0 上書き (nearest-neighbor) ---
+    def _nearest_dc_syn(self):
+        """nearest モード: delay_corrected と同構造だが trace 更新を += でなく = 1.0 で行う。
+        これにより重み計算は常に直近スパイク1本分のみに基づく（nearest-neighbor ペアリング）。
+        E-STDP post_spike_syn_code の同時到着補正も 1.0 固定（+= 版の decay+1.0 でなく）。
+        """
+        dt_ms = self._dt_ms
+        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
+
+        if self._is_e_stdp:
+            post_spike_syn_code = f"""
+                        const scalar newWeight = w + (A_E * pre_trace_syn);
+                        w = fmax(wMin, fmin(wMax, newWeight));
+                    """
+
+            syn_dyn_code = f"""
+                        pre_trace_syn *= decay_E;
+                        const scalar t_arrival = st_pre + (d * {dt_ms});
+                        if (fabs(t - t_arrival) < 0.5 * {dt_ms}) {{
+                            pre_trace_syn = 1.0;
+                            const scalar dt_post = t - st_post;
+                            if (dt_post > 0.5 * {dt_ms}) {{
+                                const scalar post_trace_now = post_trace * exp(-dt_post / tau_E);
+                                w -= A_E * beta_E * post_trace_now;
+                                w = fmax(wMin, fmin(wMax, w));
+                            }}
+                        }}
+                    """
+            return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+
+        # I-STDP
+        post_spike_syn_code = f"""
+                        const scalar dW = C_I * (pre_trace_syn1 - C_I_beta * pre_trace_syn2);
+                        w = fmax(wMin, fmin(wMax, w + dW));
+                    """
+
+        syn_dyn_code = f"""
+                        pre_trace_syn1 *= decay_I1;
+                        pre_trace_syn2 *= decay_I2;
+                        const scalar t_arrival = st_pre + (d * {dt_ms});
+                        if (fabs(t - t_arrival) < 0.5 * {dt_ms}) {{
+                            pre_trace_syn1 = 1.0;
+                            pre_trace_syn2 = 1.0;
+                            const scalar dt_post = t - st_post;
+                            if (dt_post > 0.5 * {dt_ms}) {{
+                                const scalar post_trace1_now = post_trace1 * exp(-dt_post / tau_I1);
+                                const scalar post_trace2_now = post_trace2 * exp(-dt_post / tau_I2);
+                                const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
+                                w = fmax(wMin, fmin(wMax, w + dW));
+                            }}
+                        }}
+                    """
+        return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
 
     # --- trace 型: legacy (遅延非考慮) ---
     def _trace_legacy_syn(self):
@@ -431,14 +515,7 @@ class CustomAkitaModel(BasePlasticityModel):
             # 判定: t_arr = st_pre + d*dt_ms == t (現在のシミュレーション時刻)
             # ※ post_spike_syn_code における st_pre は +dt オフセットなしの raw srcST。
             post_spike_syn_code = f"""
-                        const scalar t_arr = st_pre + (d * {dt_ms});
-                        scalar ltp_trace;
-                        if (fabs(t - t_arr) < 0.5 * {dt_ms}) {{
-                            ltp_trace = pre_trace_syn * decay_E + 1.0;
-                        }} else {{
-                            ltp_trace = pre_trace_syn;
-                        }}
-                        const scalar newWeight = w + (A_E * ltp_trace);
+                        const scalar newWeight = w + (A_E * pre_trace_syn);
                         w = fmax(wMin, fmin(wMax, newWeight));
                     """
 

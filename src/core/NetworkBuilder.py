@@ -24,9 +24,13 @@ from src.core.config_manager import AppConfig
 from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
 
 class NetworkBuilder:
-    def __init__(self, config: AppConfig, model_name: str = "SNN_Model"):
+    def __init__(self, config: AppConfig, model_name: str = "SNN_Model", code_gen_dir: str | None = None):
         self.config = config
         self.rng = np.random.RandomState(config.simulation.seed)
+
+        # GeNN が生成する <model_name>_CODE を置く親ディレクトリ。
+        # None の場合はカレントディレクトリ (従来挙動)。Simulator.setup() の build() で使う。
+        self.code_gen_dir = code_gen_dir
 
         _backend = "cuda" if USE_GPU else "single_threaded_cpu"
         self.genn_model = pygenn.GeNNModel("double", model_name, time_precision="double", backend=_backend)

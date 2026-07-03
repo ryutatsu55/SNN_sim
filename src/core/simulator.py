@@ -1,3 +1,4 @@
+import os
 import pygenn
 import numpy as np
 from typing import Dict, Any, List, Tuple
@@ -24,8 +25,16 @@ class GeNNSimulator:
         """GeNNモデルのコード生成、コンパイル、およびGPUへのロード"""
         print(f"=== [Simulator] Setup: Building model '{self.model.name}' ===")
 
-        self.model.build()
-        
+        # コード生成先。builder.code_gen_dir が指定されていれば
+        # <code_gen_dir>/<model_name>_CODE に集約する (プロジェクト直下への散乱を防ぐ)。
+        build_path = getattr(self.builder, "code_gen_dir", None)
+        if build_path:
+            os.makedirs(build_path, exist_ok=True)
+            print(f"  [Simulator] GeNN code dir: {build_path}/{self.model.name}_CODE")
+            self.model.build(path_to_model=build_path)
+        else:
+            self.model.build()
+
         # 【重要】GPU上に記録用バッファを事前確保してロード
         # この時点で各変数の初期値がホスト側のメモリ(view)に展開されます
         self.model.load(num_recording_timesteps=self.max_timesteps)
