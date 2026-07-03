@@ -7,7 +7,7 @@
 #   - weight.base_weight: 0.5 -> [Wmin, Wmax]=[0,1] の中央。dw がクランプしないよう余裕を確保
 simulation:
   dt: 0.1
-  N: 150
+  N: 2
   seed: null
 inputs:
   GaussianNoise:
@@ -37,7 +37,7 @@ synapses:
     plasticity:
       type: custom_Akita
       mode: i-stdp_trace
-      trace_algorithm: legacy
+      trace_algorithm: delay_corrected
       tau_rec: 150.0
       U: 0.4
       g_max: 0.0
@@ -48,6 +48,8 @@ synapses:
       beta_I: 1.12
       Wmin: 0.0
       Wmax: 1.0
+    delay_by_target:
+      Layer_Inh: 0.8
 network:
   space:
     profile_name: block_2d
@@ -68,7 +70,7 @@ network:
     base_weight: 0.5
   delay:
     profile_name: constant
-    value: 0.0
+    value: 2.0
 task:
   profile_name: stdp_multi_test
   duration: 120.0

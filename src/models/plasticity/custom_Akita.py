@@ -97,13 +97,21 @@ class CustomAkitaModel(BasePlasticityModel):
     # PyGeNNにおける「同じクラス名の二重登録エラー」を防ぐための管理辞書(同一クラスのインスタンス間をまたぐ変数)
     _snippet_cache = {}
 
-    def __init__(self, config, dt, weight, delay, num_pre, num_post):
-        super().__init__(config, dt, weight, delay, num_pre, num_post)
+    def __init__(self, config, dt, weight, delay, num_pre, num_post, axonal_delay_steps=None):
+        super().__init__(config, dt, weight, delay, num_pre, num_post, axonal_delay_steps)
         self.mode = self.config.mode
         if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
         self.trace_mode = self.mode.endswith("_trace")
         self.trace_algorithm = getattr(self.config, "trace_algorithm", "delay_corrected") if self.trace_mode else "na"
+        # 軸索遅延経路: NetworkBuilder が delay_by_target(=集団内均一遅延)を検出したとき有効化される。
+        # GeNN が axonal_delay_steps 分だけ遅延スロットからスパイクを読み、pre_spike_syn_code を
+        # 到着時刻にイベント駆動で実行し、st_pre も到着時刻へ補正する。よって毎ステップの
+        # syn_dynamics_code は不要になり、STDP は legacy と同じ数式(=到着時刻基準で遅延補正済み)で
+        # pre/post_spike_syn_code に直接書ける。電流は addToPostDelay ではなく addToPost で即時投与する。
+        self._axonal = self.axonal_delay_steps is not None
+        # trace 型で legacy レイアウト(per-neuron trace)を使うか。axonal は legacy 数式を流用する。
+        self._trace_legacy_layout = self.trace_mode and (self.trace_algorithm == "legacy" or self._axonal)
         # 便宜的な mode 判定ヘルパ (興奮性 STDP かどうか)
         self._is_e_stdp = self.mode.startswith("e-stdp")
         # d はタイムステップ単位(uint8)。GeNN の t は ms 単位なので、STDP の時間演算では
@@ -117,7 +125,7 @@ class CustomAkitaModel(BasePlasticityModel):
 
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
 
-        cache_key = (self.mode, "trace" if self.trace_mode else "nearest", "g_scale_param", self.trace_algorithm)
+        cache_key = (self.mode, "trace" if self.trace_mode else "nearest", "g_scale_param", self.trace_algorithm, self._axonal)
         if cache_key not in CustomAkitaModel._snippet_cache:
             # 未登録の場合のみ生成
             CustomAkitaModel._snippet_cache[cache_key] = self._create_snippet()
@@ -127,11 +135,12 @@ class CustomAkitaModel(BasePlasticityModel):
     # 1. パラメータと変数の準備
     # ==========================================
     def _prepare_genn_data(self):
-        # 変数設定 (モード共通)
+        # 変数設定 (モード共通)。axonal 経路では per-synapse 遅延 d は不要(集団均一の軸索遅延を使う)。
         vars_dict = {
             "w": self.weight.astype('float32'),
-            "d": self.delay.astype('uint8')
         }
+        if not self._axonal:
+            vars_dict["d"] = self.delay.astype('uint8')
         pre_vars_dict = {
             "x": np.ones(self.num_pre, dtype='float32'),
             "x_release": np.zeros(self.num_pre, dtype='float32'),
@@ -141,25 +150,28 @@ class CustomAkitaModel(BasePlasticityModel):
         if self.trace_mode:
             if self._is_e_stdp:
                 # delay_corrected: pre_trace を per-synapse vars に置く（到着時刻に更新するため）
-                # legacy: per-neuron pre_vars に置く（変更なし）
-                if self.trace_algorithm == "delay_corrected":
-                    vars_dict["pre_trace_syn"] = np.zeros(len(self.weight), dtype='float64')
-                else:
+                # legacy / axonal: per-neuron pre_vars に置く
+                if self._trace_legacy_layout:
                     pre_vars_dict["pre_trace"] = np.zeros(self.num_pre, dtype='float64')
+                else:
+                    vars_dict["pre_trace_syn"] = np.zeros(len(self.weight), dtype='float64')
                 post_vars_dict.update({
                     "post_trace": np.zeros(self.num_post, dtype='float64'),
                 })
             else:
-                if self.trace_algorithm == "delay_corrected":
-                    vars_dict["pre_trace_syn1"] = np.zeros(len(self.weight), dtype='float64')
-                    vars_dict["pre_trace_syn2"] = np.zeros(len(self.weight), dtype='float64')
-                else:
+                if self._trace_legacy_layout:
                     pre_vars_dict["pre_trace1"] = np.zeros(self.num_pre, dtype='float64')
                     pre_vars_dict["pre_trace2"] = np.zeros(self.num_pre, dtype='float64')
+                else:
+                    vars_dict["pre_trace_syn1"] = np.zeros(len(self.weight), dtype='float64')
+                    vars_dict["pre_trace_syn2"] = np.zeros(len(self.weight), dtype='float64')
                 post_vars_dict.update({
                     "post_trace1": np.zeros(self.num_post, dtype='float64'),
                     "post_trace2": np.zeros(self.num_post, dtype='float64'),
                 })
+        elif self._axonal:
+            # nearest × axonal: 直接カーネル(_nearest_syn)を使うため trace 変数は一切不要。
+            pass
         else:
             # nearest モード: per-synapse trace + post trace（= 1.0 上書きで nearest-neighbor を実現）
             if self._is_e_stdp:
@@ -227,32 +239,42 @@ class CustomAkitaModel(BasePlasticityModel):
         safe_mode = self.mode.replace("-", "_")
         if not self.trace_mode:
             alg_suffix = "ndc"
-        elif self.trace_algorithm == "legacy":
+        elif self._trace_legacy_layout:
+            # legacy、または axonal(legacy 数式を流用)
             alg_suffix = "leg"
         else:
             alg_suffix = "dc"
+        if self._axonal:
+            # addToPostDelay/addToPost や d の有無が異なるため、別クラス名にして二重登録を防ぐ
+            alg_suffix = "axo_" + alg_suffix
 
-        # per-synapse vars: w, d は共通。delay_corrected/nearest では pre_trace_syn も per-synapse
-        var_defs = [("w", "scalar"), ("d", "uint8_t")]
+        # per-synapse vars: w は共通。d は axonal 以外のみ。delay_corrected/nearest(非axonal)では
+        # pre_trace_syn も per-synapse。
+        var_defs = [("w", "scalar")]
+        if not self._axonal:
+            var_defs.append(("d", "uint8_t"))
         pre_var_defs = [("x", "scalar"), ("x_release", "scalar")]
         post_var_defs = []
 
         if self.trace_mode:
             if self._is_e_stdp:
-                if self.trace_algorithm == "delay_corrected":
-                    var_defs.append(("pre_trace_syn", "double"))
-                else:
+                if self._trace_legacy_layout:
                     pre_var_defs.append(("pre_trace", "double", pygenn.VarAccess.READ_WRITE))
+                else:
+                    var_defs.append(("pre_trace_syn", "double"))
                 post_var_defs.append(("post_trace", "double", pygenn.VarAccess.READ_WRITE))
             else:
-                if self.trace_algorithm == "delay_corrected":
-                    var_defs.append(("pre_trace_syn1", "double"))
-                    var_defs.append(("pre_trace_syn2", "double"))
-                else:
+                if self._trace_legacy_layout:
                     pre_var_defs.append(("pre_trace1", "double", pygenn.VarAccess.READ_WRITE))
                     pre_var_defs.append(("pre_trace2", "double", pygenn.VarAccess.READ_WRITE))
+                else:
+                    var_defs.append(("pre_trace_syn1", "double"))
+                    var_defs.append(("pre_trace_syn2", "double"))
                 post_var_defs.append(("post_trace1", "double", pygenn.VarAccess.READ_WRITE))
                 post_var_defs.append(("post_trace2", "double", pygenn.VarAccess.READ_WRITE))
+        elif self._axonal:
+            # nearest × axonal: 直接カーネルで trace 変数不要
+            pass
         else:
             # nearest モード: per-synapse trace + post trace
             if self._is_e_stdp:
@@ -309,8 +331,8 @@ class CustomAkitaModel(BasePlasticityModel):
             x -= x_release;
         """
 
-        if self.trace_mode and self.trace_algorithm == "legacy":
-            # legacy のみ per-neuron pre_trace を発火時に更新する
+        if self._trace_legacy_layout:
+            # legacy / axonal は per-neuron pre_trace を発火時に更新する
             if self._is_e_stdp:
                 pre_spike_code += f"""
                     pre_trace *= exp(-(t - st_pre) / tau_E);
@@ -332,6 +354,9 @@ class CustomAkitaModel(BasePlasticityModel):
         nearest:    = 1.0 上書き (直近スパイクのみ反映)
         """
         if not self.trace_mode:
+            if self._axonal:
+                # nearest × axonal は直接カーネル(st_pre/st_post を直に使用)。post trace 不要。
+                return ""
             # nearest: = 1.0 で上書き（蓄積しない = nearest-neighbor）
             if self._is_e_stdp:
                 return "post_trace = 1.0;\n"
@@ -356,18 +381,34 @@ class CustomAkitaModel(BasePlasticityModel):
         delay_corrected 以外では syn_dyn_code = None。
         """
         if self.trace_mode:
-            if self.trace_algorithm == "legacy":
+            if self._trace_legacy_layout:
+                # legacy / axonal: 到着時刻基準の直接 STDP (syn_dyn_code なし)。
+                # axonal では GeNN が st_pre を到着時刻へ補正するため遅延補正済みになる。
                 pre_spike_syn_code, post_spike_syn_code = self._trace_legacy_syn()
                 syn_dyn_code = None
             else:
                 pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._trace_dc_syn()
         else:
-            pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._nearest_dc_syn()
+            if self._axonal:
+                # nearest × axonal: 直接指数カーネル版 (syn_dyn_code なし)。
+                pre_spike_syn_code, post_spike_syn_code = self._nearest_syn()
+                syn_dyn_code = None
+            else:
+                pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._nearest_dc_syn()
         return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+
+    def _transmit_stmt(self):
+        """シナプス電流の投与文。
+        - axonal: 既に到着時刻に pre_spike_syn_code が呼ばれるので addToPost で即時投与。
+        - 非axonal: per-synapse 遅延 d ステップ後に届くよう addToPostDelay で据置き投与。
+        """
+        if self._axonal:
+            return "addToPost(x_release * w * g_max * g_scale);\n"
+        return "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
 
     # --- nearest-neighbor (非 trace) ---
     def _nearest_syn(self):
-        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
+        pre_spike_syn_code = self._transmit_stmt()
         if self._is_e_stdp:
             pre_spike_syn_code += f"""
                 const scalar dt = t - st_post;
@@ -414,7 +455,7 @@ class CustomAkitaModel(BasePlasticityModel):
         E-STDP post_spike_syn_code の同時到着補正も 1.0 固定（+= 版の decay+1.0 でなく）。
         """
         dt_ms = self._dt_ms
-        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
+        pre_spike_syn_code = self._transmit_stmt()
 
         if self._is_e_stdp:
             post_spike_syn_code = f"""
@@ -463,7 +504,7 @@ class CustomAkitaModel(BasePlasticityModel):
 
     # --- trace 型: legacy (遅延非考慮) ---
     def _trace_legacy_syn(self):
-        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
+        pre_spike_syn_code = self._transmit_stmt()
         if self._is_e_stdp:
             pre_spike_syn_code += f"""
                         const scalar dt_post_trace = t - st_post;
@@ -504,7 +545,7 @@ class CustomAkitaModel(BasePlasticityModel):
         dt_ms = self._dt_ms
 
         # pre_spike_syn_code: 電流送信のみ。STDP は syn_dynamics_code で到着時刻に実行する。
-        pre_spike_syn_code = "addToPostDelay(x_release * w * g_max * g_scale, d);\n"
+        pre_spike_syn_code = self._transmit_stmt()
 
         if self._is_e_stdp:
             # post_spike_syn_code: pre_trace_syn は到着済みスパイクのみを反映している。

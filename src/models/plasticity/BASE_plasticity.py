@@ -13,13 +13,18 @@ class BasePlasticityModel(ABC):
         全ての具象クラスでこれらを正しく実装する必要があります。
     4. 二重登録防止: クラス変数(_registered_snippets)を活用し、同一モデルの多重定義を回避します。
     """
-    def __init__(self, config, dt, weight, delay, num_pre, num_post):
+    def __init__(self, config, dt, weight, delay, num_pre, num_post, axonal_delay_steps=None):
         self.config = config
         self.dt = dt
         self.weight = weight
         self.delay = delay
         self.num_pre = num_pre
         self.num_post = num_post
+        # None 以外なら「軸索遅延(axonal delay)経路」。NetworkBuilder が delay_by_target 指定
+        # (=集団内均一遅延)を検出したときにステップ数を渡す。GeNN が pre_spike_syn_code を
+        # 到着時刻にイベント駆動で呼ぶため、毎ステップの syn_dynamics_code を撤廃できる。
+        # snippet が文字列の標準モデルはこの引数を無視する。
+        self.axonal_delay_steps = axonal_delay_steps
         # カスタムスニペットを保持し、GCによる破棄を防ぐための変数
         self._custom_snippet_obj = None
 

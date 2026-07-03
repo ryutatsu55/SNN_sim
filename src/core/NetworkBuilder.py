@@ -1,4 +1,5 @@
 import os
+import inspect
 import numpy as np
 import pygenn
 from typing import Dict, Any, Tuple
@@ -153,7 +154,11 @@ class NetworkBuilder:
                 sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
 
                 delay_by_target = getattr(syn_cfg, "delay_by_target", None)
-                if delay_by_target is not None and tgt_name in delay_by_target:
+                # delay_by_target 指定は集団内で単一定数 = 均一遅延。この場合のみ GeNN の
+                # 軸索遅延(axonal_delay_steps)を使い、pre_spike_syn_code を到着時刻に
+                # イベント駆動化して毎ステップの syn_dynamics_code を撤廃する(高速化)。
+                use_axonal = delay_by_target is not None and tgt_name in delay_by_target
+                if use_axonal:
                     sub_delays[sub_mask != 0] = float(delay_by_target[tgt_name])
                 elif hasattr(syn_cfg, "delay"):
                     sub_delays[sub_mask != 0] = float(syn_cfg.delay)
@@ -170,14 +175,32 @@ class NetworkBuilder:
                 tgt_pop = self.genn_model.neuron_populations[tgt_name]
 
                 PlasClass = PLASTICITY_MODELS.get(syn_cfg.plasticity.type)
-                plas_instance = PlasClass(
-                    config=syn_cfg.plasticity, 
+                # 可塑性モデルが axonal_delay_steps を受け取れる場合のみ軸索遅延経路を適用する
+                # (= opt-in)。標準モデルは受け取らないため従来の dendritic delay 経路のまま。
+                supports_axonal = "axonal_delay_steps" in inspect.signature(PlasClass.__init__).parameters
+                axonal_steps = None
+                if use_axonal and supports_axonal:
+                    uniform_delay_ms = float(delay_by_target[tgt_name])
+                    # STDP の実効到着時刻は emission + axonal_delay_steps*dt になる(learn-post /
+                    # pre_spike_syn の処理ステップ基準。実測で確認済み)。よって STDP タイミングを
+                    # delay_corrected と一致させるには steps = round(D/dt)。
+                    # ※電流(addToPost)の到着は (steps+1)*dt となり D より 1dt(=dt)遅いが、
+                    #   PSC は指数減衰でならされるため重み学習への影響は無視できる。
+                    axonal_steps = max(0, int(round(uniform_delay_ms / self.config.simulation.dt)))
+                else:
+                    use_axonal = False  # 非対応モデルには適用しない
+
+                plas_kwargs = dict(
+                    config=syn_cfg.plasticity,
                     dt=self.config.simulation.dt,
                     weight=weights_flat,
                     delay=delays_flat,
                     num_pre=src_pop.num_neurons,
-                    num_post=tgt_pop.num_neurons
-                    )
+                    num_post=tgt_pop.num_neurons,
+                )
+                if use_axonal:
+                    plas_kwargs["axonal_delay_steps"] = axonal_steps
+                plas_instance = PlasClass(**plas_kwargs)
                 self._component_lifeline.append(plas_instance)
                 weight_init = pygenn.genn_model.init_weight_update(
                     snippet=plas_instance.snippet, 
@@ -213,8 +236,13 @@ class NetworkBuilder:
                     postsynaptic_init=post_init
                 )
                 sg.set_sparse_connections(local_src_idx, local_tgt_idx)
-                max_delay_steps = int(np.max(delays_flat)) + 1
-                sg.max_dendritic_delay_timesteps = max_delay_steps
+                if use_axonal:
+                    # 軸索遅延: ソーススパイクを axonal_steps 分遅延スロットから読み、到着時刻に
+                    # pre_spike_syn_code を発火。addToPost 即時投与なので dendritic バッファは不要。
+                    sg.axonal_delay_steps = axonal_steps
+                else:
+                    max_delay_steps = int(np.max(delays_flat)) + 1
+                    sg.max_dendritic_delay_timesteps = max_delay_steps
 
     def _build_input_ports(self):
         """GeNN上に入力専用のglobal_popを定義し、本体へ1対1で接続する"""

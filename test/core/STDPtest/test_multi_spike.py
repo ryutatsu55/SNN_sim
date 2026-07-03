@@ -265,6 +265,23 @@ def fire_and_checkpoint(sim, total_neurons, total_steps, vrest, stim,
     return checkpoints
 
 
+def measure_delay_ms(sim, ctx):
+    """(src,tgt) の伝播遅延[ms]を dendritic / axonal 両対応で取得する。
+
+    - dendritic 経路: per-synapse 変数 d(タイムステップ) を持つ → d * dt。
+    - axonal 経路   : delay_by_target 指定で custom_Akita が d を持たず、遅延は
+                      SynapseGroup.axonal_delay_steps(group 均一)で表現される。
+                      到着遅延 = (axonal_delay_steps + 1) * dt (GeNN の st_pre 補正に一致)。
+    """
+    dt = ctx["dt"]
+    for sg in sim.model.synapse_populations.values():
+        if "d" in sg.vars:
+            return float(sim.pull_synapse("d")[ctx["src_ID"], ctx["tgt_ID"]] * dt)
+        # axonal: STDP の実効到着遅延 = axonal_delay_steps * dt (emission 基準)
+        return float(sg.axonal_delay_steps * dt)
+    raise RuntimeError("no synapse population found to measure delay")
+
+
 def run_scenario(sim, name, pre_times_ms, post_times_ms, ctx):
     """1 シナリオを実行し、中間チェックポイントと最終 dw を検証する。
 
@@ -273,7 +290,7 @@ def run_scenario(sim, name, pre_times_ms, post_times_ms, ctx):
     最終チェック: 従来通り全ペア和リファレンスと比較する。
     """
     # --- 遅延の実測 (arrival checkpoint 構築に先立ち取得) ---
-    delay_ms = float(sim.pull_synapse("d")[ctx["src_ID"], ctx["tgt_ID"]] * ctx["dt"])
+    delay_ms = measure_delay_ms(sim, ctx)
 
     # --- fire_and_checkpoint で実行: 各更新イベント直後の重みを収集 ---
     def read_w(sim_):
