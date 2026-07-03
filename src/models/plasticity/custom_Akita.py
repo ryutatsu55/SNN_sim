@@ -504,11 +504,12 @@ class CustomAkitaModel(BasePlasticityModel):
 
     # --- trace 型: legacy (遅延非考慮) ---
     def _trace_legacy_syn(self):
+        dt_ms = self._dt_ms
         pre_spike_syn_code = self._transmit_stmt()
         if self._is_e_stdp:
             pre_spike_syn_code += f"""
                         const scalar dt_post_trace = t - st_post;
-                        if (dt_post_trace > 0.0) {{
+                        if (dt_post_trace > 0.5 * {dt_ms}) {{
                             const scalar post_trace_now = post_trace * exp(-dt_post_trace / tau_E);
                             const scalar newWeight = w - (A_E * beta_E * post_trace_now);
                             w = fmax(wMin, fmin(wMax, newWeight));
@@ -524,7 +525,7 @@ class CustomAkitaModel(BasePlasticityModel):
 
         pre_spike_syn_code += f"""
                         const scalar dt_post_trace = t - st_post;
-                        if (dt_post_trace > 0.0) {{
+                        if (dt_post_trace > 0.5 * {dt_ms}) {{
                             const scalar post_trace1_now = post_trace1 * exp(-dt_post_trace / tau_I1);
                             const scalar post_trace2_now = post_trace2 * exp(-dt_post_trace / tau_I2);
                             const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
