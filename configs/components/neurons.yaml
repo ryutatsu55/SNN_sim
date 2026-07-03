@@ -89,3 +89,76 @@ akita_escape_lif:
     b: 4.0
     f_rest: 0.4
     tau_refrac: 2.0
+  excitatory_b5:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 5.0
+    f_rest: 0.4
+    tau_refrac: 3.0
+  inhibitory_b5:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 5.0
+    f_rest: 0.4
+    tau_refrac: 2.0
+  excitatory_b6:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 6.0
+    f_rest: 0.4
+    tau_refrac: 3.0
+  inhibitory_b6:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 6.0
+    f_rest: 0.4
+    tau_refrac: 2.0
+  excitatory_b7:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 7.0
+    f_rest: 0.4
+    tau_refrac: 3.0
+  inhibitory_b7:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 7.0
+    f_rest: 0.4
+    tau_refrac: 2.0
+  # σ=1吸引安定化の検証: gainを浅く(b=8mV=2倍)して dσ/dw を半減し、2倍速い重み成長を補償。rest発火率はCの再校正で0.4Hz不変
+  excitatory_b8:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 8.0
+    f_rest: 0.4
+    tau_refrac: 3.0
+  inhibitory_b8:
+    tau_m: 30.0
+    v_rest: -74.0
+    v_th: -54.0
+    E_exc: 0.0
+    E_inh: -80.0
+    b: 8.0
+    f_rest: 0.4
+    tau_refrac: 2.0

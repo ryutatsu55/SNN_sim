@@ -1,6 +1,6 @@
 simulation:
   N: 100
-  dt: 0.1
+  dt: 0.05
   seed: 1
 
 inputs:
@@ -27,7 +27,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: e-stdp_delay_trace
+      mode: e-stdp_b110_delay_trace   # beta_E=1.10 (Fig S4)
     synapse:
       type: ExpCond
       mode: excitatory
@@ -38,7 +38,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: i-stdp_delay_trace
+      mode: i-stdp_b080_delay_trace   # beta_I=0.80 (Fig S4)
     synapse:
       type: ExpCond
       mode: inhibitory

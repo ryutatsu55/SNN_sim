@@ -27,7 +27,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: e-stdp_delay_trace
+      mode: e-stdp_b105_delay_trace
     synapse:
       type: ExpCond
       mode: excitatory

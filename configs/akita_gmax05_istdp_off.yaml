@@ -27,21 +27,10 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: e-stdp_delay_trace
+      mode: e-stdp_gmax05_delay_trace
     synapse:
       type: ExpCond
       mode: excitatory
-  from_Inh:
-    source: Layer_Inh
-    delay_by_target:
-      Layer_Exc: 0.8
-      Layer_Inh: 0.8
-    plasticity:
-      type: custom_Akita
-      mode: i-stdp_delay_trace
-    synapse:
-      type: ExpCond
-      mode: inhibitory
 
 network:
   space: no_space

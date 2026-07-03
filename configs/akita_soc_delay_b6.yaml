@@ -12,11 +12,11 @@ inputs:
 neurons:
   Layer_Exc:
     type: akita_escape_lif
-    mode: excitatory
+    mode: excitatory_b6
     num: 80
   Layer_Inh:
     type: akita_escape_lif
-    mode: inhibitory
+    mode: inhibitory_b6
     num: 20
 
 synapses:
