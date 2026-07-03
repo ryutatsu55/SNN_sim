@@ -5,6 +5,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import optimize
 
 
 @dataclass
@@ -81,27 +82,57 @@ def criticality_index_delta_cr(sizes: np.ndarray, smax: int = 100) -> float:
     return upper if abs(upper) >= abs(lower) else lower
 
 
+def _fit_discrete_powerlaw_alpha(x: np.ndarray, smin: int = 1, smax: int = 100) -> float:
+    """離散打ち切りpower-law p(s)=s^-alpha / sum_{k=smin}^{smax} k^-alpha のMLE指数。"""
+    support = np.arange(smin, smax + 1, dtype=np.float64)
+    sum_log = float(np.sum(np.log(x)))
+    n = x.size
+
+    def neg_ll(alpha: float) -> float:
+        norm = float(np.sum(np.power(support, -alpha)))
+        return alpha * sum_log + n * np.log(norm)
+
+    res = optimize.minimize_scalar(neg_ll, bounds=(1.01, 6.0), method="bounded")
+    return float(res.x)
+
+
+def _fit_discrete_exponential_lambda(x: np.ndarray, smin: int = 1, smax: int = 100) -> float:
+    """離散打ち切り指数分布 p(s)=e^-lambda*s / sum_{k=smin}^{smax} e^-lambda*k のMLE率。"""
+    support = np.arange(smin, smax + 1, dtype=np.float64)
+    sum_x = float(np.sum(x))
+    n = x.size
+
+    def neg_ll(lam: float) -> float:
+        norm = float(np.sum(np.exp(-lam * support)))
+        return lam * sum_x + n * np.log(norm)
+
+    res = optimize.minimize_scalar(neg_ll, bounds=(1e-6, 5.0), method="bounded")
+    return float(res.x)
+
+
 def log_likelihood_ratio_power_vs_exponential(sizes: np.ndarray, smax: int = 100) -> float:
-    """離散サイズ1..smax上で、power-lawとexponentialの簡易LLRを計算する。"""
+    """論文準拠のLLR: サイズ[1, smax]でpower-lawとexponentialを最尤フィットし、
+    対数尤度比 LLR = sum_i [ln p_power(s_i) - ln p_exp(s_i)] を返す (正→power-law優位)。
+
+    Clauset et al. (2009) / Yada et al. (2017) と同じ離散打ち切りMLEを用いる
+    (Akita Supplementary "Power-law fitting", smin=1, smax=100)。
+    """
+    smin = 1
     x = np.asarray(sizes, dtype=np.float64)
-    x = x[(x >= 1) & (x <= smax)]
+    x = x[(x >= smin) & (x <= smax)]
     if x.size < 2:
         return np.nan
 
-    log_sum = float(np.sum(np.log(x)))
-    if log_sum <= 0.0:
-        return np.nan
-    alpha = 1.0 + (x.size / log_sum)
-    support = np.arange(1, smax + 1, dtype=np.float64)
-    p_power = np.power(support, -alpha)
-    p_power /= np.sum(p_power)
+    support = np.arange(smin, smax + 1, dtype=np.float64)
+    alpha = _fit_discrete_powerlaw_alpha(x, smin, smax)
+    lam = _fit_discrete_exponential_lambda(x, smin, smax)
 
-    lam = 1.0 / max(np.mean(x) - 1.0, 1e-12)
-    p_exp = np.exp(-lam * (support - 1.0))
-    p_exp /= np.sum(p_exp)
+    log_norm_power = float(np.log(np.sum(np.power(support, -alpha))))
+    log_norm_exp = float(np.log(np.sum(np.exp(-lam * support))))
 
-    indices = x.astype(np.int32) - 1
-    return float(np.sum(np.log(p_power[indices]) - np.log(p_exp[indices])))
+    ll_power = -alpha * np.log(x) - log_norm_power
+    ll_exp = -lam * x - log_norm_exp
+    return float(np.sum(ll_power - ll_exp))
 
 
 def burstiness_index(spike_times: np.ndarray, duration_ms: float, bin_ms: float = 1000.0) -> float:

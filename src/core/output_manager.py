@@ -27,12 +27,18 @@ def create_run_output_dir(
 def create_timestamped_output_dir(
     base_dir: str | Path,
     timestamp: str | None = None,
+    suffix: str | None = None,
 ) -> Path:
-    """指定されたベースディレクトリ直下に日時ディレクトリを作成する。"""
+    """指定されたベースディレクトリ直下に日時ディレクトリを作成する。
+
+    suffix を渡すと ``<timestamp>_<suffix>`` というディレクトリ名になり、
+    複数プロセスを同一秒に並列起動してもディレクトリが衝突しない。
+    """
     if timestamp is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    output_dir = Path(base_dir) / timestamp
+    name = f"{timestamp}_{_sanitize_dir_name(suffix)}" if suffix else timestamp
+    output_dir = Path(base_dir) / name
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 

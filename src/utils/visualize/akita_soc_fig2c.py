@@ -44,10 +44,10 @@ def infer_group_ids(folder_path):
         assigned = rng.choice(available_indices, size=num_neurons, replace=False)
         available_indices = np.setdiff1d(available_indices, assigned)
         assigned.sort()
-        mode = cfg.get('mode')
-        if mode == 'excitatory':
+        mode = cfg.get('mode') or ''
+        if mode.startswith('excitatory'):
             excitatory_ids.append(assigned)
-        elif mode == 'inhibitory':
+        elif mode.startswith('inhibitory'):
             inhibitory_ids.append(assigned)
 
     exc_ids = np.concatenate(excitatory_ids) if excitatory_ids else np.array([], dtype=np.int32)
@@ -89,11 +89,11 @@ def load_weight_trajectories(folder_path, group_info=None):
                 global_indices = np.array(global_indices, dtype=np.int32)
 
             neuron_cfg = neurons.get(group_name, {})
-            mode = neuron_cfg.get("mode")
+            mode = neuron_cfg.get("mode") or ""
 
-            if mode == "excitatory":
+            if mode.startswith("excitatory"):
                 excitatory.append(global_indices)
-            elif mode == "inhibitory":
+            elif mode.startswith("inhibitory"):
                 inhibitory.append(global_indices)
 
         exc_ids = np.concatenate(excitatory) if excitatory else np.array([], dtype=np.int32)
