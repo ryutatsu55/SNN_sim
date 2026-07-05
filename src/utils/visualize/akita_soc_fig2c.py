@@ -55,7 +55,7 @@ def infer_group_ids(folder_path):
 
     return exc_ids, inh_ids
 
-def load_weight_trajectories(folder_path, group_info=None):
+def load_weight_trajectories(folder_path, layout=None):
     """
     フォルダ内のnpzファイルを読み込み、各シナプスの時間ごとの重みの軌跡を抽出する。
     グローバル ID ベースで興奮性・抑制性を区別して処理する。
@@ -69,37 +69,11 @@ def load_weight_trajectories(folder_path, group_info=None):
         print("警告: フォルダ内に weights_*h.npz が見つかりません。")
         return None, None
 
-    # group_info が与えられた場合はそれを使用
-    if group_info is not None:
-        excitatory = []
-        inhibitory = []
-
-        config_path = os.path.join(folder_path, 'config.yaml')
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-        else:
-            config = {}
-
-        neurons = config.get("neurons", {})
-
-        for group_name, info in group_info.items():
-            global_indices = info.get("global_indices", np.array([], dtype=np.int32))
-            if isinstance(global_indices, list):
-                global_indices = np.array(global_indices, dtype=np.int32)
-
-            neuron_cfg = neurons.get(group_name, {})
-            mode = neuron_cfg.get("mode") or ""
-
-            if mode.startswith("excitatory"):
-                excitatory.append(global_indices)
-            elif mode.startswith("inhibitory"):
-                inhibitory.append(global_indices)
-
-        exc_ids = np.concatenate(excitatory) if excitatory else np.array([], dtype=np.int32)
-        inh_ids = np.concatenate(inhibitory) if inhibitory else np.array([], dtype=np.int32)
-        exc_ids = np.sort(exc_ids)
-        inh_ids = np.sort(inh_ids)
+    # layout(NetworkLayout)が与えられた場合はそれを使用
+    if layout is not None:
+        ids = layout.ids_by_mode()
+        exc_ids = ids["excitatory"]
+        inh_ids = ids["inhibitory"]
     else:
         exc_ids, inh_ids = infer_group_ids(folder_path)
         if exc_ids is None or inh_ids is None:
@@ -134,7 +108,7 @@ def load_weight_trajectories(folder_path, group_info=None):
 
     return np.array(times), trajectories
 
-def plot_figure2c(folder, output_dir=None, group_info=None):
+def plot_figure2c(folder, output_dir=None, layout=None):
     if output_dir is None:
         output_dir = folder
 
@@ -152,7 +126,7 @@ def plot_figure2c(folder, output_dir=None, group_info=None):
     csv_times = df['hour'].values
 
     # 左列用: npzファイル群からのトラジェクトリデータ生成
-    npz_times, trajectories = load_weight_trajectories(folder, group_info=group_info)
+    npz_times, trajectories = load_weight_trajectories(folder, layout=layout)
 
     # ==========================================
     # グラフの描画設定

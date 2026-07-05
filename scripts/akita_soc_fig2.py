@@ -16,6 +16,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.core.config_manager import ConfigManager
+from src.core.layout import NetworkLayout
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.output_manager import create_run_output_dir, create_timestamped_output_dir, organize_output
 from src.core.simulator import GeNNSimulator
@@ -33,6 +34,7 @@ from src.utils.akita_soc import (
     weight_block_metrics,
 )
 from src.utils.visualize.akita_soc_fig2c import plot_figure2c
+from src.utils.visualize.akita_soc_fig2d import plot_figure2d
 from src.utils.visualize.weight_track import visualize_weight_tracks
 
 import src.models.neurons.akita_escape_lif
@@ -148,22 +150,9 @@ def resolve_output_dir(out_dir_arg: str | None, suffix: str | None = None) -> Pa
     return create_run_output_dir("akita_soc")
 
 
-def get_group_ids(config, group_info):
-    excitatory_ids = []
-    inhibitory_ids = []
-    for group_name, neuron_cfg in config.neurons.items():
-        mode = getattr(neuron_cfg, "mode", None) or ""
-        ids = group_info[group_name]["global_indices"]
-        # mode は "excitatory" / "excitatory_b8" 等のバリアントを許容 (prefix一致で分類)
-        if mode.startswith("excitatory"):
-            excitatory_ids.append(ids)
-        elif mode.startswith("inhibitory"):
-            inhibitory_ids.append(ids)
-
-    return {
-        "excitatory": np.concatenate(excitatory_ids) if excitatory_ids else np.array([], dtype=np.int32),
-        "inhibitory": np.concatenate(inhibitory_ids) if inhibitory_ids else np.array([], dtype=np.int32),
-    }
+def get_group_ids(config, layout):
+    # config は後方互換のため残置。興奮性/抑制性の分類は NetworkLayout に集約された。
+    return layout.ids_by_mode()
 
 
 def max_plasticity_weight(config) -> float:
@@ -202,6 +191,17 @@ def replot_existing_output(run_dir: Path) -> None:
     if not spike_files:
         raise FileNotFoundError(f"No spikes_*h.npz files found in: {run_dir}")
 
+    # ラスターをニューロングループ順に並べ替えるためのグループ割り当てを再構築する。
+    # NetworkLayout.from_config は config のニューロン順に連番割り当てを決定論的に行うため、
+    # GeNN コンパイルなしでも本番実行と同一のグローバルインデックス割当を再現できる。
+    group_ids = None
+    layout = None
+    try:
+        layout = NetworkLayout.from_config(config)
+        group_ids = layout.ids_by_mode()
+    except Exception as e:
+        print(f"  Warning: could not reconstruct group ids for grouped raster: {e}")
+
     metrics_rows = []
     for hour, spike_path in spike_files:
         spikes_npz = np.load(spike_path)
@@ -233,6 +233,7 @@ def replot_existing_output(run_dir: Path) -> None:
             f"Raster {hour:g} h",
             xlim_s=PAPER_RASTER_XLIM_S,
             ylim_neuron=PAPER_RASTER_YLIM_NEURON,
+            group_ids=group_ids,
         )
         plot_avalanche_distribution(
             avalanche.sizes,
@@ -246,6 +247,22 @@ def replot_existing_output(run_dir: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))
         writer.writeheader()
         writer.writerows(metrics_rows)
+
+    # 本番実行 (main) と同じ Figure 2c / 2d も再生成する。
+    # fig2c は metrics.csv と weights_*h.npz を、fig2d は spikes_*h.npz と config.yaml を
+    # run_dir から読む。いずれも欠けている場合は各関数が警告を出して安全に return する。
+    print(f"\nGenerating visualizations...")
+    try:
+        print(f"  Figure 2c...")
+        plot_figure2c(str(run_dir), layout=layout)
+    except Exception as e:
+        print(f"  Warning: Figure 2c generation failed: {e}")
+
+    try:
+        print(f"  Figure 2d...")
+        plot_figure2d(str(run_dir), layout=layout)
+    except Exception as e:
+        print(f"  Warning: Figure 2d generation failed: {e}")
 
     print(f"Akita SoC plots regenerated from: {run_dir}")
 
@@ -270,11 +287,11 @@ def main():
 
     model_name = f"{Path(args.config).stem}_{seed_tag}"
     builder = NetworkBuilder(config, model_name=model_name, code_gen_dir=args.genn_code_dir)
-    genn_model, group_info = builder.build(rec_spike=True)
+    genn_model, layout = builder.build(rec_spike=True)
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
 
-    group_ids = get_group_ids(config, group_info)
+    group_ids = layout.ids_by_mode()
     wmax = max_plasticity_weight(config)
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
@@ -358,6 +375,7 @@ def main():
             f"Raster {hour:g} h",
             xlim_s=PAPER_RASTER_XLIM_S,
             ylim_neuron=PAPER_RASTER_YLIM_NEURON,
+            group_ids=group_ids,
         )
         plot_avalanche_distribution(
             avalanche.sizes,
@@ -376,13 +394,19 @@ def main():
     print(f"\nGenerating visualizations...")
     try:
         print(f"  Figure 2c...")
-        plot_figure2c(str(out_dir), group_info=group_info)
+        plot_figure2c(str(out_dir), layout=layout)
     except Exception as e:
         print(f"  Warning: Figure 2c generation failed: {e}")
 
     try:
+        print(f"  Figure 2d...")
+        plot_figure2d(str(out_dir), layout=layout)
+    except Exception as e:
+        print(f"  Warning: Figure 2d generation failed: {e}")
+
+    try:
         print(f"  Weight matrix tracks...")
-        visualize_weight_tracks(out_dir, group_info=group_info)
+        visualize_weight_tracks(out_dir, layout=layout)
     except Exception as e:
         print(f"  Warning: Weight matrix visualization failed: {e}")
 

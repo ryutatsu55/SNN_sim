@@ -44,12 +44,12 @@ def main():
     manager = ConfigManager() 
     config = manager.load_resolved(config_src)
 
-    # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
+    # 2. ネットワークの構築 (DataLoaderより先に実行して layout を生成する)
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
-    genn_model, group_info = builder.build(rec_spike=True)
+    genn_model, layout = builder.build(rec_spike=True)
     
-    # 3. データの準備 (io_mapを渡してグローバル→ローカルの変換ルールを教える)
+    # 3. データの準備 (layoutを渡してグローバル→ローカルの変換ルールを教える)
     print("Preparing Input Data...")
     # config.data から使用するローダー名を取得（例: "input_type"）
     data_loader_class = DATA_LOADERS.get(TASK_NAME)
@@ -57,7 +57,7 @@ def main():
     if data_loader_class is None:
         raise ValueError(f"DataLoader '{TASK_NAME}' not found in registry.")
         
-    data_loader = data_loader_class(config, group_info)
+    data_loader = data_loader_class(config, layout)
     
     # 4. シミュレーターの初期化とビルド
     print("Initializing Simulator...")

@@ -45,7 +45,7 @@ builder = NetworkBuilder(config)
 builder.genn_model = pygenn.GeNNModel("double", "SNN_Model_precision_check", time_precision="double")
 builder.genn_model.dt = config.simulation.dt
 
-genn_model, group_info = builder.build()
+genn_model, layout = builder.build()
 
 print("  Building model...")
 genn_model.build()

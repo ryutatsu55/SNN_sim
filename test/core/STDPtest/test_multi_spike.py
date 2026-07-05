@@ -130,8 +130,8 @@ def read_weight_native(sim, src_ID, tgt_ID):
     """
     for syn_pop_name, syn_pop in sim.model.synapse_populations.items():
         src_name, _, tgt_name = syn_pop_name.partition("_to_")
-        src_indices = sim.group_info[src_name]["global_indices"]
-        tgt_indices = sim.group_info[tgt_name]["global_indices"]
+        src_indices = sim.layout.global_indices(src_name)
+        tgt_indices = sim.layout.global_indices(tgt_name)
         sub_mask = sim.builder.global_mask[np.ix_(src_indices, tgt_indices)]
         local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
         global_src = src_indices[local_src_idx]
@@ -443,8 +443,8 @@ def run_config(label, config_path):
 
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
-    genn_model, group_info = builder.build(rec_spike=True)
-    print(group_info)
+    genn_model, layout = builder.build(rec_spike=True)
+    print(layout)
 
     print("Initializing Simulator...")
     sim = GeNNSimulator(genn_model, config, builder)

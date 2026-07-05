@@ -327,7 +327,7 @@ def write_metrics_csv(rows: list[dict[str, float | str]], out_path: Path) -> Non
 def visualize_weight_tracks(
     run_dir: Path,
     output_dir: Path | None = None,
-    group_info: dict | None = None,
+    layout=None,
     view_type: str = "block",
 ) -> Path:
     """
@@ -336,7 +336,7 @@ def visualize_weight_tracks(
     Args:
         run_dir: weights_*h.npz を含む実験ディレクトリ
         output_dir: 出力先ディレクトリ。None の場合は run_dir
-        group_info: NetworkBuilder.build() の戻り値。None の場合は config.yaml から復元
+        layout: NetworkBuilder.build() の戻り値(NetworkLayout)。None の場合は config.yaml から復元
         view_type: 'block'（興奮性・抑制性でブロック化）または 'global'（グローバル ID の順序）
 
     Returns:
@@ -354,34 +354,12 @@ def visualize_weight_tracks(
 
     first_weights = load_weight_matrix(weight_files[0].path)
 
-    # group_info が与えられた場合はそれを使用
-    if group_info is not None:
-        excitatory = []
-        inhibitory = []
-
-        config = _load_yaml(run_dir / "config.yaml")
-        neurons = config.get("neurons", {})
-
-        for group_name, info in group_info.items():
-            global_indices = info.get("global_indices", np.array([], dtype=np.int32))
-            if isinstance(global_indices, list):
-                global_indices = np.array(global_indices, dtype=np.int32)
-
-            # neurons 設定から mode を取得
-            neuron_cfg = neurons.get(group_name, {})
-            mode = neuron_cfg.get("mode")
-
-            if (mode or "").startswith("excitatory"):
-                excitatory.append(global_indices)
-            elif (mode or "").startswith("inhibitory"):
-                inhibitory.append(global_indices)
-
-        exc_ids = np.concatenate(excitatory) if excitatory else np.array([], dtype=np.int32)
-        inh_ids = np.concatenate(inhibitory) if inhibitory else np.array([], dtype=np.int32)
-
+    # layout(NetworkLayout)が与えられた場合はそれを使用
+    if layout is not None:
+        ids = layout.ids_by_mode()
         group_ids = GroupIds(
-            excitatory=np.sort(exc_ids),
-            inhibitory=np.sort(inh_ids),
+            excitatory=ids["excitatory"],
+            inhibitory=ids["inhibitory"],
             total_neurons=first_weights.shape[0],
             source="provided",
         )

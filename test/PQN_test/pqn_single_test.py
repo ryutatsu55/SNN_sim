@@ -44,16 +44,16 @@ def main():
     manager = ConfigManager() 
     config = manager.load_resolved(config_src)
 
-    # 2. ネットワークの構築 (DataLoaderより先に実行して io_map を生成する)
+    # 2. ネットワークの構築 (DataLoaderより先に実行して layout を生成する)
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
-    genn_model, group_info = builder.build(rec_spike=True)
-    print(group_info)
+    genn_model, layout = builder.build(rec_spike=True)
+    print(layout)
     
-    # 3. データの準備 (io_mapを渡してグローバル→ローカルの変換ルールを教える)
+    # 3. データの準備 (layoutを渡してグローバル→ローカルの変換ルールを教える)
     print("Preparing Input Data...")
     data_loader_class = DATA_LOADERS.get(TASK_NAME)
-    data_loader = data_loader_class(config, group_info)
+    data_loader = data_loader_class(config, layout)
     
     # 4. シミュレーターの初期化とビルド
     print("Initializing Simulator...")

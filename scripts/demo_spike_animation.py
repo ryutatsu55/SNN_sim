@@ -41,14 +41,14 @@ def main():
 
     print("Building Network with GeNN...")
     builder = NetworkBuilder(config)
-    genn_model, io_map = builder.build(rec_spike=True)
+    genn_model, layout = builder.build(rec_spike=True)
 
     print("Preparing Input Data...")
     data_loader_class = DATA_LOADERS.get(TASK_NAME)
     if data_loader_class is None:
         raise ValueError(f"DataLoader '{TASK_NAME}' not found in registry.")
 
-    data_loader = data_loader_class(config, io_map)
+    data_loader = data_loader_class(config, layout)
 
     print("Initializing Simulator...")
     sim = GeNNSimulator(genn_model, config, builder)

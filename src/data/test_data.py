@@ -7,8 +7,8 @@ from src.core.config_manager import AppConfig
 
 @DATA_LOADERS.register("pqn_test")
 class pqn_test_loader(BaseDataLoader):
-    def __init__(self, config: 'AppConfig', group_info: dict):
-        super().__init__(config, group_info)
+    def __init__(self, config: 'AppConfig', layout):
+        super().__init__(config, layout)
         
         # 入力電流の強度
         self.input_current = self.config.task.input
@@ -79,8 +79,8 @@ class pqn_test_loader(BaseDataLoader):
     
 @DATA_LOADERS.register("lif_test")
 class lif_test(BaseDataLoader):
-    def __init__(self, config: 'AppConfig', group_info: dict):
-        super().__init__(config, group_info)
+    def __init__(self, config: 'AppConfig', layout):
+        super().__init__(config, layout)
         
         self.zero_array = np.full(self.total_neurons, self.config.neurons["Layer_Exc"].Vrest, dtype=np.float32)
         self.stim_array = np.copy(self.zero_array)
@@ -109,8 +109,8 @@ class lif_test(BaseDataLoader):
 
 @DATA_LOADERS.register("stdp_test")
 class stdp_test(BaseDataLoader):
-    def __init__(self, config: 'AppConfig', group_info: dict):
-        super().__init__(config, group_info)
+    def __init__(self, config: 'AppConfig', layout):
+        super().__init__(config, layout)
         
         # --- ハードコーディングされたパラメータ (適宜修正してください) ---
         self.pre_id = config.network.connection.src_ID   # 刺激を与えるPreニューロンのグローバルID

@@ -7,12 +7,15 @@ from src.core.registry import WEIGHT_MODELS
 
 class BaseWeight(ABC):
     """シナプスの重みを生成する基底クラス"""
-    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: np.ndarray, rng: np.random.RandomState):
+    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: np.ndarray, rng: np.random.RandomState, layout=None):
         self.config = config
         self.num_neurons = num_neurons
         self.coords = coords
         self.mask = mask
         self.rng = rng
+        # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
+        # 具象クラス側で実装したい場合に self.layout.items() / ids_by_mode() を参照する。
+        self.layout = layout
 
     @abstractmethod
     def generate(self) -> np.ndarray:

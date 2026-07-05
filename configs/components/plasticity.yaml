@@ -285,6 +285,60 @@ custom_Akita:
     Wmin: 0.0
     Wmax: 1.0
     trace_algorithm: delay_corrected
+  e-stdp_gmax225_delay_trace:
+    tau_rec: 150.0
+    U: 0.4
+    g_max: 2.25
+    normalize_gmax_by_fan_in: false
+    A_E: 0.02
+    tau_E: 20.0
+    beta_E: 1.00
+    Wmin: 0.0
+    Wmax: 1.0
+    trace_algorithm: delay_corrected
+  i-stdp_gmax225_delay_trace:
+    tau_rec: 150.0
+    U: 0.4
+    g_max: 2.25
+    normalize_gmax_by_fan_in: false
+    A_I: 0.02
+    tau_I1: 10.0
+    tau_I2: 20.0
+    beta_I: 1.15
+    Wmin: 0.0
+    Wmax: 1.0
+    trace_algorithm: delay_corrected
+  e-stdp_gmax275_delay_trace:
+    tau_rec: 150.0
+    U: 0.4
+    g_max: 2.75
+    normalize_gmax_by_fan_in: false
+    A_E: 0.02
+    tau_E: 20.0
+    beta_E: 1.00
+    Wmin: 0.0
+    Wmax: 1.0
+    trace_algorithm: delay_corrected
+  i-stdp_gmax275_delay_trace:
+    tau_rec: 150.0
+    U: 0.4
+    g_max: 2.75
+    normalize_gmax_by_fan_in: false
+    A_I: 0.02
+    tau_I1: 10.0
+    tau_I2: 20.0
+    beta_I: 1.15
+    Wmin: 0.0
+    Wmax: 1.0
+    trace_algorithm: delay_corrected
+  e-stdp_gmax23_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.3, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  i-stdp_gmax23_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.3, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  e-stdp_gmax24_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.4, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  i-stdp_gmax24_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.4, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  e-stdp_gmax26_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.6, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  i-stdp_gmax26_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.6, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  e-stdp_gmax27_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.7, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
+  i-stdp_gmax27_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.7, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
   e-stdp_gmax30_delay_trace:
     tau_rec: 150.0
     U: 0.4

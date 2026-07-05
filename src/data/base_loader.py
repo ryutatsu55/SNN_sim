@@ -3,14 +3,15 @@ from typing import Dict, Iterator, Tuple, Any, List
 import numpy as np
 
 from src.core.config_manager import AppConfig
+from src.core.layout import NetworkLayout
 
 class BaseDataLoader(ABC):
-    def __init__(self, config: 'AppConfig', group_info: dict):
+    def __init__(self, config: 'AppConfig', layout: NetworkLayout):
         self.config = config
-        self.group_info = group_info
-        
+        self.layout = layout
+
         # ネットワーク全体のニューロン数を取得
-        self.total_neurons = sum(info["num"] for _, info in self.group_info.items())
+        self.total_neurons = self.layout.total_neurons
 
         self.dt = self.config.simulation.dt
         self.duration = config.task.duration
@@ -47,11 +48,4 @@ class BaseDataLoader(ABC):
         グローバルインデックスベースのデータ(形状: [total_neurons])を受け取り、
         Simulatorが受け付けるグループベースの辞書 {"pop_name": tensor} に変換する。
         """
-        inputs = {}
-        for pop_name, info in self.group_info.items():
-            # そのグループが担当するグローバルインデックスのリストを取得
-            indices = info["global_indices"]
-            # グローバル空間から抽出して割り当て
-            inputs[pop_name] = global_tensor[indices]
-            
-        return inputs
+        return self.layout.split_global_to_local(global_tensor)

@@ -8,7 +8,7 @@ class GeNNSimulator:
     def __init__(self, genn_model: pygenn.GeNNModel, config: Any, builder: NetworkBuilder):
         self.model = genn_model
         self.config = config
-        self.group_info = builder.group_info
+        self.layout = builder.layout
         self.builder = builder
 
         self.dt = self.config.simulation.dt
@@ -17,7 +17,7 @@ class GeNNSimulator:
         if recording_buffer_ms is None:
             recording_buffer_ms = getattr(self.config.task, "record_window_ms", self.config.task.duration)
         self.max_timesteps = int(recording_buffer_ms / self.dt)
-        self.total_neurons = sum(info["num"] for _, info in self.group_info.items())
+        self.total_neurons = self.layout.total_neurons
         
         self.is_setup = False
 
@@ -158,7 +158,7 @@ class GeNNSimulator:
             syn_pop.pre_vars[var_name].pull_from_device()
             values = np.copy(syn_pop.pre_vars[var_name].values)
             src_name, _, _ = syn_pop_name.partition("_to_")
-            global_data[self.group_info[src_name]["global_indices"]] = values
+            global_data[self.layout.global_indices(src_name)] = values
         return global_data
 
     def pull_synapse(self, var_name: str) -> np.ndarray:
@@ -180,10 +180,10 @@ class GeNNSimulator:
             # NetworkBuilder側で保持している「どのグローバル座標にマッピングするか」の情報を使用
             # syn_pop_name は "src_to_tgt" の形式であることを前提とする
             src_name, _, tgt_name = syn_pop_name.partition("_to_")
-            
-            src_indices = self.group_info[src_name]["global_indices"]
-            tgt_indices = self.group_info[tgt_name]["global_indices"]
-            
+
+            src_indices = self.layout.global_indices(src_name)
+            tgt_indices = self.layout.global_indices(tgt_name)
+
             # SPARSE接続のインデックスを取得 (NetworkBuilderの _build_synapses で指定したもの)
             # ※もしシミュレーター側で保持していない場合は、再計算が必要
             sub_mask = self.builder.global_mask[np.ix_(src_indices, tgt_indices)]
@@ -207,15 +207,14 @@ class GeNNSimulator:
         all_times = []
         all_global_ids = []
 
-        for pop_name, info in self.group_info.items():
+        for pop_name in self.layout.names():
             # GeNNからローカルデータを直接参照
             times, local_ids = self.model.neuron_populations[pop_name].spike_recording_data[0]
-            
+
             if len(times) > 0:
                 all_times.append(times)
-                # ループ内で直接グローバルインデックスにマッピング
-                # info["global_indices"] は以前に作成したnumpy配列を想定
-                all_global_ids.append(info["global_indices"][local_ids])
+                # ループ内で直接グローバルインデックスにマッピング (連番なので start+local)
+                all_global_ids.append(self.layout.local_to_global(pop_name, local_ids))
 
         # スパイクが0件の場合の早期リターン
         if not all_times:
@@ -283,23 +282,11 @@ class GeNNSimulator:
         """
         [形状: (total_neurons,)] のグローバル配列を Population毎に分割する
         """
-        if len(global_data) != self.total_neurons:
-            raise ValueError(f"Input data size {len(global_data)} does not match total neurons {self.total_neurons}")
+        return self.layout.split_global_to_local(global_data)
 
-        local_dict = {}
-        for pop_name, info in self.group_info.items():
-            global_idx = info["global_indices"]
-            # fancy indexingによる切り出し
-            local_dict[pop_name] = global_data[global_idx]
-        return local_dict
-    
     def _merge_local_to_global(self, local_dict: Dict[str, np.ndarray], dtype=np.float32) -> np.ndarray:
         """
         Population毎の配列を [形状: (total_neurons,)] のグローバル配列に結合する
         """
-        global_data = np.zeros(self.total_neurons, dtype=dtype)
-        for pop_name, local_data in local_dict.items():
-            global_idx = self.group_info[pop_name]["global_indices"]
-            global_data[global_idx] = local_data
-        return global_data
+        return self.layout.merge_local_to_global(local_dict, dtype=dtype)
     

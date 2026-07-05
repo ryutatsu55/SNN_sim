@@ -151,6 +151,15 @@ def burstiness_index(spike_times: np.ndarray, duration_ms: float, bin_ms: float 
 
 
 def bimodality_d(sizes: np.ndarray) -> float:
+    """Bimodality 指標 D（Ikeda-Akita-Takahashi 2023 supplementary 式 S26）。
+
+    アバランシェサイズ S1,...,SN を降順ソートし、隣接サイズの最大差（最大ギャップ）を D とする:
+        D = max_i (S_i − S_{i+1})   （S_i は降順、gap は非負）
+    論文本文の表記 `max_i S_{i+1} − S_i` は符号の綴りで、意図は「avalanche size の
+    最大差」＝最大ギャップ（Yada et al. 2017 に準拠）。二峰性（小アバランシェ群と
+    系サイズ級バーストの間のギャップ）で D が大きくなる。
+    ※ サイズは上限を設けない（power-law fit の smax=100 とは別。S26 は全サイズを使う）。
+    """
     sorted_sizes = np.sort(np.asarray(sizes, dtype=np.float64))[::-1]
     if sorted_sizes.size < 2:
         return np.nan
@@ -277,6 +286,27 @@ def diagnose_activity(
     }
 
 
+def build_group_display_map(
+    group_ids: dict[str, np.ndarray],
+) -> tuple[dict[int, int], int, int]:
+    """グローバルニューロンID -> 表示ID の写像を構築する。
+
+    重み分布の可視化と同様にニューロングループ順に並べ替える:
+    興奮性を先頭ブロック (1..Nexc)、抑制性を後続ブロック (Nexc+1..Nexc+Ninh) に配置する。
+    各グループ内はグローバルIDの昇順。
+
+    Returns: (mapping, n_exc, n_inh)
+    """
+    exc = np.sort(np.asarray(group_ids.get("excitatory", []), dtype=np.int64))
+    inh = np.sort(np.asarray(group_ids.get("inhibitory", []), dtype=np.int64))
+    mapping: dict[int, int] = {}
+    for disp, gid in enumerate(exc, start=1):
+        mapping[int(gid)] = disp
+    for disp, gid in enumerate(inh, start=len(exc) + 1):
+        mapping[int(gid)] = disp
+    return mapping, int(exc.size), int(inh.size)
+
+
 def plot_raster(
     times: np.ndarray,
     ids: np.ndarray,
@@ -284,17 +314,38 @@ def plot_raster(
     title: str,
     xlim_s: tuple[float, float] | None = None,
     ylim_neuron: tuple[float, float] | None = None,
+    group_ids: dict[str, np.ndarray] | None = None,
 ) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.scatter(times / 1000.0, ids, s=2.0, color="black")
+
+    remapped = False
+    if group_ids is not None:
+        mapping, n_exc, n_inh = build_group_display_map(group_ids)
+        if mapping:
+            disp = np.array([mapping.get(int(i), -1) for i in ids], dtype=np.int64)
+            valid = disp >= 0
+            t_s = times[valid] / 1000.0
+            d = disp[valid]
+            exc_mask = d <= n_exc
+            ax.scatter(t_s[exc_mask], d[exc_mask], s=2.0, color="tab:red", label="Excitatory")
+            ax.scatter(t_s[~exc_mask], d[~exc_mask], s=2.0, color="tab:blue", label="Inhibitory")
+            if n_exc > 0 and n_inh > 0:
+                ax.axhline(n_exc + 0.5, color="gray", lw=0.8, ls="--")
+                ax.legend(loc="upper right", markerscale=3, fontsize=8)
+            ax.set_ylim(0.5, n_exc + n_inh + 0.5)
+            remapped = True
+
+    if not remapped:
+        ax.scatter(times / 1000.0, ids, s=2.0, color="black")
+        if ylim_neuron is not None:
+            ax.set_ylim(*ylim_neuron)
+
     ax.set_title(title)
     ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Neuron ID")
+    ax.set_ylabel("Neuron ID (excitatory 1..Nexc, inhibitory above)")
     if xlim_s is not None:
         ax.set_xlim(*xlim_s)
-    if ylim_neuron is not None:
-        ax.set_ylim(*ylim_neuron)
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)

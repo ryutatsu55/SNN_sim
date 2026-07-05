@@ -22,6 +22,7 @@ if project_root not in sys.path:
 
 # Pydanticの設定モデルと、コンポーネントを動的ロードするレジストリをインポート
 from src.core.config_manager import AppConfig
+from src.core.layout import NetworkLayout
 from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
 
 class NetworkBuilder:
@@ -38,55 +39,29 @@ class NetworkBuilder:
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
 
-        # Pydanticモデルから総ニューロン数を計算
-        self.total_neurons = sum(neuron_cfg.num for neuron_cfg in self.config.neurons.values())
-        
+        # config のニューロン宣言順に連番でグローバルインデックスを割り当てる決定論的レイアウト。
+        # RandomState を消費しないため、GeNN ビルドなしでも from_config だけで再現できる。
+        self.layout = NetworkLayout.from_config(config)
+        self.total_neurons = self.layout.total_neurons
+
         self._component_lifeline = []
-        self.group_info = {}
         self.global_coords = None
         self.global_mask = None
         self.global_weights = None
         self.global_delays = None
 
-    def build(self, rec_spike: bool = True) -> Tuple[pygenn.GeNNModel, Dict[str, Any]]:
+    def build(self, rec_spike: bool = True) -> Tuple[pygenn.GeNNModel, NetworkLayout]:
         print("=== ネットワーク構築 (Network Building) ===")
-        # 1. 空間座席（インデックス）のランダム割り当て
-        self._assign_neurons()
-        # 2. 全ニューロン一括での座標・グローバル行列生成
+        # 1. 全ニューロン一括での座標・グローバル行列生成 (レイアウトは __init__ で確定済み)
         self._generate_global_matrices()
-        # 3. GeNNへのニューロン・シナプスの登録
+        # 2. GeNNへのニューロン・シナプスの登録
         self._build_neuron_populations()
         self._build_synapses()
-        # 4. 入出力ポートのハードウェア的構築とメタデータ生成
+        # 3. 入出力ポートのハードウェア的構築とメタデータ生成
         self._build_input_ports()
         self._build_output_ports(rec_spike)
-        
-        return self.genn_model, self.group_info
 
-    def _assign_neurons(self):
-        """総ニューロン数に対して、グループごとにランダムにグローバルインデックスを割り当てる"""
-        print(f"  Assigning Global Indices for {self.total_neurons} neurons...")
-        available_indices = np.arange(self.total_neurons)
-        current_offset = 0
-        self.group_info = {}
-        
-        for group_name, params in self.config.neurons.items():
-            num_neurons = params.num
-            
-            # ランダムに座席を確保し、ソートする
-            assigned_indices = self.rng.choice(available_indices, size=num_neurons, replace=False)
-            available_indices = np.setdiff1d(available_indices, assigned_indices)
-            assigned_indices.sort()
-            
-            self.group_info[group_name] = {
-                "global_indices": assigned_indices,
-                "num": num_neurons,
-                "params": params
-            }
-
-            current_offset += num_neurons
-            
-        print(f"  Successfully assigned {current_offset} neurons.")
+        return self.genn_model, self.layout
 
     def _generate_global_matrices(self):
         """全ニューロンの座標と、グローバルな結合行列を一括生成する"""
@@ -103,27 +78,27 @@ class NetworkBuilder:
         # ======================================================================================
         # 1. 空間座標の生成
         spaceClass = SPATIAL_MODELS.get(space_cfg.profile_name)
-        self.global_coords = spaceClass(space_cfg, self.total_neurons, self.rng).generate() 
-        
+        self.global_coords = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout).generate()
+
         # 2. 結合マスクの生成
         connectClass = CONNECTION_MODELS.get(conn_cfg.profile_name)
-        self.global_mask = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng).generate() 
-        
+        self.global_mask = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout).generate()
+
         # 3. 重み行列の生成
         weightClass = WEIGHT_MODELS.get(weight_cfg.profile_name)
-        self.global_weights = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng).generate()
-        
+        self.global_weights = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout).generate()
+
         # 4. 遅延行列の生成
         delayClass = DELAY_MODELS.get(delay_cfg.profile_name)
-        self.global_delays = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng).generate()
+        self.global_delays = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout).generate()
 
     def _build_neuron_populations(self):
         """GeNN上にニューロンポピュレーションを定義"""
-        for group_name, info in self.group_info.items():
-            params = info["params"]
-            num_neurons = info["num"]
-            
-            NeuronClass = NEURON_MODELS.get(params.type) 
+        for group_name, grp in self.layout.items():
+            params = grp.params
+            num_neurons = grp.num
+
+            NeuronClass = NEURON_MODELS.get(params.type)
             neuron_instance = NeuronClass(params, self.config.simulation.dt)
             
             self.genn_model.add_neuron_population(
@@ -139,19 +114,19 @@ class NetworkBuilder:
         """グローバル行列からインデックスで切り出し、シナプスを構築"""
         print("  Building Synapse Populations...")
         for syn_group_name, syn_cfg in self.config.synapses.items():
-            for tgt_name in self.group_info.keys():
+            for tgt_name in self.layout.names():
                 src_name = syn_cfg.source
                 # tgt_name = syn_cfg.target
                 print(f"src:{src_name}, tgt:{tgt_name}")
-                
-                src_indices = self.group_info[src_name]["global_indices"]
-                tgt_indices = self.group_info[tgt_name]["global_indices"]
-                # print(f"src:{src_indices}, tgt:{tgt_indices}")
+
+                # 連番割り当てなので集団はグローバル空間の連続スライスに対応する
+                src_slice = self.layout.slice_of(src_name)
+                tgt_slice = self.layout.slice_of(tgt_name)
 
                 # グローバル行列からの抽出
-                sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
-                sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
-                sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)] 
+                sub_weights = self.global_weights[src_slice, tgt_slice].copy()
+                sub_delays = self.global_delays[src_slice, tgt_slice].copy()
+                sub_mask = self.global_mask[src_slice, tgt_slice]
 
                 delay_by_target = getattr(syn_cfg, "delay_by_target", None)
                 # delay_by_target 指定は集団内で単一定数 = 均一遅延。この場合のみ GeNN の
@@ -248,7 +223,7 @@ class NetworkBuilder:
         """GeNN上に入力専用のglobal_popを定義し、本体へ1対1で接続する"""
 
         if self.config.inputs.GaussianNoise.enable:
-            for pop_name, info in self.group_info.items():
+            for pop_name in self.layout.names():
                 cs_name = f"GaussianNoise_CS_to_{pop_name}"
 
                 cs = self.genn_model.add_current_source(
@@ -312,8 +287,8 @@ if __name__ == "__main__":
 
         # 3. ビルドプロセスの実行
         print("\n[TEST] Executing build()...")
-        genn_model, group_info = builder.build(rec_spike=True)
-        
+        genn_model, layout = builder.build(rec_spike=True)
+
         # 4. アサーションと検証
         print("\n[TEST] Validating generated objects...")
         Npop_names = list(genn_model.neuron_populations.keys())
@@ -326,7 +301,7 @@ if __name__ == "__main__":
         # --- 本体層の存在確認 ---
         for body_name in config.neurons.keys():
             assert body_name in Npop_names, f"Body Pop '{body_name}' not found in GeNN model."
-            assert body_name in group_info.keys(), f"'{body_name}' missing in group_info."
+            assert body_name in layout.names(), f"'{body_name}' missing in layout."
         print("  ✓ Body populations successfully validated.")
 
         # --- Current Source の確認 ---

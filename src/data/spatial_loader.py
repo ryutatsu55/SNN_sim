@@ -9,8 +9,8 @@ from src.core.config_manager import AppConfig
 
 @DATA_LOADERS.register("spatial_recognition")
 class SpatialRecognitionLoader(BaseDataLoader):
-    def __init__(self, config: 'AppConfig', io_map: dict):
-        super().__init__(config, io_map)
+    def __init__(self, config: 'AppConfig', layout):
+        super().__init__(config, layout)
         
         self.num_classes = 3
         self.output_dir = "RNN_analyze/reservoir_outputs"   # TODO 要修正
