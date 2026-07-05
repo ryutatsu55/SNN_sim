@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from mpl_toolkits.mplot3d import Axes3D
 import os
 from pathlib import Path
 
@@ -205,7 +207,7 @@ def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title
 def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="."):
     """
     STDPの学習特性（Δt vs Δw）をプロットし、画像として保存する関数。
-    
+
     Args:
         dw: 重みの変化量 (Δw = w_after - w_before) の配列
         dt: スパイク時間差 (Δt = t_post - t_pre) [ms] の配列
@@ -213,36 +215,36 @@ def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="
         save_path: 画像の保存先ディレクトリ
     """
     plt.figure(figsize=(10, 6))
-    
+
     # 0点を強調するガイドライン
     plt.axhline(0, color='black', linewidth=1, linestyle='--')
     plt.axvline(0, color='black', linewidth=1, linestyle='--')
-    
+
     # データの散布図と近似線
     plt.scatter(dt, dw, color='blue', alpha=0.6, label='Measured Data')
-    
+
     # スムーズな曲線を描くためのソート処理（プロット用）
     sort_idx = np.argsort(dt)
     plt.plot(dt[sort_idx], dw[sort_idx], color='red', linewidth=2, label='STDP Curve')
-    
+
     # 軸ラベルの設定
     plt.xlabel('Spike Timing Difference: $\Delta t$ [ms]', fontsize=12)
     plt.ylabel('Weight Change: $\Delta w$ (or $\Delta g$)', fontsize=12)
     plt.title(title, fontsize=14)
-    
+
     # 領域の解説（LTP/LTD）
     plt.text(max(dt)*0.7, max(dw)*0.1, 'LTP (Potentiation)', fontsize=10, color='green', fontweight='bold')
     plt.text(min(dt)*0.7, max(dw)*0.1, 'LTD (Depression)', fontsize=10, color='orange', fontweight='bold')
-    
+
     plt.grid(True, which='both', linestyle=':', alpha=0.5)
     plt.legend()
-    
+
     # 保存処理
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    
+
     file_full_path = os.path.join(save_path, f"{title}.png")
     plt.savefig(file_full_path, dpi=300)
     plt.close()
-    
+
     print(f"  [Visualization] STDP window plot saved to: {file_full_path}")

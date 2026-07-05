@@ -11,3 +11,5 @@ SNN_Model_precision_check/
 # GeNN 生成コード (集約先 + 旧来プロジェクト直下に散乱したもの)
 genn_code/
 *_CODE/
+src/models/network/data/
+outputs/

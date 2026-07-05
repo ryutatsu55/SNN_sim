@@ -1,7 +1,9 @@
 import numpy as np
+import pandas as pd
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from src.core.registry import SPATIAL_MODELS
+from pathlib import Path
 
 class BaseSpace(ABC):
     """空間座標を生成する基底クラス"""
@@ -125,4 +127,24 @@ class Block2DSpace(BaseSpace):
             # 次のモジュールへインデックスを進める
             current_idx += n
             
+        return coords
+    
+@SPATIAL_MODELS.register("C.elegans")
+class C_elegansSpace(BaseSpace):
+    def generate(self) -> np.ndarray:
+        """C. elegansのニューロン座標データ (ordered_coords.csv) から実際の3D座標を読み込む"""
+        csv_path = Path(__file__).parent / "data" / "c_elegans" / "ordered_coords.csv"
+
+        # CSVを読み込み
+        df = pd.read_csv(csv_path)
+
+        # 必要に応じてニューロン数に合わせて選択
+        if self.num_neurons > len(df):
+            raise ValueError(
+                f"num_neurons ({self.num_neurons}) exceeds available neurons in C. elegans data ({len(df)})"
+            )
+
+        # X, Y, Z座標を取得
+        coords = df[['X', 'Y', 'Z']].values[:self.num_neurons].astype(np.float32)
+
         return coords
