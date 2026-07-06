@@ -49,7 +49,7 @@ LOG_PATH="${LOG_DIR}/run_$(date +%Y%m%d-%H%M%S).log"
 # --- 実行 -----------------------------------------------------------------
 # デフォルトの記録条件。追加引数で上書き・追加可能。
 DEFAULT_ARGS=(
-  --record-hours-range 0 12
+  --record-hours-range 0 72
   --record-window-ms 600000
   --record-buffer-ms 10000
 )

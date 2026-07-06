@@ -275,7 +275,13 @@ class GeNNSimulator:
                 for var_name, var in cs.vars.items():
                     var.view[:] = self.initial_states['current_sources'][cs_name][var_name]
                     var.push_to_device()
-                    
+
+        # 4. per-synapse 到着機構 (pre_arrival_syn_code) を使う場合の状態リセット。
+        # ソーススパイクキューをクリアし、前トライアル末尾のスパイクが新トライアル最初の
+        # maxDelay ステップで偽の到着を生むのを防ぐ + arrST を負センチネルへ戻す。
+        # 到着機構を使うシナプス群が無ければ no-op。
+        self.model.reset_arrival_state()
+
         print("  [Simulator] All network variables (Neurons, Synapses, Inputs) safely reset.")
 
     def _split_global_to_local(self, global_data: np.ndarray) -> Dict[str, np.ndarray]:

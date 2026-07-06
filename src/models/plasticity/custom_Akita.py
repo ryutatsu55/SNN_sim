@@ -234,7 +234,8 @@ class CustomAkitaModel(BasePlasticityModel):
     # 2. GeNN スニペット生成
     # ==========================================
     def _create_snippet(self):
-        pre_code, post_code, pre_syn_code, post_syn_code, syn_dyn_code = self._build_cpp_codes()
+        (pre_code, post_code, pre_syn_code, post_syn_code,
+         syn_dyn_code, pre_arrival_syn_code) = self._build_cpp_codes()
 
         safe_mode = self.mode.replace("-", "_")
         if not self.trace_mode:
@@ -286,7 +287,7 @@ class CustomAkitaModel(BasePlasticityModel):
                 post_var_defs.append(("post_trace1", "double", pygenn.VarAccess.READ_WRITE))
                 post_var_defs.append(("post_trace2", "double", pygenn.VarAccess.READ_WRITE))
 
-        snippet = pygenn.create_weight_update_model(
+        snippet_kwargs = dict(
             class_name=f"custom_Akita_{safe_mode}_{alg_suffix}_gscaled",
             params=list(self._params.keys()),
             vars=var_defs,
@@ -296,8 +297,15 @@ class CustomAkitaModel(BasePlasticityModel):
             post_spike_code=post_code,
             pre_spike_syn_code=pre_syn_code,
             post_spike_syn_code=post_syn_code,
-            synapse_dynamics_code=syn_dyn_code
+            synapse_dynamics_code=syn_dyn_code,
         )
+        # delay_corrected / nearest_dc の非軸索パスは per-synapse 到着イベント駆動。
+        # GeNN fork の pre_arrival_syn_code (到着時刻に実行) + arrival_delay_var="d" を使う。
+        if pre_arrival_syn_code is not None:
+            snippet_kwargs["pre_arrival_syn_code"] = pre_arrival_syn_code
+            snippet_kwargs["arrival_delay_var"] = "d"
+
+        snippet = pygenn.create_weight_update_model(**snippet_kwargs)
 
         return snippet
 
@@ -307,17 +315,21 @@ class CustomAkitaModel(BasePlasticityModel):
     def _build_cpp_codes(self):
         """C++のロジックコードを生成する。
 
-        生成物は 5 つの C++ 文字列:
+        生成物は 6 つの C++ 文字列:
           - pre_spike_code / post_spike_code        : ニューロン発火時の状態更新 (STP 資源・trace)
           - pre_spike_syn_code / post_spike_syn_code: シナプス上での伝播・重み更新
-          - syn_dyn_code                            : 毎ステップ実行 (delay_corrected のみ)
+          - syn_dyn_code                            : 毎ステップ実行 (現在は未使用 = None)
+          - pre_arrival_syn_code                    : per-synapse 到着時刻にイベント駆動実行
+                                                      (delay_corrected / nearest_dc の非軸索パス)
         mode (e/i-stdp) × trace/nearest × legacy/delay_corrected で分岐し、
         実際の生成は下記の per-mode ヘルパへ委譲する。
         """
         pre_spike_code = self._pre_spike_code()
         post_spike_code = self._post_spike_code()
-        pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._build_syn_codes()
-        return pre_spike_code, post_spike_code, pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+        (pre_spike_syn_code, post_spike_syn_code,
+         syn_dyn_code, pre_arrival_syn_code) = self._build_syn_codes()
+        return (pre_spike_code, post_spike_code, pre_spike_syn_code,
+                post_spike_syn_code, syn_dyn_code, pre_arrival_syn_code)
 
     def _pre_spike_code(self):
         """プレニューロン発火時: STP 資源更新 + (legacy trace 型のみ) pre trace 更新。
@@ -377,25 +389,29 @@ class CustomAkitaModel(BasePlasticityModel):
     def _build_syn_codes(self):
         """シナプス上の伝播 + 重み更新コードを algorithm でディスパッチする。
 
-        戻り値は (pre_spike_syn_code, post_spike_syn_code, syn_dyn_code) の 3 要素タプル。
-        delay_corrected 以外では syn_dyn_code = None。
+        戻り値は (pre_spike_syn_code, post_spike_syn_code, syn_dyn_code,
+        pre_arrival_syn_code) の 4 要素タプル。delay_corrected / nearest_dc の非軸索パスは
+        毎ステップ syn_dynamics ポーリングをやめ、per-synapse 到着時刻にイベント駆動で走る
+        pre_arrival_syn_code を返す (syn_dyn_code=None)。それ以外は pre_arrival_syn_code=None。
         """
+        syn_dyn_code = None
+        pre_arrival_syn_code = None
         if self.trace_mode:
             if self._trace_legacy_layout:
-                # legacy / axonal: 到着時刻基準の直接 STDP (syn_dyn_code なし)。
+                # legacy / axonal: 到着時刻基準の直接 STDP。
                 # axonal では GeNN が st_pre を到着時刻へ補正するため遅延補正済みになる。
                 pre_spike_syn_code, post_spike_syn_code = self._trace_legacy_syn()
-                syn_dyn_code = None
             else:
-                pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._trace_dc_syn()
+                # delay_corrected: 到着イベント駆動 (pre_arrival_syn_code)。
+                pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code = self._trace_dc_syn()
         else:
             if self._axonal:
-                # nearest × axonal: 直接指数カーネル版 (syn_dyn_code なし)。
+                # nearest × axonal: 直接指数カーネル版。
                 pre_spike_syn_code, post_spike_syn_code = self._nearest_syn()
-                syn_dyn_code = None
             else:
-                pre_spike_syn_code, post_spike_syn_code, syn_dyn_code = self._nearest_dc_syn()
-        return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+                # nearest × 非軸索: 到着イベント駆動 (pre_arrival_syn_code)。
+                pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code = self._nearest_dc_syn()
+        return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code, pre_arrival_syn_code
 
     def _transmit_stmt(self):
         """シナプス電流の投与文。
@@ -448,59 +464,58 @@ class CustomAkitaModel(BasePlasticityModel):
             """
         return pre_spike_syn_code, post_spike_syn_code
 
-    # --- nearest: delay_corrected 構造 + = 1.0 上書き (nearest-neighbor) ---
+    # --- nearest: 到着イベント駆動 + = 1.0 上書き (nearest-neighbor) ---
     def _nearest_dc_syn(self):
-        """nearest モード: delay_corrected と同構造だが trace 更新を += でなく = 1.0 で行う。
-        これにより重み計算は常に直近スパイク1本分のみに基づく（nearest-neighbor ペアリング）。
-        E-STDP post_spike_syn_code の同時到着補正も 1.0 固定（+= 版の decay+1.0 でなく）。
+        """nearest モード（非軸索）: per-synapse 到着イベント駆動。trace 更新を += でなく
+        = 1.0 で行い、重み計算は常に直近スパイク1本分のみに基づく（nearest-neighbor ペアリング）。
+
+        旧実装は毎ステップ syn_dynamics で到着をポーリングしていたが、GeNN fork の
+        pre_arrival_syn_code で到着時刻にのみ実行する。st_pre_axon (per-synapse 到着時刻)
+        を使い、LTP は post 発火時に直近到着から現在まで trace を減衰して適用する。
+        Δt=0 は GeNN のカーネル順序保証により LTP のみ (到着カーネルは dt_post>0 のみ LTD)。
+
+        戻り値: (pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code)
         """
-        dt_ms = self._dt_ms
         pre_spike_syn_code = self._transmit_stmt()
 
         if self._is_e_stdp:
+            # LTP: 直近到着 st_pre_axon から現在まで pre_trace を減衰して適用
             post_spike_syn_code = f"""
-                        const scalar newWeight = w + (A_E * pre_trace_syn);
+                        const scalar pre_trace_now = pre_trace_syn * exp(-(t - st_pre_axon) / tau_E);
+                        const scalar newWeight = w + (A_E * pre_trace_now);
                         w = fmax(wMin, fmin(wMax, newWeight));
                     """
-
-            syn_dyn_code = f"""
-                        pre_trace_syn *= decay_E;
-                        const scalar t_arrival = st_pre + (d * {dt_ms});
-                        if (fabs(t - t_arrival) < 0.5 * {dt_ms}) {{
-                            pre_trace_syn = 1.0;
-                            const scalar dt_post = t - st_post;
-                            if (dt_post > 0.5 * {dt_ms}) {{
-                                const scalar post_trace_now = post_trace * exp(-dt_post / tau_E);
-                                w -= A_E * beta_E * post_trace_now;
-                                w = fmax(wMin, fmin(wMax, w));
-                            }}
+            # 到着イベント: nearest なので trace を 1.0 上書き + (post が先行していれば) LTD
+            pre_arrival_syn_code = f"""
+                        pre_trace_syn = 1.0;
+                        const scalar dt_post = t - st_post;
+                        if (dt_post > 0.0) {{
+                            const scalar post_trace_now = post_trace * exp(-dt_post / tau_E);
+                            w -= A_E * beta_E * post_trace_now;
+                            w = fmax(wMin, fmin(wMax, w));
                         }}
                     """
-            return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+            return pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code
 
         # I-STDP
         post_spike_syn_code = f"""
-                        const scalar dW = C_I * (pre_trace_syn1 - C_I_beta * pre_trace_syn2);
+                        const scalar pre_trace1_now = pre_trace_syn1 * exp(-(t - st_pre_axon) / tau_I1);
+                        const scalar pre_trace2_now = pre_trace_syn2 * exp(-(t - st_pre_axon) / tau_I2);
+                        const scalar dW = C_I * (pre_trace1_now - C_I_beta * pre_trace2_now);
                         w = fmax(wMin, fmin(wMax, w + dW));
                     """
-
-        syn_dyn_code = f"""
-                        pre_trace_syn1 *= decay_I1;
-                        pre_trace_syn2 *= decay_I2;
-                        const scalar t_arrival = st_pre + (d * {dt_ms});
-                        if (fabs(t - t_arrival) < 0.5 * {dt_ms}) {{
-                            pre_trace_syn1 = 1.0;
-                            pre_trace_syn2 = 1.0;
-                            const scalar dt_post = t - st_post;
-                            if (dt_post > 0.5 * {dt_ms}) {{
-                                const scalar post_trace1_now = post_trace1 * exp(-dt_post / tau_I1);
-                                const scalar post_trace2_now = post_trace2 * exp(-dt_post / tau_I2);
-                                const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
-                                w = fmax(wMin, fmin(wMax, w + dW));
-                            }}
+        pre_arrival_syn_code = f"""
+                        pre_trace_syn1 = 1.0;
+                        pre_trace_syn2 = 1.0;
+                        const scalar dt_post = t - st_post;
+                        if (dt_post > 0.0) {{
+                            const scalar post_trace1_now = post_trace1 * exp(-dt_post / tau_I1);
+                            const scalar post_trace2_now = post_trace2 * exp(-dt_post / tau_I2);
+                            const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
+                            w = fmax(wMin, fmin(wMax, w + dW));
                         }}
                     """
-        return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+        return pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code
 
     # --- trace 型: legacy (遅延非考慮) ---
     def _trace_legacy_syn(self):
@@ -541,68 +556,62 @@ class CustomAkitaModel(BasePlasticityModel):
                     """
         return pre_spike_syn_code, post_spike_syn_code
 
-    # --- trace 型: delay_corrected (per-synapse trace + syn_dynamics で到着時刻更新) ---
+    # --- trace 型: delay_corrected (per-synapse trace + 到着イベント駆動) ---
     def _trace_dc_syn(self):
-        dt_ms = self._dt_ms
+        """delay_corrected（非軸索, all-to-all trace）: per-synapse 到着イベント駆動。
 
-        # pre_spike_syn_code: 電流送信のみ。STDP は syn_dynamics_code で到着時刻に実行する。
+        旧実装は毎ステップ syn_dynamics で pre_trace_syn を減衰しつつ到着をポーリングして
+        いた。GeNN fork の pre_arrival_syn_code で到着時刻にのみ実行し、trace は decay-on-read
+        （前回到着 st_pre_axon から今回到着まで減衰して +1.0）で更新する。LTP は post 発火時に
+        直近到着から現在まで減衰して適用（st_pre_axon 使用）。
+
+        st_pre_axon は GeNN 管理の per-synapse 到着時刻で、pre_arrival_syn_code の本文実行後に
+        今回の到着時刻 t へ更新される（本文中では「前回の到着時刻」を保持）。学習カーネル順序
+        (arrival → postsynaptic) により、Δt=0 は LTP のみが観測する（旧実装の +1.0 手補正は不要）。
+
+        戻り値: (pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code)
+        """
+        # pre_spike_syn_code: 電流送信のみ（遅延 d 後に addToPostDelay で投与）。
         pre_spike_syn_code = self._transmit_stmt()
 
         if self._is_e_stdp:
-            # post_spike_syn_code: pre_trace_syn は到着済みスパイクのみを反映している。
-            # GeNN の double-buffering により、post 発火と同時刻の到着 (delta_t=0) は
-            # READ バッファに未コミットのため pre_trace_syn=0 になる (シナプス伝播遅延が
-            # post 発火を 1 ステップ遅らせた形で検出される)。
-            # この場合、到着分 (+1.0) を自前で補完して正しい LTP を適用する。
-            # 判定: t_arr = st_pre + d*dt_ms == t (現在のシミュレーション時刻)
-            # ※ post_spike_syn_code における st_pre は +dt オフセットなしの raw srcST。
+            # LTP: pre_trace_syn を直近到着 st_pre_axon から現在まで減衰して適用。
             post_spike_syn_code = f"""
-                        const scalar newWeight = w + (A_E * pre_trace_syn);
+                        const scalar pre_trace_now = pre_trace_syn * exp(-(t - st_pre_axon) / tau_E);
+                        const scalar newWeight = w + (A_E * pre_trace_now);
                         w = fmax(wMin, fmin(wMax, newWeight));
                     """
-
-            # syn_dynamics_code: 毎ステップ実行。
-            # Step1: pre_trace_syn を指数減衰（連続減衰で常に最新値を保つ）
-            # Step2: 今ステップにスパイクが到着したか検出
-            # Step3: 到着したら +1.0 積算 → LTD を到着時刻基準で適用
-            syn_dyn_code = f"""
-                        pre_trace_syn *= decay_E;
-                        const scalar t_arrival = st_pre + (d * {dt_ms});
-                        if (fabs(t - t_arrival) < 0.5 * {dt_ms}) {{
-                            pre_trace_syn += 1.0;
-                            const scalar dt_post = t - st_post;
-                            if (dt_post > 0.5 * {dt_ms}) {{
-                                const scalar post_trace_now = post_trace * exp(-dt_post / tau_E);
-                                w -= A_E * beta_E * post_trace_now;
-                                w = fmax(wMin, fmin(wMax, w));
-                            }}
+            # 到着イベント: trace を decay-on-read + 1.0 で更新 → post 先行なら LTD。
+            pre_arrival_syn_code = f"""
+                        pre_trace_syn = pre_trace_syn * exp(-(t - st_pre_axon) / tau_E) + 1.0;
+                        const scalar dt_post = t - st_post;
+                        if (dt_post > 0.0) {{
+                            const scalar post_trace_now = post_trace * exp(-dt_post / tau_E);
+                            w -= A_E * beta_E * post_trace_now;
+                            w = fmax(wMin, fmin(wMax, w));
                         }}
                     """
-            return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+            return pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code
 
         # I-STDP
         post_spike_syn_code = f"""
-                        const scalar dW = C_I * (pre_trace_syn1 - C_I_beta * pre_trace_syn2);
+                        const scalar pre_trace1_now = pre_trace_syn1 * exp(-(t - st_pre_axon) / tau_I1);
+                        const scalar pre_trace2_now = pre_trace_syn2 * exp(-(t - st_pre_axon) / tau_I2);
+                        const scalar dW = C_I * (pre_trace1_now - C_I_beta * pre_trace2_now);
                         w = fmax(wMin, fmin(wMax, w + dW));
                     """
-
-        syn_dyn_code = f"""
-                        pre_trace_syn1 *= decay_I1;
-                        pre_trace_syn2 *= decay_I2;
-                        const scalar t_arrival = st_pre + (d * {dt_ms});
-                        if (fabs(t - t_arrival) < 0.5 * {dt_ms}) {{
-                            pre_trace_syn1 += 1.0;
-                            pre_trace_syn2 += 1.0;
-                            const scalar dt_post = t - st_post;
-                            if (dt_post >  0.5 * {dt_ms}) {{
-                                const scalar post_trace1_now = post_trace1 * exp(-dt_post / tau_I1);
-                                const scalar post_trace2_now = post_trace2 * exp(-dt_post / tau_I2);
-                                const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
-                                w = fmax(wMin, fmin(wMax, w + dW));
-                            }}
+        pre_arrival_syn_code = f"""
+                        pre_trace_syn1 = pre_trace_syn1 * exp(-(t - st_pre_axon) / tau_I1) + 1.0;
+                        pre_trace_syn2 = pre_trace_syn2 * exp(-(t - st_pre_axon) / tau_I2) + 1.0;
+                        const scalar dt_post = t - st_post;
+                        if (dt_post > 0.0) {{
+                            const scalar post_trace1_now = post_trace1 * exp(-dt_post / tau_I1);
+                            const scalar post_trace2_now = post_trace2 * exp(-dt_post / tau_I2);
+                            const scalar dW = C_I * (post_trace1_now - C_I_beta * post_trace2_now);
+                            w = fmax(wMin, fmin(wMax, w + dW));
                         }}
                     """
-        return pre_spike_syn_code, post_spike_syn_code, syn_dyn_code
+        return pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code
 
     # ==========================================
     # 4. プロパティ (BasePlasticityModel の実装)

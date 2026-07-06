@@ -13,8 +13,15 @@ if not os.environ.get("CUDA_PATH"):
             os.environ["CUDA_PATH"] = _candidate
             break
 
-# CPU/GPU切り替え: False にすると single_threaded_cpu バックエンドを使用
+# CPU/GPU バックエンド選択:
+#   None  = ニューロン数で自動選択 (total_neurons <= GPU_NEURON_THRESHOLD なら CPU、超えたら GPU)
+#   True  = 常に GPU (cuda) を強制
+#   False = 常に CPU (single_threaded_cpu) を強制
+# 自動選択の根拠: per-synapse 到着イベント駆動化 (pre_arrival_syn_code) 後の実測で、小規模では
+# CPU が最速 (100n=11.4µs/step, GPU 40.8µs は per-step 起動 floor 律速で勝てない)、~400n 付近が
+# crossover で大規模は GPU が平坦有利。詳細: docs/gpu_vs_cpu.md「実装後の実測」。
 USE_GPU = False
+GPU_NEURON_THRESHOLD = 400
 
 project_root = str(Path(__file__).resolve().parent.parent.parent)
 if project_root not in sys.path:
@@ -34,15 +41,24 @@ class NetworkBuilder:
         # None の場合はカレントディレクトリ (従来挙動)。Simulator.setup() の build() で使う。
         self.code_gen_dir = code_gen_dir
 
-        _backend = "cuda" if USE_GPU else "single_threaded_cpu"
+        # config のニューロン宣言順に連番でグローバルインデックスを割り当てる決定論的レイアウト。
+        # RandomState を消費しないため、GeNN ビルドなしでも from_config だけで再現できる。
+        # backend 自動選択 (USE_GPU is None) がニューロン数を参照するため、モデル生成より先に確定させる。
+        self.layout = NetworkLayout.from_config(config)
+        self.total_neurons = self.layout.total_neurons
+
+        # backend 選択: USE_GPU が None ならニューロン数で自動、True/False なら強制。
+        if USE_GPU is None:
+            use_gpu = self.total_neurons > GPU_NEURON_THRESHOLD
+            _reason = f"auto (total_neurons={self.total_neurons} {'>' if use_gpu else '<='} {GPU_NEURON_THRESHOLD})"
+        else:
+            use_gpu = bool(USE_GPU)
+            _reason = "forced (USE_GPU)"
+        _backend = "cuda" if use_gpu else "single_threaded_cpu"
+        print(f"[NetworkBuilder] backend = {_backend}  [{_reason}]")
         self.genn_model = pygenn.GeNNModel("double", model_name, time_precision="double", backend=_backend)
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
-
-        # config のニューロン宣言順に連番でグローバルインデックスを割り当てる決定論的レイアウト。
-        # RandomState を消費しないため、GeNN ビルドなしでも from_config だけで再現できる。
-        self.layout = NetworkLayout.from_config(config)
-        self.total_neurons = self.layout.total_neurons
 
         self._component_lifeline = []
         self.global_coords = None
