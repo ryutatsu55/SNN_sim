@@ -13,3 +13,4 @@ genn_code/
 *_CODE/
 src/models/network/data/
 outputs/
+src/models/network/data/c_elegans
