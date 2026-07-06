@@ -47,34 +47,56 @@ def avalanche_distribution(sizes: np.ndarray, smax: int | None = 100) -> tuple[n
 
 
 def _fit_power_loglog(support: np.ndarray, prob: np.ndarray) -> tuple[float, float, np.ndarray]:
+    """log-log 平面での power-law 線形回帰。
+
+    pfit(s) = exp(intercept)·s^slope の**生の回帰線**を返す(合計1へ再正規化しない)。
+    ΔCr(S21-24)は pemp と pfit の差の符号で sub/super を判定するため、pfit を PMF へ
+    再正規化すると Σ(pemp−pfit)=0 となり Aupper=|Alower| で符号情報が消えてしまう。
+    """
     x = np.log(support)
     y = np.log(prob)
     slope, intercept = np.polyfit(x, y, 1)
     fitted = np.exp(intercept) * np.power(support, slope)
-    fitted = fitted / np.sum(fitted)
     return slope, intercept, fitted
 
 
-def criticality_index_delta_cr(sizes: np.ndarray, smax: int = 100) -> float:
+def criticality_index_delta_cr(
+    sizes: np.ndarray, smax: int = 100, smin_max: int = 10, min_points: int = 10
+) -> float:
+    """臨界性指標 ΔCr(Ikeda-Akita-Takahashi 2023 supplementary 式 S21-S24)。
+
+    pemp(s)=経験PMF, pfit(s)=log-log 線形回帰の**生の回帰線**(exp(b)·s^slope)。
+    smin を [1, smin_max] で走査して線形回帰の平均二乗誤差を最小化(論文: 小サイズは
+    べき乗からずれるため除外)。smax=100。
+        Aupper = Σ max(pemp−pfit, 0),  Alower = Σ min(pemp−pfit, 0)   [smin..smax]
+        ΔCr    = |大きい方の符号付き値|。 正=超臨界, ≈0=臨界, 負=劣臨界。
+
+    重要: pfit は**再正規化しない**(旧実装は合計1へ正規化していたため Σ(pemp−pfit)=0 と
+    なり、かつ smin>1 選択時に −(小サイズ質量) の系統誤差が入って偽の強い劣臨界値を出していた)。
+    smin は小範囲に制限(旧実装は上限なしで tail へ退化)。
+    """
     support, prob = avalanche_distribution(sizes, smax=smax)
-    if support.size < 3:
+    if support.size < min_points:
         return np.nan
 
     best_error = np.inf
-    best_support = support
-    best_prob = prob
-    best_fit = prob
-    for smin in support[:-2]:
+    best_prob = None
+    best_fit = None
+    for smin in support:
+        if smin > smin_max:
+            break
         mask = support >= smin
-        if np.count_nonzero(mask) < 3:
-            continue
+        if np.count_nonzero(mask) < min_points:
+            break
         _, _, fit = _fit_power_loglog(support[mask], prob[mask])
-        error = float(np.sum((np.log(prob[mask]) - np.log(fit)) ** 2))
+        error = float(np.mean((np.log(prob[mask]) - np.log(fit)) ** 2))
         if error < best_error:
             best_error = error
-            best_support = support[mask]
             best_prob = prob[mask]
             best_fit = fit
+
+    if best_prob is None:
+        return np.nan
 
     diff = best_prob - best_fit
     upper = float(np.sum(np.maximum(diff, 0.0)))
@@ -358,14 +380,35 @@ def plot_avalanche_distribution(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
     smax: int | None = None,
+    fit_smax: int = 100,
 ) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     support, prob = avalanche_distribution(sizes, smax=smax)
     fig, ax = plt.subplots(figsize=(5, 4))
     if support.size > 0:
-        ax.scatter(support, prob, s=12)
+        ax.scatter(support, prob, s=12, color="black", label="empirical", zorder=3)
         ax.set_xscale("log")
         ax.set_yscale("log")
+
+        # LLR と同じ [1, fit_smax] の離散打ち切りMLEで power-law / exponential を推定し重ねる。
+        # 経験分布の [1, fit_smax] 内の確率質量にスケールして表示スケールを揃える。
+        x = np.asarray(sizes, dtype=np.float64)
+        x = x[(x >= 1) & (x <= fit_smax)]
+        if x.size >= 2:
+            fit_support = np.arange(1, fit_smax + 1, dtype=np.float64)
+            alpha = _fit_discrete_powerlaw_alpha(x, 1, fit_smax)
+            lam = _fit_discrete_exponential_lambda(x, 1, fit_smax)
+            emp_mass = float(prob[support <= fit_smax].sum())
+            p_pow = np.power(fit_support, -alpha)
+            p_pow = p_pow / p_pow.sum() * emp_mass
+            p_exp = np.exp(-lam * fit_support)
+            p_exp = p_exp / p_exp.sum() * emp_mass
+            llr = log_likelihood_ratio_power_vs_exponential(sizes, smax=fit_smax)
+            ax.plot(fit_support, p_pow, color="tab:red", lw=1.5,
+                    label=f"power-law MLE (α={alpha:.2f})", zorder=2)
+            ax.plot(fit_support, p_exp, color="tab:blue", lw=1.5, ls="--",
+                    label=f"exponential MLE (λ={lam:.3f})", zorder=2)
+            ax.legend(fontsize=6.5, loc="lower left", title=f"LLR={llr:.0f}", title_fontsize=6.5)
     elif xlim is not None or ylim is not None:
         ax.set_xscale("log")
         ax.set_yscale("log")
