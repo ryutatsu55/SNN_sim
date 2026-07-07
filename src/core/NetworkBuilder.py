@@ -135,14 +135,15 @@ class NetworkBuilder:
                 # tgt_name = syn_cfg.target
                 print(f"src:{src_name}, tgt:{tgt_name}")
 
-                # 連番割り当てなので集団はグローバル空間の連続スライスに対応する
-                src_slice = self.layout.slice_of(src_name)
-                tgt_slice = self.layout.slice_of(tgt_name)
+                # population は正準グローバルID空間で散在しうる(assignment=random)。
+                # 昇順ソート済みのメンバー集合で np.ix_ 抽出する(連番のときは連続スライスと等価)。
+                src_indices = self.layout.global_indices(src_name)
+                tgt_indices = self.layout.global_indices(tgt_name)
 
                 # グローバル行列からの抽出
-                sub_weights = self.global_weights[src_slice, tgt_slice].copy()
-                sub_delays = self.global_delays[src_slice, tgt_slice].copy()
-                sub_mask = self.global_mask[src_slice, tgt_slice]
+                sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
+                sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
+                sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)]
 
                 delay_by_target = getattr(syn_cfg, "delay_by_target", None)
                 # delay_by_target 指定は集団内で単一定数 = 均一遅延。この場合のみ GeNN の

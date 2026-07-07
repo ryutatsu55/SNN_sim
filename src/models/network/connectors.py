@@ -105,15 +105,12 @@ class DistanceBasedTopology(BaseConnection):
 @CONNECTION_MODELS.register("prob_based_block")
 class BlockRandomTopology(BaseConnection):
     def generate(self):
-        """ブロック分割ベースの確率結合を生成し、num_modules=1 では単一ブロックのランダム結合として振る舞う"""
-        num_modules = self.config.num_modules
-        if not isinstance(num_modules, int) or isinstance(num_modules, bool):
-            raise ValueError("num_modules must be an integer.")
-        if num_modules < 1:
-            raise ValueError("num_modules must be at least 1.")
-        if num_modules > self.num_neurons:
-            raise ValueError("num_modules must not exceed num_neurons.")
+        """ブロック分割ベースの確率結合を生成する。
 
+        モジュール境界は、NetworkLayout に構造層(複数)が定義されていればそれを用いる
+        (層 = ブロック)。層が無い/単一層のときは従来通り config.num_modules で等分する。
+        num_modules=1(または単一層)では単一ブロックのランダム結合として振る舞う。
+        """
         within_module_connection_prob = self.config.within_module_connection_prob
         between_module_connection_prob = self.config.between_module_connection_prob
         allow_self_connections = self.config.allow_self_connections
@@ -130,14 +127,27 @@ class BlockRandomTopology(BaseConnection):
         if not isinstance(allow_self_connections, bool):
             raise ValueError("allow_self_connections must be a boolean.")
 
-        mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
+        # ニューロンをモジュールに分割するためのインデックス範囲を計算する。
+        # NetworkLayout に複数の構造層があれば、その連続ブロックをモジュールとして採用する。
+        layers = self.layout.layers() if self.layout is not None else None
+        if layers is not None and len(layers) > 1:
+            module_ranges: list[tuple[int, int]] = [(l.start, l.stop) for l in layers]
+        else:
+            num_modules = self.config.num_modules
+            if not isinstance(num_modules, int) or isinstance(num_modules, bool):
+                raise ValueError("num_modules must be an integer.")
+            if num_modules < 1:
+                raise ValueError("num_modules must be at least 1.")
+            if num_modules > self.num_neurons:
+                raise ValueError("num_modules must not exceed num_neurons.")
+            module_ranges = []
+            for module_idx in range(num_modules):
+                start = int(module_idx * self.num_neurons / num_modules)
+                end = int((module_idx + 1) * self.num_neurons / num_modules)
+                module_ranges.append((start, end))
 
-        # ニューロンをモジュールに分割するためのインデックス範囲を計算
-        module_ranges: list[tuple[int, int]] = []
-        for module_idx in range(num_modules):
-            start = int(module_idx * self.num_neurons / num_modules)
-            end = int((module_idx + 1) * self.num_neurons / num_modules)
-            module_ranges.append((start, end))
+        num_modules = len(module_ranges)
+        mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
 
         # モジュール内の結合を生成
         for start, end in module_ranges:

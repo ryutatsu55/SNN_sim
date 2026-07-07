@@ -2,7 +2,7 @@ import yaml
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
 # ==========================================
@@ -58,6 +58,24 @@ class NetworkConfig(BaseModel):
     weight: ComponentConfig
     delay: ComponentConfig
 
+class LayerSpecConfig(BaseModel):
+    """構造層(グローバルID空間で連続するブロック)の1層分の設定"""
+    name: str = Field(..., description="層の名前 (例: L1)")
+    num: int = Field(..., description="この層に属するニューロン数")
+    model_config = ConfigDict(extra='allow')
+
+class LayoutConfig(BaseModel):
+    """NetworkLayout の構成: population(E/I)の割当方式と構造層の定義。
+
+    - assignment: "sequential"(config順に連番) / "random"(全体比率ランダム)。
+      未指定(None)なら空間コンポーネントのプラン、無ければ既定 "sequential"。
+    - layers: 構造層(連続ブロック)の一覧。未指定なら空間コンポーネントのプラン、
+      無ければ全ニューロンを単一層とみなす。
+    """
+    assignment: Optional[str] = Field(default=None, description='"sequential" / "random" / 未指定')
+    layers: Optional[List[LayerSpecConfig]] = Field(default=None, description="構造層の定義(任意)")
+    model_config = ConfigDict(extra='allow')
+
 class InputSourceConfig(BaseModel):
     """各入力ソースの汎用設定"""
     enable: bool = Field(..., description="この入力ソースを有効にするかどうか")
@@ -76,6 +94,7 @@ class AppConfig(BaseModel):
     neurons: Dict[str, NeuronConfig] = Field(default_factory=dict)
     synapses: Dict[str, SynapseGroupConfig] = Field(default_factory=dict)
     network: NetworkConfig
+    layout: Optional[LayoutConfig] = None
     task: ComponentConfig
     meta: MetaConfig
 
@@ -112,6 +131,8 @@ class ConfigManager:
             "neurons": {},
             "synapses": {},
             "network": {},
+            # layout は任意セクション。未指定なら None (= sequential・単一層 = 従来挙動)
+            "layout": main_cfg.get("layout"),
             "task": {},
             "meta": {"timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}
         }

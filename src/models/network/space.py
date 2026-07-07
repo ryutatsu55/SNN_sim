@@ -3,6 +3,7 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 from src.core.registry import SPATIAL_MODELS
+from src.core.layout import LayoutPlan
 from pathlib import Path
 
 class BaseSpace(ABC):
@@ -14,6 +15,20 @@ class BaseSpace(ABC):
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
         # 具象クラス側で実装したい場合に self.layout.items() / ids_by_mode() を参照する。
         self.layout = layout
+
+    @classmethod
+    def describe_layout(cls, config, total_neurons: int) -> Optional[LayoutPlan]:
+        """任意フック: この空間モデルが構造層/割当方式を提供する場合に LayoutPlan を返す。
+
+        `NetworkLayout.from_config` が(明示的な config.layout が無いフィールドについて)
+        参照する。空間構造そのものが構造層に一致するモデル(データ由来の層、モジュール
+        分割など)は、これをオーバーライドして層や `assignment` を宣言できる。
+
+        - 既定は None → config.layout / 既定挙動(sequential・単一層)にフォールバック。
+        - **決定論的に**導出すること(GeNN ビルド無しの再構築性を保つため)。データ
+          ファイルや自身の config(space.yaml)から層数・層サイズ・割当を決めてよい。
+        """
+        return None
 
     @abstractmethod
     def generate(self) -> Optional[np.ndarray]:
@@ -78,31 +93,34 @@ class Block2DSpace(BaseSpace):
         x_range = self.config.x_range
         y_range = self.config.y_range
         
-        num_modules = self.config.num_modules
         gap_ratio = self.config.margin
-        
+
         coords = np.zeros((self.num_neurons, 3), dtype=np.float32)
-        
-        # --- 1. グリッドの分割数を計算 ---
+
+        # --- 1. モジュール分割: NetworkLayout に複数の構造層があればそれを採用 ---
+        #        (層 = モジュール。層が無い/単一のときは従来通り num_modules で均等分割)
+        layers = self.layout.layers() if self.layout is not None else None
+        if layers is not None and len(layers) > 1:
+            num_modules = len(layers)
+            neurons_per_module = np.array([l.num for l in layers], dtype=int)
+        else:
+            num_modules = self.config.num_modules
+            neurons_per_module = np.full(num_modules, self.num_neurons // num_modules)
+            # 余りが出た場合、先頭のモジュールから順に1つずつ追加して吸収する
+            neurons_per_module[:self.num_neurons % num_modules] += 1
+
+        # --- 2. グリッドの分割数とモジュール幾何 ---
         nx = int(np.ceil(np.sqrt(num_modules)))
         ny = int(np.ceil(num_modules / nx))
-        
-        # 全体の幅と高さ
+
         total_w = x_range[1] - x_range[0]
         total_h = y_range[1] - y_range[0]
-        
-        # 隙間の絶対サイズ
+
         gap_x = (total_w * gap_ratio)
         gap_y = (total_h * gap_ratio)
-        
-        # 1つのモジュールの幅と高さ
+
         module_w = (total_w - gap_x) / nx
         module_h = (total_h - gap_y) / ny
-        
-        # --- 2. 各モジュールへの割り当てニューロン数を計算（均等分割＋端数処理） ---
-        neurons_per_module = np.full(num_modules, self.num_neurons // num_modules)
-        # 余りが出た場合、先頭のモジュールから順に1つずつ追加して吸収する
-        neurons_per_module[:self.num_neurons % num_modules] += 1
         
         # --- 3. 四角形領域の計算と内部へのランダム散布（連番割り当て） ---
         current_idx = 0
@@ -131,20 +149,62 @@ class Block2DSpace(BaseSpace):
     
 @SPATIAL_MODELS.register("C.elegans")
 class C_elegansSpace(BaseSpace):
-    def generate(self) -> np.ndarray:
-        """C. elegansのニューロン座標データ (ordered_coords.csv) から実際の3D座標を読み込む"""
-        csv_path = Path(__file__).parent / "data" / "c_elegans" / "ordered_coords.csv"
+    """C. elegans コネクトームの実座標を提供する空間モデル。
 
-        # CSVを読み込み
-        df = pd.read_csv(csv_path)
+    ``ordered_coords.csv`` は ``Layer`` 列(IN1..IN4 など)で **層順に整列済み** で、
+    行順がそのまま正準グローバルID順になる。したがって:
 
-        # 必要に応じてニューロン数に合わせて選択
-        if self.num_neurons > len(df):
+    - ``generate()`` … X,Y,Z の実 3D 座標(CSV 行順)を返す。
+    - ``describe_layout()`` … ``Layer`` 列の連続ランを構造層(ブロック)として宣言し、
+      興奮性/抑制性(population)は **ランダム割当** (``assignment="random"``) とする。
+      これにより接続/重み行列は層でブロック対角に生成されつつ、E/I は層と無相関に散る。
+    """
+
+    _CSV_NAME = "ordered_coords.csv"
+
+    @classmethod
+    def _csv_path(cls) -> Path:
+        return Path(__file__).parent / "data" / "c_elegans" / cls._CSV_NAME
+
+    @classmethod
+    def _load_ordered(cls, num_neurons: int) -> pd.DataFrame:
+        """CSV を読み、先頭 num_neurons 行(= 正準グローバルID順)を返す。
+
+        generate() と describe_layout() が同じ行集合・同じ順序を共有し、座標と層境界の
+        整合を保証するための単一の読み込み口。
+        """
+        df = pd.read_csv(cls._csv_path())
+        if num_neurons > len(df):
             raise ValueError(
-                f"num_neurons ({self.num_neurons}) exceeds available neurons in C. elegans data ({len(df)})"
+                f"num_neurons ({num_neurons}) exceeds available neurons in "
+                f"C. elegans data ({len(df)})"
+            )
+        return df.iloc[:num_neurons].reset_index(drop=True)
+
+    @classmethod
+    def describe_layout(cls, config, total_neurons: int) -> LayoutPlan:
+        """Layer 列の連続ランを構造層とし、E/I をランダム割当にするプランを返す。"""
+        df = cls._load_ordered(total_neurons)
+
+        # Layer 列の連続ラン → [(層名, ニューロン数), ...]。データは層順に整列済み。
+        pairs: List[tuple] = []
+        for lname in df["Layer"].tolist():
+            if pairs and pairs[-1][0] == lname:
+                pairs[-1] = (lname, pairs[-1][1] + 1)
+            else:
+                pairs.append((lname, 1))
+
+        # 同一層名が非連続に出現すると連続ブロック層にできない → 明示的にエラー。
+        names = [n for n, _ in pairs]
+        if len(names) != len(set(names)):
+            raise ValueError(
+                f"{cls._CSV_NAME} の Layer 列が層ごとに連続していません "
+                f"(出現順: {names})。層順にソートしてください。"
             )
 
-        # X, Y, Z座標を取得
-        coords = df[['X', 'Y', 'Z']].values[:self.num_neurons].astype(np.float32)
+        return LayoutPlan(layers=pairs, assignment="random")
 
-        return coords
+    def generate(self) -> np.ndarray:
+        """C. elegans のニューロン座標データから実 3D 座標を読み込む(CSV 行順)。"""
+        df = self._load_ordered(self.num_neurons)
+        return df[['X', 'Y', 'Z']].values.astype(np.float32)
