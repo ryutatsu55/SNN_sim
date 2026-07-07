@@ -27,3 +27,7 @@ prob_based_block:
 optional_connect:
   src_ID: 1
   tgt_ID: 0
+
+"C.elegans":
+  # C_elegansConnection は synapse_mask.csv(chem∪elec, 81x81)を読む。パラメータ不要。
+  source: synapse_mask.csv

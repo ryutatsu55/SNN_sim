@@ -2,8 +2,10 @@ constant:
   value: 1.0
 
 distance_based:
-  velocity: 2.0  # [um/ms] etc.
-  min_delay: 0.8
+  velocity: 500.0   # [um/ms] 実コネクトーム(~800um スケール)向け。遅延を tau_refrac(2-3ms)以下に保つ
+  synaptic_delay: 0.5  # [ms] シナプス伝達遅延の固定オフセット(軸索伝導 距離/速度 に加算)
+  min_delay: 0.5  # [ms] 遅延の最小値。距離/速度 + synaptic_delay がこの値未満の場合、min_delay にクリップ
+  max_delay: 25.0   # [ms] 任意の安全キャップ。uint8 ステップ上限(255*dt=25.5ms@dt0.1)超えの折り返し防止
 
 random:
   mean: 7.0

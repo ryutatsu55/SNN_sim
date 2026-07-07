@@ -2,6 +2,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from numbers import Real
+from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from src.core.registry import WEIGHT_MODELS
 
@@ -90,6 +91,99 @@ class OffsetScaledNormalWeight(BaseWeight):
 
         weights[idx] = offset + (g_scale * self.rng.randn(num_conns))
         return weights
+
+@WEIGHT_MODELS.register("C.elegans")
+class C_elegansWeight(BaseWeight):
+    """C. elegans コネクトームの実重み(化学 + 電気シナプス)を読み込む重みモデル。
+
+    化学(``weight_matrix_chem.csv``)/電気(``weight_matrix_elec.csv``)シナプス行列の
+    どちらを使うか、両方使うときの優先、クリップ後の正規化有無を config で指定できる。
+
+    config パラメータ:
+      - ``sources``  : ``"chem"`` | ``"elec"`` | ``"both"``(既定 ``"both"``)。使う行列。
+      - ``priority`` : ``"chem"`` | ``"elec"``(既定 ``"elec"``)。``both`` で両方に接続が
+                       ある要素にどちらの重みを採るか(既定は elec 優先 = gap junction 優先)。
+      - ``min_weight`` / ``max_weight`` : 接続重みのクリップ範囲。
+      - ``normalize`` : bool(既定 ``True``)。``True`` ならクリップ後に ``max_weight`` で
+                        割って正規化(クリップ上限が 1.0 に写像される)。``False`` なら
+                        クリップ後の生値([min_weight, max_weight])のまま。
+
+    生成された重みは接続がある箇所(``self.mask != 0`` かつ選択ソースに接続がある要素)に
+    限定される。両 CSV は 81×81 で ``ordered_coords.csv`` と同じ NodeID(正準グローバルID)
+    順に整列している前提。重みは大きさ(正値)で、興奮性/抑制性の符号は発信 population の
+    シナプスモデル側で扱う。
+    """
+
+    _CHEM_NAME = "weight_matrix_chem.csv"
+    _ELEC_NAME = "weight_matrix_elec.csv"
+
+    @classmethod
+    def _data_path(cls, name: str) -> Path:
+        return Path(__file__).parent / "data" / "c_elegans" / name
+
+    def _load_matrix(self, name: str) -> np.ndarray:
+        path = self._data_path(name)
+        if not path.exists():
+            raise FileNotFoundError(f"{name} not found at {path}")
+        m = np.loadtxt(path, delimiter=",", dtype=np.float64)
+        if m.shape != (self.num_neurons, self.num_neurons):
+            raise ValueError(
+                f"{name} shape {m.shape} does not match "
+                f"expected ({self.num_neurons}, {self.num_neurons})"
+            )
+        return m
+
+    def generate(self):
+        min_weight = self.config.min_weight
+        max_weight = self.config.max_weight
+        sources = getattr(self.config, "sources", "both")
+        priority = getattr(self.config, "priority", "elec")
+        normalize = getattr(self.config, "normalize", True)
+
+        for pname, pval in (("min_weight", min_weight), ("max_weight", max_weight)):
+            if not isinstance(pval, Real) or isinstance(pval, bool):
+                raise ValueError(f"{pname} must be a real number.")
+        if min_weight > max_weight:
+            raise ValueError(
+                f"min_weight ({min_weight}) must not exceed max_weight ({max_weight})."
+            )
+        if not isinstance(normalize, bool):
+            raise ValueError("normalize must be a boolean.")
+        if normalize and max_weight <= 0:
+            raise ValueError(
+                f"max_weight ({max_weight}) must be positive when normalize is True."
+            )
+        if sources not in ("chem", "elec", "both"):
+            raise ValueError(f"sources must be 'chem' | 'elec' | 'both' (got {sources!r}).")
+        if priority not in ("chem", "elec"):
+            raise ValueError(f"priority must be 'chem' | 'elec' (got {priority!r}).")
+
+        # --- ソース選択(chem / elec / both・優先指定) ---
+        if sources == "chem":
+            weights = self._load_matrix(self._CHEM_NAME).copy()
+        elif sources == "elec":
+            weights = self._load_matrix(self._ELEC_NAME).copy()
+        else:  # both
+            chem = self._load_matrix(self._CHEM_NAME)
+            elec = self._load_matrix(self._ELEC_NAME)
+            if priority == "elec":
+                # 化学を基礎に、電気接続がある要素を elec で上書き(gap junction 優先)。
+                weights = chem.copy()
+                weights[elec != 0] = elec[elec != 0]
+            else:  # priority == "chem"
+                weights = elec.copy()
+                weights[chem != 0] = chem[chem != 0]
+
+        # --- マスク外を 0 に。選択ソースに接続がある要素(=非ゼロ)のみクリップ/正規化。 ---
+        #     元データは接続=synapse数>=1 / 非接続=0 なので、非ゼロ判定で「接続あり」を識別できる。
+        #     (min_weight>0 でも非接続 0 を持ち上げてしまわないよう conn は非ゼロで取る。)
+        weights[self.mask == 0] = 0.0
+        conn = weights != 0
+        weights[conn] = np.clip(weights[conn], min_weight, max_weight)
+        if normalize:
+            weights[conn] = weights[conn] / max_weight
+
+        return weights.astype(np.float32)
 
 @WEIGHT_MODELS.register("distance_dependent")
 class DistanceDependentWeight(BaseWeight):

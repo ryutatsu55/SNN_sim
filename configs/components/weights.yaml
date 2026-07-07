@@ -19,3 +19,11 @@ offset_scaled_normal:
 distance_dependent:
   max_weight: 1.0
   decay_length: 2.0   # 距離減衰の長さ[um] (距離がこの値のとき、重みが約0.37倍になる)
+
+"C.elegans":
+  # コネクトーム実重み。sources で chem/elec/both を選択、both は priority で優先側を指定。
+  sources: chem        # chem | elec | both
+  priority: elec       # both のとき両方接続がある要素で優先する側 (chem | elec)
+  min_weight: 0.0
+  max_weight: 30.0
+  normalize: true      # true: クリップ後 max_weight で正規化(上限→1.0) / false: 生値のまま

@@ -14,3 +14,8 @@ block_2d:
   y_range: [0.0, 100.0]  # um
   num_modules: 4
   margin: 0.3
+
+"C.elegans":
+  # C_elegansSpace は ordered_coords.csv から実3D座標と Layer(IN1..IN4) を読む。
+  # 層構造と assignment=random は describe_layout() が供給するためパラメータは不要。
+  source: ordered_coords.csv

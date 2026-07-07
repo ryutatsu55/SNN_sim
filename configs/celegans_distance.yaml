@@ -1,0 +1,46 @@
+simulation:
+  N: 81
+  dt: 0.1
+  seed: 1
+
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+# C. elegans コネクトーム(81 ニューロン)。空間/結合/重みは実データ、遅延は距離ベース。
+# E/I(population)は assignment=random(C_elegansSpace.describe_layout 供給)で層と無相関に散布。
+neurons:
+  Layer_Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    num: 65
+  Layer_Inh:
+    type: akita_escape_lif
+    mode: inhibitory
+    num: 16
+
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_delay_trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_delay_trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  space: "C.elegans"        # ordered_coords.csv の実3D座標 + Layer(IN1..IN4)
+  connection: "C.elegans"   # synapse_mask.csv (chem∪elec)
+  weight: "C.elegans"       # weight_matrix_chem/elec.csv (elec 上書き, [min,max] クリップ→max正規化)
+  delay: distance_based     # 実座標距離 / velocity + min_delay
