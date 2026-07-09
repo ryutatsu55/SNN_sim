@@ -36,8 +36,8 @@ synapses:
       E: 0.0
     plasticity:
       type: custom_Akita
-      mode: e-stdp_trace
-      trace_algorithm: delay_corrected
+      mode: e-stdp
+      pairing: trace
       tau_rec: 150.0  # [ms]
       U: 0.4
       g_max: 0.0      # [uS] EPSP伝播を無効化 (発火タイミングを完全制御)

@@ -34,7 +34,8 @@ class SynapseParamsConfig(BaseModel):
 class PlasticityConfig(BaseModel):
     """STDPなどの学習・可塑性の設定"""
     type: str = Field(..., description="可塑性モデルの種類 (例: static)")
-    mode: Optional[str] = Field(default=None, description="可塑性のモード (例: null)")
+    mode: Optional[str] = Field(default=None, description="可塑性のモード / パラメータブロックキー (例: e-stdp)")
+    pairing: Optional[str] = Field(default=None, description="STDP のペアリング方式 (nearest | trace)。custom_Akita で使用")
     model_config = ConfigDict(extra='allow')
 
 class SynapseGroupConfig(BaseModel):

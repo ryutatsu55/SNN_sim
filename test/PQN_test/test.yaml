@@ -23,6 +23,7 @@ synapses:
     plasticity:
       type: custom_Akita
       mode: e-stdp
+      pairing: nearest
       tau_rec: 150.0
       U: 0.4
       g_max: 4.0

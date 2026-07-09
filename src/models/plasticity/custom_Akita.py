@@ -1,12 +1,18 @@
 """AkitaDai 先生モデルベースのカスタム STDP + STP 可塑性モデル。
 
-`CustomAkitaModel` は GeNN の weight-update スニペットを mode に応じて動的生成する:
+`CustomAkitaModel` は GeNN の weight-update スニペットを 3 つの直交軸に応じて動的生成する:
 
-    mode = e-stdp / i-stdp           ... 興奮性 / 抑制性 STDP
-         × (nearest / _trace)        ... 最近接ペア / trace 型 all-to-all
-         × (legacy / delay_corrected) ... trace 型のみ。伝播遅延の扱い
+    - 極性  : mode = e-stdp / i-stdp   ... 興奮性 / 抑制性 STDP (mode.startswith で判定)
+    - pairing: nearest / trace          ... 最近接ペア / trace 型 all-to-all (明示フィールド)
+    - axonal : delay_by_target 指定時のみ ... NetworkBuilder が axonal_delay_steps を渡す
 
-加えて STP（短期可塑性: 資源回復 Eq. S11 / 消費 Eq. S12）を全 mode 共通で持つ。
+    → 実装は pairing × axonal の 4 経路:
+        nearest × 非axonal → _nearest_dc_syn (到着イベント駆動 per-syn)
+        nearest × axonal   → _nearest_syn    (直接指数カーネル, addToPost)
+        trace   × 非axonal → _trace_dc_syn   (delay_corrected per-syn)
+        trace   × axonal   → _trace_legacy_syn(per-neuron trace, st_pre 到着補正)
+
+加えて STP（短期可塑性: 資源回復 Eq. S11 / 消費 Eq. S12）を全経路共通で持つ。
 
 このモジュール冒頭の関数群は上記ロジックの「数式の純 Python 参照実装」であり、
 GeNN が生成する C++ と独立に同じ数式を計算する。`CustomAkitaModel` 本体はそのうち
@@ -99,21 +105,24 @@ class CustomAkitaModel(BasePlasticityModel):
 
     def __init__(self, config, dt, weight, delay, num_pre, num_post, axonal_delay_steps=None):
         super().__init__(config, dt, weight, delay, num_pre, num_post, axonal_delay_steps)
+        # 極性: mode プレフィックスで判定 (従来どおり)。mode は極性 + param ブロックキーを兼ねる。
         self.mode = self.config.mode
         if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
             raise ValueError(f"Unsupported mode '{self.mode}' for CustomAkitaModel.")
-        self.trace_mode = self.mode.endswith("_trace")
-        self.trace_algorithm = getattr(self.config, "trace_algorithm", "delay_corrected") if self.trace_mode else "na"
+        self._is_e_stdp = self.mode.startswith("e-stdp")
+        # pairing: nearest / trace を明示フィールドで指定する。
+        self.pairing = getattr(self.config, "pairing", None)
+        if self.pairing not in ("nearest", "trace"):
+            raise ValueError(
+                f"CustomAkitaModel requires pairing='nearest' or 'trace' (got {self.pairing!r})."
+            )
+        self.trace_mode = self.pairing == "trace"
         # 軸索遅延経路: NetworkBuilder が delay_by_target(=集団内均一遅延)を検出したとき有効化される。
         # GeNN が axonal_delay_steps 分だけ遅延スロットからスパイクを読み、pre_spike_syn_code を
         # 到着時刻にイベント駆動で実行し、st_pre も到着時刻へ補正する。よって毎ステップの
-        # syn_dynamics_code は不要になり、STDP は legacy と同じ数式(=到着時刻基準で遅延補正済み)で
+        # syn_dynamics_code は不要になり、STDP は到着時刻基準(=遅延補正済み)の数式で
         # pre/post_spike_syn_code に直接書ける。電流は addToPostDelay ではなく addToPost で即時投与する。
         self._axonal = self.axonal_delay_steps is not None
-        # trace 型で legacy レイアウト(per-neuron trace)を使うか。axonal は legacy 数式を流用する。
-        self._trace_legacy_layout = self.trace_mode and (self.trace_algorithm == "legacy" or self._axonal)
-        # 便宜的な mode 判定ヘルパ (興奮性 STDP かどうか)
-        self._is_e_stdp = self.mode.startswith("e-stdp")
         # d はタイムステップ単位(uint8)。GeNN の t は ms 単位なので、STDP の時間演算では
         # d を ms に換算する (d * dt_ms)。※ addToPostDelay の遅延引数はタイムステップ単位のため d のまま使う。
         self._dt_ms = float(self.dt)
@@ -125,7 +134,9 @@ class CustomAkitaModel(BasePlasticityModel):
 
         self._params, self._vars, self._pre_vars, self._post_vars = self._prepare_genn_data()
 
-        cache_key = (self.mode, "trace" if self.trace_mode else "nearest", "g_scale_param", self.trace_algorithm, self._axonal)
+        # スニペット C++ は param 値を焼き込まず init_weight_update の params 経由で受け取るため、
+        # キャッシュキーは (極性, pairing, axonal) のみで十分 (param 変種をまたいで共有可)。
+        cache_key = ("e" if self._is_e_stdp else "i", self.pairing, self._axonal)
         if cache_key not in CustomAkitaModel._snippet_cache:
             # 未登録の場合のみ生成
             CustomAkitaModel._snippet_cache[cache_key] = self._create_snippet()
@@ -149,9 +160,9 @@ class CustomAkitaModel(BasePlasticityModel):
 
         if self.trace_mode:
             if self._is_e_stdp:
-                # delay_corrected: pre_trace を per-synapse vars に置く（到着時刻に更新するため）
-                # legacy / axonal: per-neuron pre_vars に置く
-                if self._trace_legacy_layout:
+                # 非axonal(delay_corrected): pre_trace を per-synapse vars に置く（到着時刻に更新するため）
+                # axonal: per-neuron pre_vars に置く (st_pre が到着時刻へ自動補正される)
+                if self._axonal:
                     pre_vars_dict["pre_trace"] = np.zeros(self.num_pre, dtype='float64')
                 else:
                     vars_dict["pre_trace_syn"] = np.zeros(len(self.weight), dtype='float64')
@@ -159,7 +170,7 @@ class CustomAkitaModel(BasePlasticityModel):
                     "post_trace": np.zeros(self.num_post, dtype='float64'),
                 })
             else:
-                if self._trace_legacy_layout:
+                if self._axonal:
                     pre_vars_dict["pre_trace1"] = np.zeros(self.num_pre, dtype='float64')
                     pre_vars_dict["pre_trace2"] = np.zeros(self.num_pre, dtype='float64')
                 else:
@@ -237,11 +248,12 @@ class CustomAkitaModel(BasePlasticityModel):
         (pre_code, post_code, pre_syn_code, post_syn_code,
          syn_dyn_code, pre_arrival_syn_code) = self._build_cpp_codes()
 
-        safe_mode = self.mode.replace("-", "_")
+        # クラス名は極性 × pairing × axonal で一意 (param 変種はスニペット構造に影響しないため含めない)。
+        safe_mode = "e_stdp" if self._is_e_stdp else "i_stdp"
         if not self.trace_mode:
-            alg_suffix = "ndc"
-        elif self._trace_legacy_layout:
-            # legacy、または axonal(legacy 数式を流用)
+            alg_suffix = "nrst"
+        elif self._axonal:
+            # axonal: per-neuron trace レイアウト (st_pre 到着補正で遅延補正済み)
             alg_suffix = "leg"
         else:
             alg_suffix = "dc"
@@ -259,13 +271,13 @@ class CustomAkitaModel(BasePlasticityModel):
 
         if self.trace_mode:
             if self._is_e_stdp:
-                if self._trace_legacy_layout:
+                if self._axonal:
                     pre_var_defs.append(("pre_trace", "double", pygenn.VarAccess.READ_WRITE))
                 else:
                     var_defs.append(("pre_trace_syn", "double"))
                 post_var_defs.append(("post_trace", "double", pygenn.VarAccess.READ_WRITE))
             else:
-                if self._trace_legacy_layout:
+                if self._axonal:
                     pre_var_defs.append(("pre_trace1", "double", pygenn.VarAccess.READ_WRITE))
                     pre_var_defs.append(("pre_trace2", "double", pygenn.VarAccess.READ_WRITE))
                 else:
@@ -332,9 +344,9 @@ class CustomAkitaModel(BasePlasticityModel):
                 post_spike_syn_code, syn_dyn_code, pre_arrival_syn_code)
 
     def _pre_spike_code(self):
-        """プレニューロン発火時: STP 資源更新 + (legacy trace 型のみ) pre trace 更新。
-        delay_corrected では pre_trace_syn を syn_dynamics_code で到着時刻に更新するため、
-        ここでは trace 更新を行わない。
+        """プレニューロン発火時: STP 資源更新 + (trace × axonal のみ) pre trace 更新。
+        非 axonal の trace(delay_corrected) では pre_trace_syn を到着イベント(pre_arrival_syn_code)で
+        更新するため、ここでは trace 更新を行わない。
         """
         pre_spike_code = f"""
             const scalar dt_pre = t - st_pre;
@@ -343,8 +355,8 @@ class CustomAkitaModel(BasePlasticityModel):
             x -= x_release;
         """
 
-        if self._trace_legacy_layout:
-            # legacy / axonal は per-neuron pre_trace を発火時に更新する
+        if self._axonal and self.trace_mode:
+            # trace × axonal は per-neuron pre_trace を発火時に更新する
             if self._is_e_stdp:
                 pre_spike_code += f"""
                     pre_trace *= exp(-(t - st_pre) / tau_E);
@@ -397,12 +409,12 @@ class CustomAkitaModel(BasePlasticityModel):
         syn_dyn_code = None
         pre_arrival_syn_code = None
         if self.trace_mode:
-            if self._trace_legacy_layout:
-                # legacy / axonal: 到着時刻基準の直接 STDP。
-                # axonal では GeNN が st_pre を到着時刻へ補正するため遅延補正済みになる。
+            if self._axonal:
+                # trace × axonal: 到着時刻基準の直接 STDP (per-neuron trace)。
+                # GeNN が st_pre を到着時刻へ補正するため遅延補正済みになる。
                 pre_spike_syn_code, post_spike_syn_code = self._trace_legacy_syn()
             else:
-                # delay_corrected: 到着イベント駆動 (pre_arrival_syn_code)。
+                # trace × 非軸索(delay_corrected): 到着イベント駆動 (pre_arrival_syn_code)。
                 pre_spike_syn_code, post_spike_syn_code, pre_arrival_syn_code = self._trace_dc_syn()
         else:
             if self._axonal:

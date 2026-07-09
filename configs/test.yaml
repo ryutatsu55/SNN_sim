@@ -25,6 +25,7 @@ synapses:
     plasticity: 
       type: custom_Akita
       mode: e-stdp
+      pairing: nearest
     synapse:
       type: ExpCond
       mode: excitatory
@@ -33,6 +34,7 @@ synapses:
     plasticity: 
       type: custom_Akita
       mode: i-stdp
+      pairing: nearest
     synapse:
       type: ExpCond
       mode: inhibitory

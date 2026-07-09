@@ -1,426 +1,52 @@
-# 【軸索遅延(axonal delay)による高速化について】
-# trace_algorithm: delay_corrected は本来、毎ステップ実行の synapse_dynamics_code で
-# 到着時刻STDPを実現する(全シナプス×全ステップ = 低速)。ただしシナプス集団の遅延が
-# delay_by_target で「均一」指定されている場合、NetworkBuilder は自動的に GeNN の
-# axonal_delay_steps 経路へ切替える: pre_spike_syn_code を到着時刻にイベント駆動で実行し、
-# STDP は legacy と同じ数式(st_pre が到着時刻へ自動補正されるため遅延補正済み)で直接計算、
-# syn_dynamics_code を撤廃して大幅に高速化する。電流は addToPostDelay ではなく addToPost。
-# → delay_corrected 指定でも delay_by_target があれば実体は axonal(legacy数式)になる。
-# distance_based / random 等の集団内不均一遅延では従来の dendritic + syn_dynamics 経路のまま。
+# =================================================================
+# custom_Akita パラメータブロック
+# =================================================================
+# 指定方法 (synapse config 側):
+#   plasticity:
+#     type: custom_Akita
+#     mode: e-stdp_gmax24     # 極性(e-stdp/i-stdp) + パラメータ変種を選ぶブロックキー
+#     pairing: nearest | trace  # STDP のペアリング方式 (明示指定)
+#
+# ペアリングは pairing フィールドで指定する (旧 `_trace` サフィックス/`trace_algorithm` は廃止)。
+#
+# 【伝搬遅延 (axonal delay)】
+# シナプス集団の遅延が delay_by_target で「均一」指定された場合のみ、NetworkBuilder が自動的に
+# GeNN の axonal_delay_steps 経路へ切替える: pre_spike_syn_code を到着時刻にイベント駆動で実行し
+# (st_pre が到着時刻へ自動補正 → 遅延補正済み)、電流は addToPost で即時投与する。nearest/trace の
+# いずれも axonal / 非 axonal 両対応 (custom_Akita.py の 4 経路)。delay_by_target が無い集団内不均一
+# 遅延では従来どおり per-synapse 到着イベント駆動 (非 axonal) 経路になる。
 custom_Akita:
+  # --- 興奮性 STDP (e-stdp) ---
   e-stdp:
-    tau_rec: 150.0  # [ms]
-    U: 0.4           
-    g_max: 4.0      # [uS]
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-  e-stdp_scaled:
-    tau_rec: 150.0  # [ms]
-    U: 0.4           
-    g_max: 4.0      # [uS]
-    normalize_gmax_by_fan_in: true
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-  e-stdp_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # 論文Fig S4 の頑健な臨界設定 (beta_E=1.10): E-STDPに弱い抑圧バイアス(復元力)を入れEE飽和ドリフトを抑える
-  e-stdp_b110_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.10
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # A_E=0.01 検証用 (実効学習率半分仮説): βE=1.10
-  e-stdp_b110_a01_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.01
-    tau_E: 20.0
-    beta_E: 1.10
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # A_E=0.01 + βE=1.00 (Fig2条件で実効学習率半分)
-  e-stdp_a01_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.01
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # 統一仮説の検証: 興奮性に弱い復元力(βE=1.05, ∫F_E<0)。βI=1.15据え置き
-  e-stdp_b105_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.05
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_scaled_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: true
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: legacy
-  e-stdp_scaled_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: true
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: legacy
-  i-stdp:
     tau_rec: 150.0   # [ms]
-    U: 0.4           
+    U: 0.4
     g_max: 4.0       # [uS]
     normalize_gmax_by_fan_in: false
-    A_I: 0.02    
-    tau_I1: 10.0  
-    tau_I2: 20.0  
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-  i-stdp_scaled:
-    tau_rec: 150.0   # [ms]
-    U: 0.4           
-    g_max: 4.0       # [uS]
-    normalize_gmax_by_fan_in: true
-    A_I: 0.02    
-    tau_I1: 10.0  
-    tau_I2: 20.0  
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-  i-stdp_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # 論文Fig S4 の頑健な臨界設定 (beta_I=0.80): I-STDP積分が正(∝1-beta_I)で抑制が育ちやすくEI balanceを安定化
-  i-stdp_b080_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 0.80
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # A_I=0.01 検証用: βI=0.80
-  i-stdp_b080_a01_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.01
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 0.80
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  # A_I=0.01 + βI=1.15 (Fig2条件)
-  i-stdp_a01_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.01
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax05_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 0.5
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.0
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax05_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 0.5
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_a0125_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.0125
-    tau_E: 20.0
-    beta_E: 1.0
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_a0125_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.0125
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax20_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.0
-    normalize_gmax_by_fan_in: false
     A_E: 0.02
     tau_E: 20.0
     beta_E: 1.00
     Wmin: 0.0
     Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax20_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax25_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.5
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax25_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.5
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax225_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.25
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax225_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.25
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax275_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.75
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax275_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 2.75
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax23_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.3, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  i-stdp_gmax23_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.3, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  e-stdp_gmax24_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.4, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  i-stdp_gmax24_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.4, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  e-stdp_gmax26_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.6, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  i-stdp_gmax26_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.6, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  e-stdp_gmax27_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.7, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  i-stdp_gmax27_delay_trace: {tau_rec: 150.0, U: 0.4, g_max: 2.7, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0, trace_algorithm: delay_corrected}
-  e-stdp_gmax30_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 3.0
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax30_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 3.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  e-stdp_gmax35_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 3.5
-    normalize_gmax_by_fan_in: false
-    A_E: 0.02
-    tau_E: 20.0
-    beta_E: 1.00
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_gmax35_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 3.5
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_scaled_delay_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: true
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: delay_corrected
-  i-stdp_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: false
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: legacy
-  i-stdp_scaled_trace:
-    tau_rec: 150.0
-    U: 0.4
-    g_max: 4.0
-    normalize_gmax_by_fan_in: true
-    A_I: 0.02
-    tau_I1: 10.0
-    tau_I2: 20.0
-    beta_I: 1.15
-    Wmin: 0.0
-    Wmax: 1.0
-    trace_algorithm: legacy
+  # g_max スイープ (E-I 比制御)
+  e-stdp_gmax05: {tau_rec: 150.0, U: 0.4, g_max: 0.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax20: {tau_rec: 150.0, U: 0.4, g_max: 2.0,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax225: {tau_rec: 150.0, U: 0.4, g_max: 2.25, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax23: {tau_rec: 150.0, U: 0.4, g_max: 2.3,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax24: {tau_rec: 150.0, U: 0.4, g_max: 2.4,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax25: {tau_rec: 150.0, U: 0.4, g_max: 2.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax26: {tau_rec: 150.0, U: 0.4, g_max: 2.6,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax27: {tau_rec: 150.0, U: 0.4, g_max: 2.7,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax275: {tau_rec: 150.0, U: 0.4, g_max: 2.75, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax30: {tau_rec: 150.0, U: 0.4, g_max: 3.0,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_gmax35: {tau_rec: 150.0, U: 0.4, g_max: 3.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  # 学習率 A_E スイープ
+  e-stdp_a01:   {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.01,   tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_a0125: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.0125, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
+  # 論文Fig S4 の頑健な臨界設定 (beta_E=1.10): E-STDP に弱い抑圧バイアス(復元力)を入れ EE 飽和ドリフトを抑える
+  e-stdp_b110:     {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.10, Wmin: 0.0, Wmax: 1.0}
+  e-stdp_b110_a01: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.01, tau_E: 20.0, beta_E: 1.10, Wmin: 0.0, Wmax: 1.0}
+  # 統一仮説の検証: 興奮性に弱い復元力 (beta_E=1.05, ∫F_E<0)
+  e-stdp_b105:     {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.05, Wmin: 0.0, Wmax: 1.0}
   e-stdp_akita_stable_probe:
     tau_rec: 150.0
     U: 0.4
@@ -430,6 +56,37 @@ custom_Akita:
     beta_E: 1.05
     Wmin: 0.0
     Wmax: 1.0
+
+  # --- 抑制性 STDP (i-stdp) ---
+  i-stdp:
+    tau_rec: 150.0   # [ms]
+    U: 0.4
+    g_max: 4.0       # [uS]
+    normalize_gmax_by_fan_in: false
+    A_I: 0.02
+    tau_I1: 10.0
+    tau_I2: 20.0
+    beta_I: 1.15
+    Wmin: 0.0
+    Wmax: 1.0
+  # g_max スイープ
+  i-stdp_gmax05: {tau_rec: 150.0, U: 0.4, g_max: 0.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax20: {tau_rec: 150.0, U: 0.4, g_max: 2.0,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax225: {tau_rec: 150.0, U: 0.4, g_max: 2.25, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax23: {tau_rec: 150.0, U: 0.4, g_max: 2.3,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax24: {tau_rec: 150.0, U: 0.4, g_max: 2.4,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax25: {tau_rec: 150.0, U: 0.4, g_max: 2.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax26: {tau_rec: 150.0, U: 0.4, g_max: 2.6,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax27: {tau_rec: 150.0, U: 0.4, g_max: 2.7,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax275: {tau_rec: 150.0, U: 0.4, g_max: 2.75, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax30: {tau_rec: 150.0, U: 0.4, g_max: 3.0,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_gmax35: {tau_rec: 150.0, U: 0.4, g_max: 3.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  # 学習率 A_I スイープ
+  i-stdp_a01:   {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.01,   tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_a0125: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.0125, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  # 論文Fig S4 の頑健な臨界設定 (beta_I=0.80): I-STDP 積分が正 (∝1-beta_I) で抑制が育ちやすく EI balance を安定化
+  i-stdp_b080:     {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 0.80, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_b080_a01: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 0.80, Wmin: 0.0, Wmax: 1.0}
   i-stdp_akita_stable_probe:
     tau_rec: 150.0
     U: 0.4
@@ -441,7 +98,6 @@ custom_Akita:
     Wmin: 0.0
     Wmax: 1.0
 
-# 伝搬遅延があるのとないのがある。plasticityモデルでそれが決まる！！
 # =================================================================
 # Standard Plasticity Models Configuration
 # =================================================================
@@ -456,7 +112,7 @@ STDP:
     Aminus: 0.012    # 抑制の振幅
     Wmin: 0.0        # 最小重み
     Wmax: 1.0        # 最大重み
-  
+
   strong_potentiate:
     tauPlus: 20.0
     tauMinus: 20.0
@@ -483,6 +139,6 @@ StaticPulseDendriticDelay:
 StaticPulseConstantWeight:
   fixed_1.0:
     g: 1.0           # 伝達される固定の重み
-  
+
   inhibitory_fixed:
     g: -0.5          # 抑制性の固定重み

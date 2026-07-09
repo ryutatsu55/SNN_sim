@@ -64,7 +64,8 @@ synapses:
       E: -80.0
     plasticity:
       type: custom_Akita
-      mode: i-stdp_trace
+      mode: i-stdp
+      pairing: trace
       tau_rec: 150.0
       U: 0.4
       g_max: 4.0
@@ -75,7 +76,6 @@ synapses:
       beta_I: 1.0
       Wmin: 0.0
       Wmax: 1.0
-      trace_algorithm: delay_corrected
     delay_by_target:
       Layer_Exc: 10.0
 network:
