@@ -12,6 +12,32 @@ ExpCond:
     tau: 4.0        # [ms]
     E: -80.0        # [mV]
 
+# 1b. ExpCondGClip / ExpCondGCap (g_max 飽和つき conductance-based 指数シナプス)
+# custom.py の ExpCondGClip / ExpCondGCap クラスに対応。
+# g_max は「後ニューロン 1 個に集まる総コンダクタンス g_total の上限」。
+# plasticity.yaml の g_max と同値にするが、設計をシンプルに保つためここで独立に与える。
+#   ExpCondGClip : g_total を [0, g_max] に破壊的にクランプしてから計算 (状態も頭打ち)
+#   ExpCondGCap  : g_total は素のまま減衰、計算にのみ min(g_total, g_max) を使う
+ExpCondGClip:
+  excitatory:
+    tau: 2.0        # [ms]
+    E: 0.0          # [mV]
+    g_max: 4.0      # [uS] 総コンダクタンス上限
+  inhibitory:
+    tau: 4.0        # [ms]
+    E: -80.0        # [mV]
+    g_max: 4.0      # [uS]
+
+ExpCondGCap:
+  excitatory:
+    tau: 2.0        # [ms]
+    E: 0.0          # [mV]
+    g_max: 4.0      # [uS]
+  inhibitory:
+    tau: 4.0        # [ms]
+    E: -80.0        # [mV]
+    g_max: 4.0      # [uS]
+
 # 2. ExpCurr (Current-based Exponential Synapse)
 # standard_models.py の ExpCurrSynapse クラスに対応
 ExpCurr:
