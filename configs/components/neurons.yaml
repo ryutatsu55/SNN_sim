@@ -70,6 +70,12 @@ test_LIF:
     Ioffset: 0.0       # オフセット電流[nA]
     TauRefrac: 5.0
 
+# =================================================================
+# akita_escape_lif : 無次元コンダクタンス版 (Akita Supplementary Eq.S1 そのもの)
+#     V += ((Vrest - V) + Isyn) * dt/TauM
+# シナプスコンダクタンス g は「漏れコンダクタンス g_rest で割った無次元量」として扱われる
+# (g_rest = 1 が暗黙に埋め込まれている)。plasticity.yaml の g_max も無次元量。
+# 物理単位で扱いたい場合は下の akita_escape_lif_physical を使うこと。
 akita_escape_lif:
   excitatory:
     tau_m: 30.0
@@ -89,76 +95,40 @@ akita_escape_lif:
     b: 4.0
     f_rest: 0.4
     tau_refrac: 2.0
-  excitatory_b5:
+
+# =================================================================
+# akita_escape_lif_physical : 物理単位版 (膜抵抗 R_m を明示的に持つ)
+#     V += ((Vrest - V) + Rm * (Isyn + Iext)) * dt/TauM
+#
+# シナプスコンダクタンスを物理単位のまま扱える。単位系:
+#     g, g_max : µS      膜抵抗 R_m : MΩ      Isyn, Iext : nA      電位 : mV
+
+#     g_rest = 1/R_m           R_m=100 MΩ -> 0.01 µS (10 nS)
+#     C_m    = tau_m/R_m       30 ms / 100 MΩ -> 0.3 nF (300 pF)
+
+# b: escape noise の温度 [mV]。数値のほか "auto" を指定できる。
+#   "auto" は膜電位が閾値 v_th に達したとき発火確率がちょうど 1.0 になる b を自動計算する
+#   ( b = (v_th - v_rest) / ln(1 / (f_rest·0.001·dt)) )。滑らかな escape noise では
+#   固定 b だと v_th 到達時の発火確率が微小になり「閾値」が実質機能しないため。
+
+akita_escape_lif_physical:
+  excitatory:
+    tau_m: 30.0        # [ms]
+    R_m: 100.0         # [MΩ] 皮質錐体細胞の代表値 100-200
+    v_rest: -74.0      # [mV]
+    v_th: -54.0        # [mV]
+    E_exc: 0.0         # [mV]
+    E_inh: -80.0       # [mV]
+    b: auto            # [mV] escape noise の温度 (auto: v=v_th で発火確率 1.0)
+    f_rest: 0.4        # [Hz] 静止時の自発発火率
+    tau_refrac: 3.0    # [ms]
+  inhibitory:
     tau_m: 30.0
+    R_m: 100.0
     v_rest: -74.0
     v_th: -54.0
     E_exc: 0.0
     E_inh: -80.0
-    b: 5.0
-    f_rest: 0.4
-    tau_refrac: 3.0
-  inhibitory_b5:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 5.0
-    f_rest: 0.4
-    tau_refrac: 2.0
-  excitatory_b6:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 6.0
-    f_rest: 0.4
-    tau_refrac: 3.0
-  inhibitory_b6:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 6.0
-    f_rest: 0.4
-    tau_refrac: 2.0
-  excitatory_b7:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 7.0
-    f_rest: 0.4
-    tau_refrac: 3.0
-  inhibitory_b7:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 7.0
-    f_rest: 0.4
-    tau_refrac: 2.0
-  # σ=1吸引安定化の検証: gainを浅く(b=8mV=2倍)して dσ/dw を半減し、2倍速い重み成長を補償。rest発火率はCの再校正で0.4Hz不変
-  excitatory_b8:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 8.0
-    f_rest: 0.4
-    tau_refrac: 3.0
-  inhibitory_b8:
-    tau_m: 30.0
-    v_rest: -74.0
-    v_th: -54.0
-    E_exc: 0.0
-    E_inh: -80.0
-    b: 8.0
+    b: auto
     f_rest: 0.4
     tau_refrac: 2.0

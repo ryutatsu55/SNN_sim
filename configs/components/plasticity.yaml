@@ -6,15 +6,15 @@
 #     type: custom_Akita
 #     mode: e-stdp_gmax24     # 極性(e-stdp/i-stdp) + パラメータ変種を選ぶブロックキー
 #     pairing: nearest | trace  # STDP のペアリング方式 (明示指定)
+
+
+#   ニューロンのモデルによってg_maxの単位が異なるので要注意！！   
 #
-# ペアリングは pairing フィールドで指定する (旧 `_trace` サフィックス/`trace_algorithm` は廃止)。
-#
-# 【伝搬遅延 (axonal delay)】
-# シナプス集団の遅延が delay_by_target で「均一」指定された場合のみ、NetworkBuilder が自動的に
-# GeNN の axonal_delay_steps 経路へ切替える: pre_spike_syn_code を到着時刻にイベント駆動で実行し
-# (st_pre が到着時刻へ自動補正 → 遅延補正済み)、電流は addToPost で即時投与する。nearest/trace の
-# いずれも axonal / 非 axonal 両対応 (custom_Akita.py の 4 経路)。delay_by_target が無い集団内不均一
-# 遅延では従来どおり per-synapse 到着イベント駆動 (非 axonal) 経路になる。
+#   neurons.yaml の type            積分式                                    g_max の単位
+#   ------------------------------  ----------------------------------------  ---------------
+#   akita_escape_lif                V += ((Vrest-V) + Isyn) * dt/TauM          無次元 (漏れ比)
+#   akita_escape_lif_physical       V += ((Vrest-V) + Rm*Isyn) * dt/TauM       µS
+
 custom_Akita:
   # --- 興奮性 STDP (e-stdp) ---
   e-stdp:
@@ -39,14 +39,7 @@ custom_Akita:
   e-stdp_gmax275: {tau_rec: 150.0, U: 0.4, g_max: 2.75, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
   e-stdp_gmax30: {tau_rec: 150.0, U: 0.4, g_max: 3.0,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
   e-stdp_gmax35: {tau_rec: 150.0, U: 0.4, g_max: 3.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  # 学習率 A_E スイープ
-  e-stdp_a01:   {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.01,   tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_a0125: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.0125, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  # 論文Fig S4 の頑健な臨界設定 (beta_E=1.10): E-STDP に弱い抑圧バイアス(復元力)を入れ EE 飽和ドリフトを抑える
-  e-stdp_b110:     {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.10, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_b110_a01: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.01, tau_E: 20.0, beta_E: 1.10, Wmin: 0.0, Wmax: 1.0}
-  # 統一仮説の検証: 興奮性に弱い復元力 (beta_E=1.05, ∫F_E<0)
-  e-stdp_b105:     {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.05, Wmin: 0.0, Wmax: 1.0}
+
   e-stdp_akita_stable_probe:
     tau_rec: 150.0
     U: 0.4
@@ -56,6 +49,14 @@ custom_Akita:
     beta_E: 1.05
     Wmin: 0.0
     Wmax: 1.0
+  # Beggs & Plenz 再現 (docs/refs/SNN_PA~1.MD §7)。加法的STDP (Bi & Poo 1998):
+  #   A₊=A_E, τ₊=τ₋=tau_E, A₋/A₊=beta_E。MD §7: A₊=0.005〜0.01, τ=20ms, A₋/A₊=1.05 (Song 2000)。
+  # --- Beggs & Plenz 用 (物理単位版。akita_escape_lif_physical と組み合わせること) ---
+  # g_max は µS。単発 EPSP 0.7 mV (Feldmeyer 2002) を再現する較正値。
+  # 無次元版換算: 0.0086 x 100 = 0.863。駆動力 74 mV が正確なので確定値として扱ってよい。
+  e-stdp_beggs: {tau_rec: 150.0, U: 0.4, g_max: 0.0086, normalize_gmax_by_fan_in: false, A_E: 0.01, tau_E: 20.0, beta_E: 1.05, Wmin: 0.0, Wmax: 1.0}   # [µS] = 8.6 nS
+  # 汎用の物理単位版 (e-stdp_beggs と同じ較正値)
+  e-stdp_physical: {tau_rec: 150.0, U: 0.4, g_max: 0.0086, normalize_gmax_by_fan_in: false, A_E: 0.01, tau_E: 20.0, beta_E: 1.05, Wmin: 0.0, Wmax: 1.0}   # [µS] = 8.6 nS
 
   # --- 抑制性 STDP (i-stdp) ---
   i-stdp:
@@ -81,12 +82,7 @@ custom_Akita:
   i-stdp_gmax275: {tau_rec: 150.0, U: 0.4, g_max: 2.75, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
   i-stdp_gmax30: {tau_rec: 150.0, U: 0.4, g_max: 3.0,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
   i-stdp_gmax35: {tau_rec: 150.0, U: 0.4, g_max: 3.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  # 学習率 A_I スイープ
-  i-stdp_a01:   {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.01,   tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_a0125: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.0125, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  # 論文Fig S4 の頑健な臨界設定 (beta_I=0.80): I-STDP 積分が正 (∝1-beta_I) で抑制が育ちやすく EI balance を安定化
-  i-stdp_b080:     {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 0.80, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_b080_a01: {tau_rec: 150.0, U: 0.4, g_max: 4.0, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 0.80, Wmin: 0.0, Wmax: 1.0}
+
   i-stdp_akita_stable_probe:
     tau_rec: 150.0
     U: 0.4
@@ -97,6 +93,26 @@ custom_Akita:
     beta_I: 1.2
     Wmin: 0.0
     Wmax: 1.0
+  # Beggs & Plenz 再現 (docs/refs/SNN_PA~1.MD §7)。MD §7 は I-STDP を個別指定しないため、
+  # 学習率を E と揃え (A_I=A₊=0.01)、tau_I2=20 (=τ) に整合。tau_I1/beta_I は Akita 既定を踏襲。
+  # --- Beggs & Plenz 用 (物理単位版。akita_escape_lif_physical と組み合わせること) ---
+  # g_max は µS。EPSP と同じ換算規約 (U·W=0.2, R_m=100MΩ) で数値積分し、抑制シナプスの
+  # 減衰 tau_syn=4ms (ExpCond inhibitory) を用いて 単発 IPSP 2.0 mV @ -55 mV 保持
+  # (E_inh=-80 → 駆動力 25 mV, Thomson 1996) を再現する値 → g_I=0.0429 µS。
+  # EPSP から独立に較正した結果として g_I/g_E = 5.0 が出力される (人為的な E/I 補正ではない)。
+  # ※ EPSP は駆動力 74 mV が大きく g_E は確定するが、IPSP は駆動力が小さく E_Cl も記録条件依存
+  #    なので、この 1 点は帯の中央 (0.7mV→比0.5 / 1.0mV→2.4 / 2.0mV→5.0 / 3.5mV→9.1 @-55)。
+  #    臨界点探索では下記 i-stdp_beggs_gi* を掃引すること。
+  i-stdp_beggs: {tau_rec: 150.0, U: 0.4, g_max: 0.0429, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}   # [µS] = 42.9 nS (IPSP 2.0mV@-55, g_I/g_E=5.0)
+  # 文献の不定性の範囲を掃くための変種 (末尾の数字 = g_I/g_E)。gi≤4 は暴走域 (~92 Hz)
+  i-stdp_beggs_gi2:  {tau_rec: 150.0, U: 0.4, g_max: 0.0172, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_beggs_gi3:  {tau_rec: 150.0, U: 0.4, g_max: 0.0259, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_beggs_gi4:  {tau_rec: 150.0, U: 0.4, g_max: 0.0345, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_beggs_gi6:  {tau_rec: 150.0, U: 0.4, g_max: 0.0518, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_beggs_gi8:  {tau_rec: 150.0, U: 0.4, g_max: 0.0690, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  i-stdp_beggs_gi10: {tau_rec: 150.0, U: 0.4, g_max: 0.0863, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
+  # 汎用の物理単位版 (i-stdp_beggs と同じ較正値)
+  i-stdp_physical: {tau_rec: 150.0, U: 0.4, g_max: 0.0429, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}   # [µS] = 42.9 nS (IPSP 2.0mV@-55)
 
 # =================================================================
 # Standard Plasticity Models Configuration
