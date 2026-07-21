@@ -35,18 +35,23 @@ from src.utils.akita_soc import (
 )
 from src.utils.visualize.akita_soc_fig2c import plot_figure2c
 from src.utils.visualize.akita_soc_fig2d import plot_figure2d
+from src.utils.visualize.visualize import neuron_trace
 from src.utils.visualize.weight_track import visualize_weight_tracks
 
 import src.models.neurons.akita_escape_lif
+import src.models.neurons.akita_escape_lif_physical
 import src.models.network.connectors
 import src.models.network.delays
 import src.models.network.space
 import src.models.network.weights
 import src.models.plasticity.custom_Akita
 import src.models.synapses.standard_models
+import src.models.synapses.custom
 
 
 TASK_NAME = "akita_soc_fig2"
+TRACE_WINDOW_S = 10.0
+TRACE_NEURON_ID = 0
 PAPER_RASTER_XLIM_S = (0.0, 30.0)
 PAPER_RASTER_YLIM_NEURON = (0.0, 100.0)
 PAPER_AVALANCHE_XLIM = (1.0, 1000.0)
@@ -123,6 +128,46 @@ def run_steps(sim: GeNNSimulator, steps: int, chunk_steps: int, keep_spikes: boo
     ids = np.concatenate(all_ids)
     order = np.argsort(times)
     return {"times": times[order], "ids": ids[order]}
+
+
+def capture_membrane_window(sim: GeNNSimulator, window_s: float, neuron_id: int):
+    """1ステップずつ進めながら対象ニューロンの V と Isyn_rec を記録し、窓内スパイクを返す。
+
+    メモリ節約のため全ニューロン行列ではなく対象ニューロン1本の列だけ保持する。
+    GeNN の記録バッファは max_timesteps ちょうど溜まった時のみ読み出せるため、
+    採取ステップ数はバッファ長の整数倍に丸め、バッファ境界ごとにスパイクを回収する。
+    直前に run_steps がバッファをフラッシュ済みなので、回収されるのはこの窓のスパイクだけ。
+
+    Returns:
+        (V, I, spikes, actual_window_s): actual_window_s はバッファ整数倍に丸めた実表示幅[s]。
+    """
+    dt = sim.dt
+    buf = sim.max_timesteps
+    requested_steps = int(round(window_s * 1000.0 / dt))
+    n_buffers = max(1, round(requested_steps / buf))
+    steps = n_buffers * buf
+    actual_window_s = steps * dt / 1000.0
+
+    V = np.empty(steps, dtype=np.float64)
+    I = np.empty(steps, dtype=np.float64)
+    all_times = []
+    all_ids = []
+    for i in range(steps):
+        sim.step()
+        V[i] = sim.pull("V")[neuron_id]
+        I[i] = sim.pull("Isyn_rec")[neuron_id]
+        if (i + 1) % buf == 0:
+            chunk = sim.get_global_spikes()
+            if chunk["times"].size > 0:
+                all_times.append(chunk["times"])
+                all_ids.append(chunk["ids"])
+            sim.flush_recording()
+
+    if all_times:
+        spikes = {"times": np.concatenate(all_times), "ids": np.concatenate(all_ids)}
+    else:
+        spikes = {"times": np.array([], dtype=np.float64), "ids": np.array([], dtype=np.int32)}
+    return V, I, spikes, actual_window_s
 
 
 def _to_python_native(obj):
@@ -325,9 +370,30 @@ def main():
             print(f"Output dir exists: {out_dir.exists()}, is_dir: {out_dir.is_dir()}")
             raise
 
-        spikes = run_steps(sim, record_window_steps, chunk_steps, keep_spikes=True)
+        # 記録窓の先頭を1ステップ刻みで進めて対象ニューロンの膜電位トレースを採取し、
+        # 残りの窓は高速なチャンク実行で進める。両パートのスパイクを結合して窓全体の
+        # スパイク列を得る。こうすることでラスター(窓全体)と neuron_trace(先頭 TRACE_WINDOW_S 秒)が
+        # 同一タイミング・同一実現のデータとなり、ラスター先頭部分と直接比較できる。
+        effective_trace_s = min(TRACE_WINDOW_S, record_window_ms / 1000.0)
+        trace_v, trace_i, trace_spikes, trace_window_s = capture_membrane_window(
+            sim, effective_trace_s, TRACE_NEURON_ID
+        )
+        trace_steps = len(trace_v)
+        remaining_steps = record_window_steps - trace_steps
+        if remaining_steps > 0:
+            rest_spikes = run_steps(sim, remaining_steps, chunk_steps, keep_spikes=True)
+        else:
+            rest_spikes = {
+                "times": np.array([], dtype=np.float64),
+                "ids": np.array([], dtype=np.int32),
+            }
+        times = np.concatenate([trace_spikes["times"], rest_spikes["times"]])
+        ids = np.concatenate([trace_spikes["ids"], rest_spikes["ids"]])
+        order = np.argsort(times)
+        spikes = {"times": times[order], "ids": ids[order]}
         current_ms += record_window_steps * dt
         local_times = spikes["times"] - record_start_ms
+        trace_local_times = trace_spikes["times"] - record_start_ms
         np.savez_compressed(out_dir / f"spikes_{hour:g}h.npz", times=spikes["times"], ids=spikes["ids"])
 
         avalanche = split_avalanches(local_times)
@@ -384,6 +450,23 @@ def main():
             xlim=PAPER_AVALANCHE_XLIM,
             ylim=PAPER_AVALANCHE_YLIM,
         )
+
+        # neuron_test 相当の単一ニューロン膜電位トレース。
+        # 記録窓の先頭 trace_window_s 秒ぶんを採取済みなので、ラスター先頭と時間軸が揃う。
+        try:
+            neuron_trace(
+                trace_v,
+                trace_i,
+                trace_local_times,
+                trace_spikes["ids"],
+                dt=dt,
+                id=TRACE_NEURON_ID,
+                window_s=trace_window_s,
+                title=f"neuron_trace_{hour:g}h",
+                save_path=str(out_dir),
+            )
+        except Exception as e:
+            print(f"  Warning: neuron trace generation failed at {hour:g}h: {e}")
 
     with open(out_dir / "metrics.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))

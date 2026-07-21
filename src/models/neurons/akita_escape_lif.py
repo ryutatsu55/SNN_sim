@@ -132,6 +132,7 @@ class AkitaEscapeLIF(BaseNeuronModel):
     @property
     def model_class(self):
         sim_code = """
+            Isyn_rec = Isyn;
             if (RefracTime <= 0.0) {
                 V += ((Vrest - V) + Isyn + Iext) * (dt / TauM);
                 SpikeProb = fmin(CScale * exp((V - Vthresh) / B), 1.0);
@@ -156,6 +157,7 @@ class AkitaEscapeLIF(BaseNeuronModel):
                 ("RefracTime", "scalar"),
                 ("Iext", "scalar"),
                 ("SpikeProb", "scalar"),
+                ("Isyn_rec", "scalar"),
             ],
             sim_code=sim_code,
             threshold_condition_code="gennrand_uniform() < SpikeProb",
@@ -181,4 +183,5 @@ class AkitaEscapeLIF(BaseNeuronModel):
             "RefracTime": 0.0,
             "Iext": 0.0,
             "SpikeProb": 0.0,
+            "Isyn_rec": 0.0,
         }

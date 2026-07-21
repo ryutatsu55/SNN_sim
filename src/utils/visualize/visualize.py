@@ -132,6 +132,60 @@ def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuro
     plt.tight_layout()
     plt.savefig(f"{save_path}/{title}.png")
 
+def neuron_trace(V, I_in, spike_times, spike_ids, dt, id=0, window_s=10.0,
+                 title="neuron_trace", save_path="."):
+    """
+    単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描画する。
+
+    neuron_test と同じレイアウト(ラスター / V / I)だが、x軸上限を config.task.duration
+    ではなく引数 window_s で固定するため、長時間シミュレーション(72h等)から切り出した
+    短い窓(既定10秒)をそのまま表示できる。
+
+    Args:
+        V: 対象ニューロンの膜電位 [mV] の1次元配列 (長さ = ステップ数)
+        I_in: 対象ニューロンのシナプス電流 (Isyn) の1次元配列。None ならI パネルを省略
+        spike_times: 窓内スパイク時刻 [ms] (窓の先頭を0とするローカル時刻)
+        spike_ids: spike_times に対応するグローバルニューロンID
+        dt: シミュレーションのタイムステップ [ms]
+        id: 電圧トレースを表示する対象ニューロンID (ラスターの中心)
+        window_s: x軸に表示する時間幅 [s]
+    """
+    V = np.asarray(V)
+    time_axis = np.arange(len(V)) * dt / 1000.0
+
+    if I_in is not None:
+        fig, (ax0, ax1, ax2) = plt.subplots(
+            3, 1,
+            gridspec_kw={'height_ratios': [1, 4, 1]},
+            figsize=(9, 4), sharex=True
+        )
+    else:
+        fig, (ax0, ax1) = plt.subplots(
+            2, 1,
+            gridspec_kw={'height_ratios': [1, 4]},
+            figsize=(9, 3.5), sharex=True
+        )
+
+    spike_times = np.asarray(spike_times) / 1000.0
+    ax0.scatter(spike_times, spike_ids, s=10)
+    ax0.set_ylabel("Neuron ID")
+
+    ax1.plot(time_axis, V, color='tab:blue')
+    ax1.set_ylabel('v [mV]')
+    ax1.set_xlim(0, window_s)
+
+    if I_in is not None:
+        ax2.plot(time_axis, np.asarray(I_in), color='black')
+        ax2.set_ylabel('I [nA]')
+        ax2.set_xlim(0, window_s)
+        ax2.set_xlabel('Time [s]')
+    else:
+        ax1.set_xlabel('Time [s]')
+
+    plt.tight_layout()
+    plt.savefig(f"{save_path}/{title}.png")
+    plt.close()
+
 def network(weights: np.ndarray, coords: np.ndarray, config, node_size=10, title="network", save_path="."):
     """
     ニューロンの空間配置と重み行列からネットワーク構造を可視化する。
