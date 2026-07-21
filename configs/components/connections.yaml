@@ -31,3 +31,21 @@ optional_connect:
 "C.elegans":
   # C_elegansConnection は synapse_mask.csv(chem∪elec, 81x81)を読む。パラメータ不要。
   source: synapse_mask.csv
+
+# Beggs & Plenz (2003) 再現用・種別別ガウス結合 P=p0*exp(-d^2/2σ^2)
+# (docs/refs/SNN_PA~1.MD §3)。gaussian_distance_type クラスが送信×受信の 4 ブロックに
+# それぞれの (sigma, p0) を適用する。σ,p0 は MD の各種別レンジの代表中央値。
+beggs_plenz:
+  # E→E: ラット皮質L2/3水平軸索拡がり ~500um (Hellwig 2000, Biol Cybern); IED=200um から σ≈IED〜1.5×IED
+  sigma_ee: 300.0   # [um]
+  p0_ee: 0.20
+  # E→I: 抑制性ニューロンへはより局所的に集中 (Fino & Yuste 2011, Neuron)
+  sigma_ei: 200.0   # [um]
+  p0_ei: 0.30
+  # I→E: 皮質抑制は空間的に局所 (Fino & Yuste 2011, Neuron)
+  sigma_ie: 175.0   # [um]
+  p0_ie: 0.25
+  # I→I: 最も局所 (Fino & Yuste 2011, Neuron)
+  sigma_ii: 125.0   # [um]
+  p0_ii: 0.20
+  allow_self_connections: false   # オートシナプス禁止 (MD §8; Bekkers & Stevens 1991, PNAS)

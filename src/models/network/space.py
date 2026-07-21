@@ -86,6 +86,21 @@ class Random2DSpace(BaseSpace):
 
         return coords
 
+@SPATIAL_MODELS.register("random_2d_n1000")
+class Random2DSpaceN1000(Random2DSpace):
+    """Beggs&Plenz 検証ラダー T0 (N=1000) 用の縮小空間。範囲は YAML から読む。"""
+    pass
+
+@SPATIAL_MODELS.register("random_2d_n4000")
+class Random2DSpaceN4000(Random2DSpace):
+    """Beggs&Plenz 検証ラダー T1 (N=4000) 用の縮小空間。範囲は YAML から読む。"""
+    pass
+
+@SPATIAL_MODELS.register("random_2d_n10000")
+class Random2DSpaceN10000(Random2DSpace):
+    """Beggs&Plenz 検証ラダー T2 (N=10000) 用の縮小空間。範囲は YAML から読む。"""
+    pass
+
 @SPATIAL_MODELS.register("block_2d")
 class Block2DSpace(BaseSpace):
     def generate(self):

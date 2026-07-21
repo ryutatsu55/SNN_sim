@@ -1,0 +1,45 @@
+# 物理単位版のスモーク用 config (scripts/… で自動生成せず手動管理)。
+# akita_escape_lif_physical (R_m=100MΩ) + *_physical プロファイル (g_max=0.0062 µS)。
+simulation:
+  N: 1000
+  dt: 0.1
+  seed: 1
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+neurons:
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    num: 800
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    num: 200
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+network:
+  sparse: auto
+  space: random_2d_n1000
+  connection: beggs_plenz
+  weight: beggs_plenz
+  delay: beggs_plenz

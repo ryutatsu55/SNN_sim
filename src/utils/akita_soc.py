@@ -279,6 +279,61 @@ def weight_block_metrics(
     return metrics
 
 
+def weight_block_metrics_flat(
+    weights: np.ndarray,
+    row: np.ndarray,
+    col: np.ndarray,
+    excitatory_ids: np.ndarray,
+    wmax: float,
+    at_max_tolerance: float = 1e-3,
+) -> dict[str, float]:
+    """COO 形式の重みから全体および E/I ブロック別の統計を計算する。
+
+    `weight_block_metrics` の疎版。密な (N,N) 行列が確保できない大規模ネットワーク用で、
+    計算量は O(nnz)。COO は実結合のみを持つため、密版の `connection_mask` 指定と等価な
+    結果になる(結合が無い箇所の 0 は最初から含まれない)。
+
+    Args:
+        weights: 各シナプスの重み (1D)
+        row, col: 各シナプスの送信/受信グローバルID (1D, weights と index 整合)
+        excitatory_ids: 興奮性ニューロンのグローバルID
+        wmax: 重みの上限 (飽和判定に使う)
+    """
+    values = np.asarray(weights, dtype=np.float64)
+    src = np.asarray(row, dtype=np.int64)
+    tgt = np.asarray(col, dtype=np.int64)
+    if not (values.size == src.size == tgt.size):
+        raise ValueError("weights / row / col の長さが一致しません。")
+
+    total_neurons = int(max(src.max(), tgt.max())) + 1 if values.size else 0
+    is_exc = np.zeros(total_neurons, dtype=bool)
+    exc_ids = np.asarray(excitatory_ids, dtype=np.int64)
+    if exc_ids.size and total_neurons:
+        is_exc[exc_ids[exc_ids < total_neurons]] = True
+
+    all_stats = _weight_block_stats(values, wmax=wmax, at_max_tolerance=at_max_tolerance)
+    metrics = {
+        "weight_mean": all_stats["mean"],
+        "weight_nonzero_fraction": all_stats["nonzero_fraction"],
+        "weight_at_max_fraction": all_stats["at_max_fraction"],
+    }
+
+    src_exc = is_exc[src] if values.size else np.zeros(0, dtype=bool)
+    tgt_exc = is_exc[tgt] if values.size else np.zeros(0, dtype=bool)
+    blocks = {
+        "ee": src_exc & tgt_exc,
+        "ei": src_exc & ~tgt_exc,
+        "ie": ~src_exc & tgt_exc,
+        "ii": ~src_exc & ~tgt_exc,
+    }
+    for name, mask in blocks.items():
+        stats = _weight_block_stats(values[mask], wmax=wmax, at_max_tolerance=at_max_tolerance)
+        metrics[f"weight_{name}_mean"] = stats["mean"]
+        metrics[f"weight_{name}_at_max_fraction"] = stats["at_max_fraction"]
+
+    return metrics
+
+
 def diagnose_activity(
     mean_rate_hz: float,
     weight_at_max_fraction: float,

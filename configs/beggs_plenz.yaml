@@ -1,0 +1,56 @@
+# Beggs & Plenz (2003, J Neurosci 23(35):11167-11177) 神経アバランシェ再現用 config。
+# 参照パラメータ表: docs/refs/SNN_PA~1.MD (各値の出典論文は components/*.yaml 側に明記)。
+  #
+  # (custom_Akita e/i-stdp・ExpCond・akita_escape_lif)。
+# 空間配置(random_2d 1500x1500um)+ 種別別ガウス結合 + 距離依存遅延 を組み合わせる。
+# delay_by_target を置かない → custom_Akita は per-synapse 到着イベント駆動(非axonal)経路で
+# 距離依存遅延を扱う (celegans_distance.yaml と同型)。
+# 初期重みは対数正規 (MD §10)、STDP は custom_Akita を MD §7 に整合 (e/i-stdp_beggs)。
+simulation:
+  N: 40000
+  dt: 0.1
+  seed: 1
+
+inputs:
+  # akita_escape_lif の escape 発火(f_rest)が自発活動を供給するため外部ノイズは不要。
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  # E/I = 80/20 (Dale則; Braitenberg & Schüz 1998)。総数 10000 (MD §2 実用値レンジ)。
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    num: 32000
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    num: 8000
+
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_beggs
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_beggs
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  space: random_2d          # 1500x1500 um ランダム2D配置 (MD §1: MEA 1400um + 余裕)
+  connection: beggs_plenz   # 種別別ガウス結合 P=p0*exp(-d^2/2σ^2) (MD §3)
+  weight: beggs_plenz       # 初期重み=対数正規 clip[0,1] (MD §10; ゼロ初期を回避)
+  delay: beggs_plenz        # 距離依存遅延 delay(d)=d/500 + 1.0ms (MD §4)

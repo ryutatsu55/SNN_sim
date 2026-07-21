@@ -1,0 +1,56 @@
+# Beggs & Plenz 検証ラダー T0: N=1000 の縮小版。
+#
+# configs/beggs_plenz.yaml と同一のコンポーネント構成のまま、N と空間サイズだけを
+# 面積密度一定 (0.017778 neurons/um^2) で縮めたもの。用途は 2 つ:
+#   1. 疎生成経路と密生成経路の等価性テスト (test/core/test_sparse_equivalence.py)
+#   2. スクリプト・解析・可視化のスモーク実行
+# 密行列でも (1000,1000) = 4MB なので、両経路を同一プロセスで比較できる。
+simulation:
+  N: 1000
+  dt: 0.1
+  seed: 1
+
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  # E/I = 80/20 (Dale則)
+  # 単位系は beggs_plenz.yaml と揃える (e-stdp_beggs / i-stdp_beggs は µS 建て)
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    num: 800
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    num: 200
+
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_beggs
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_beggs
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  sparse: auto              # auto/force/off。等価性テストは off と force を突き合わせる
+  space: random_2d_n1000    # 237x237 um (面積密度は本番 1500x1500/N=40000 と同一)
+  connection: beggs_plenz
+  weight: beggs_plenz
+  delay: beggs_plenz

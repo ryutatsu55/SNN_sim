@@ -18,6 +18,24 @@ akita_soc_fig2_stable_probe:
   record_buffer_ms: 10000.0
   graph_name: "akita_soc_fig2_stable_probe"
     
+beggs_plenz_avalanche:
+  # Beggs & Plenz (2003) 神経アバランシェ再現。
+  # akita_soc_fig2 の 72h プロトコルは N=40000 では実行時間 3〜7 日になるため 12h へ短縮。
+  # 12h では STDP の長期発達は飽和しない前提で、アバランシェ統計の評価を主目的とする。
+  duration: 43200000.0        # 12 h [ms]
+  record_hours: [0, 1, 6, 12]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  graph_name: "beggs_plenz_avalanche"
+
+beggs_plenz_smoke:
+  # 縮小 config でのスモーク実行用 (スクリプト・解析・可視化の疎通確認)。
+  duration: 120000.0          # 2 min [ms]
+  record_hours: [0, 0.0166667]  # 0 s と 60 s (= 1/60 h)
+  record_window_ms: 30000.0   # 30 s
+  record_buffer_ms: 5000.0
+  graph_name: "beggs_plenz_smoke"
+
 lif_test:
   duration: 10000.0
   input: -49.0

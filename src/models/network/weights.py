@@ -78,6 +78,70 @@ class LogNormalRandomWeight(BaseWeight):
         weights[idx] = self.rng.lognormal(mean, std, size=num_conns)
         return weights
 
+@WEIGHT_MODELS.register("lognormal_clip")
+class LogNormalClipWeight(BaseWeight):
+    """対数正規分布 + [w_min, w_max] クリップの初期重み。
+
+    Beggs & Plenz (2003) 再現用(docs/refs/SNN_PA~1.MD §10)。28 DIV の成熟培養網を模し、
+    ゼロ初期を避けて `w ~ LogNormal(mu_ln, sigma_ln^2)` を `[w_min, w_max]` に切り捨てる
+    (既存 `lognormal_broad` はクリップ無しのため別クラスにする)。custom_Akita の重み `w` は
+    正規化 [0, Wmax] 空間なので w_max は Wmax(既定 1.0)に合わせる。
+
+    config(フラットなスカラーフィールド):
+        mu_ln    … 台形正規分布(下地の正規分布)の平均。MD §10 は mu_ln = ln(0.7) - sigma_ln^2/2
+        sigma_ln … 広がり(MD §10: 0.8〜1.2)
+        w_min, w_max … クリップ範囲(= custom_Akita の Wmin/Wmax に対応)
+    """
+
+    supports_sparse = True
+
+    def _params(self):
+        mu_ln = self.config.mu_ln
+        sigma_ln = self.config.sigma_ln
+        w_min = self.config.w_min
+        w_max = self.config.w_max
+
+        for pname, pval in (("mu_ln", mu_ln), ("sigma_ln", sigma_ln),
+                            ("w_min", w_min), ("w_max", w_max)):
+            if not isinstance(pval, Real) or isinstance(pval, bool):
+                raise ValueError(f"{pname} must be a real number.")
+        if sigma_ln < 0.0:
+            raise ValueError("sigma_ln must be greater than or equal to 0.0.")
+        if w_min > w_max:
+            raise ValueError(f"w_min ({w_min}) must not exceed w_max ({w_max}).")
+        return float(mu_ln), float(sigma_ln), float(w_min), float(w_max)
+
+    def _sample(self, num_conns: int) -> np.ndarray:
+        mu_ln, sigma_ln, w_min, w_max = self._params()
+        sampled = self.rng.lognormal(mu_ln, sigma_ln, size=num_conns)
+        # MD §10: 切り捨て [w_min, w_max]
+        return np.clip(sampled, w_min, w_max).astype(np.float32)
+
+    def generate(self):
+        self._params()  # 疎版と同じ検証を先に通す
+        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+        idx = (self.mask != 0)
+        num_conns = int(np.count_nonzero(idx))
+        if num_conns == 0:
+            return weights
+
+        # NumPy のブール代入は idx の C 順(= np.nonzero(mask) の順)で埋めるため、
+        # 行優先ソート済み COO に対する generate_sparse と同一の割り当てになる。
+        weights[idx] = self._sample(num_conns)
+        return weights
+
+    def generate_sparse(self, rows, cols):
+        num_conns = int(np.asarray(rows).size)
+        if num_conns == 0:
+            self._params()
+            return np.zeros(0, dtype=np.float32)
+        return self._sample(num_conns)
+
+@WEIGHT_MODELS.register("beggs_plenz")
+class BeggsPlenzLogNormalWeight(LogNormalClipWeight):
+    """Beggs & Plenz (2003) 再現用の対数正規初期重みプロファイル。具体値は YAML から読む。"""
+    pass
+
 @WEIGHT_MODELS.register("offset_scaled_normal")
 class OffsetScaledNormalWeight(BaseWeight):
     def generate(self):

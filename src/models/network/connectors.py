@@ -2,7 +2,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from pathlib import Path
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import cdist, pdist, squareform
 from src.core.registry import CONNECTION_MODELS
 
 class BaseConnection(ABC):
@@ -117,6 +117,146 @@ class DistanceBasedTopology(BaseConnection):
         mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob_matrix
         
         return mask.astype(np.int8)
+
+@CONNECTION_MODELS.register("gaussian_distance_type")
+class GaussianDistanceTypeTopology(BaseConnection):
+    """種別別(E→E, E→I, I→E, I→I)のガウス型距離依存結合。
+
+    Beggs & Plenz (2003) 再現用(docs/refs/SNN_PA~1.MD §3)。結合確率は
+        P(結合 | 距離 d) = p0_xy * exp(-d^2 / (2 * sigma_xy^2))
+    で、送信種別 x(E/I) × 受信種別 y(E/I) の 4 ブロックごとに独立の
+    (sigma_xy, p0_xy) を用いる。興奮性/抑制性のグローバルID集合は
+    layout.ids_by_mode() から取得する。
+
+    config(フラットなスカラーフィールド):
+        sigma_ee/p0_ee, sigma_ei/p0_ei, sigma_ie/p0_ie, sigma_ii/p0_ii  … [um] と確率
+        allow_self_connections (bool, 既定 False) … False で対角(オートシナプス)を除去
+
+    大規模ネットワーク向けに generate_sparse() を実装しており、密な (N,N) を作らずに
+    COO を直接生成する。乱数ストリームの消費順は密版と完全に一致する(下記参照)。
+    """
+
+    supports_sparse = True
+
+    # 疎生成時の 1 行ブロックあたりの一時配列サイズの目安 [bytes]。
+    _ROW_BLOCK_BYTES = 128 << 20
+
+    def _validate_inputs(self):
+        if self.coords is None:
+            raise ValueError(
+                "GaussianDistanceTypeTopology requires spatial coordinates (coords cannot be None)."
+            )
+        if self.layout is None:
+            raise ValueError(
+                "GaussianDistanceTypeTopology requires a NetworkLayout to resolve E/I populations."
+            )
+
+    def generate_sparse(self):
+        """行ブロックごとに距離・確率・乱数を作って COO を組み立てる。
+
+        乱数ストリームの同一性:
+            RandomState.random_sample は指定形状ぶんの double を Mersenne ストリームから
+            逐次消費して C 順に reshape する。よって連続した行ブロック [0,nb), [nb,2nb), ...
+            に対して (nb, N) を順に引くことは、(N, N) を一括で引くのとビット単位で同一の
+            値が同一の (i, j) に対応する。これを壊さないため:
+              - prob == 0 のペアでもドローを省略しない(ブロック全体を無条件にドロー)
+              - 自己結合の除去は比較の「後」に行う(密版の fill_diagonal と同じく
+                対角のドローは消費して捨てる)
+              - 空の id 集合に対する continue は確率の埋め込みだけをスキップし、
+                ドローはスキップしない
+        """
+        self._validate_inputs()
+
+        ids = self.layout.ids_by_mode()
+        exc = ids["excitatory"]
+        inh = ids["inhibitory"]
+        n = self.num_neurons
+        coords = np.ascontiguousarray(self.coords, dtype=np.float64)
+
+        is_exc = np.zeros(n, dtype=bool)
+        is_exc[exc] = True
+        is_inh = np.zeros(n, dtype=bool)
+        is_inh[inh] = True
+        cols_e = np.nonzero(is_exc)[0]
+        cols_i = np.nonzero(is_inh)[0]
+
+        block = max(1, min(n, self._ROW_BLOCK_BYTES // max(1, 8 * n)))
+        allow_self = getattr(self.config, "allow_self_connections", False)
+
+        out_rows: list[np.ndarray] = []
+        out_cols: list[np.ndarray] = []
+
+        for start in range(0, n, block):
+            stop = min(start + block, n)
+            dist = cdist(coords[start:stop], coords)
+            prob = np.zeros((stop - start, n), dtype=np.float64)
+
+            local_e = np.nonzero(is_exc[start:stop])[0]
+            local_i = np.nonzero(is_inh[start:stop])[0]
+            for src_local, tgt_global, sigma, p0 in (
+                (local_e, cols_e, self.config.sigma_ee, self.config.p0_ee),
+                (local_e, cols_i, self.config.sigma_ei, self.config.p0_ei),
+                (local_i, cols_e, self.config.sigma_ie, self.config.p0_ie),
+                (local_i, cols_i, self.config.sigma_ii, self.config.p0_ii),
+            ):
+                if src_local.size == 0 or tgt_global.size == 0:
+                    continue
+                block_idx = np.ix_(src_local, tgt_global)
+                d = dist[block_idx]
+                prob[block_idx] = p0 * np.exp(-(d ** 2) / (2.0 * sigma ** 2))
+
+            hit = self.rng.random((stop - start, n)) < prob
+            if not allow_self:
+                # 密版の np.fill_diagonal(mask, 0) と等価。ドローは既に消費済み。
+                hit[np.arange(stop - start), np.arange(start, stop)] = False
+
+            rows, cols = np.nonzero(hit)
+            if rows.size:
+                out_rows.append((rows + start).astype(np.int32))
+                out_cols.append(cols.astype(np.int32))
+
+        if not out_rows:
+            empty = np.array([], dtype=np.int32)
+            return empty, empty
+        return np.concatenate(out_rows), np.concatenate(out_cols)
+
+    def generate(self):
+        self._validate_inputs()
+
+        ids = self.layout.ids_by_mode()
+        exc = ids["excitatory"]
+        inh = ids["inhibitory"]
+
+        # N x N の距離行列を一括計算(DistanceBasedTopology と同手法)
+        dist_matrix = squareform(pdist(self.coords))
+
+        prob_matrix = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float64)
+
+        # 送信種別(行) × 受信種別(列)の 4 ブロックにそれぞれの (sigma, p0) を適用
+        blocks = (
+            (exc, exc, self.config.sigma_ee, self.config.p0_ee),
+            (exc, inh, self.config.sigma_ei, self.config.p0_ei),
+            (inh, exc, self.config.sigma_ie, self.config.p0_ie),
+            (inh, inh, self.config.sigma_ii, self.config.p0_ii),
+        )
+        for src_ids, tgt_ids, sigma, p0 in blocks:
+            if len(src_ids) == 0 or len(tgt_ids) == 0:
+                continue
+            block_idx = np.ix_(src_ids, tgt_ids)
+            d = dist_matrix[block_idx]
+            prob_matrix[block_idx] = p0 * np.exp(-(d ** 2) / (2.0 * sigma ** 2))
+
+        mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob_matrix
+
+        if not getattr(self.config, "allow_self_connections", False):
+            np.fill_diagonal(mask, 0)  # オートシナプス禁止 (MD §8)
+
+        return mask.astype(np.int8)
+
+@CONNECTION_MODELS.register("beggs_plenz")
+class BeggsPlenzGaussianTopology(GaussianDistanceTypeTopology):
+    """Beggs & Plenz (2003) 再現用の種別別ガウス結合プロファイル。具体値は YAML から読む。"""
+    pass
 
 @CONNECTION_MODELS.register("prob_based_block")
 class BlockRandomTopology(BaseConnection):

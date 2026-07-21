@@ -106,6 +106,11 @@ class DistanceBasedDelay(BaseDelay):
         distance = np.linalg.norm(coords[rows] - coords[cols], axis=1)
         return self._delays_from_distance(distance).astype(np.float32)
 
+@DELAY_MODELS.register("beggs_plenz")
+class BeggsPlenzDistanceDelay(DistanceBasedDelay):
+    """Beggs & Plenz (2003) 再現用の距離依存遅延プロファイル。具体値は YAML から読む。"""
+    pass
+
 @DELAY_MODELS.register("type_based")
 class TypeBasedDelay(BaseDelay):
     """種別(E/I)ペア別の均一遅延。
