@@ -47,8 +47,8 @@ synapses:
       beta_E: 1.12
       Wmin: 0.0
       Wmax: 1.0
-    delay_by_target:
-      Layer_Exc: 1.5
+    # delay_by_target:
+    #   Layer_Exc: 1.5
 network:
   space:
     profile_name: block_2d

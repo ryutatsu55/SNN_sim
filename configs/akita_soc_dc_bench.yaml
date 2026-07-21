@@ -1,5 +1,8 @@
-# akita_soc.yaml の dc(per-synapse遅延=syn_dynamics)版。
-# delay_by_target を外すことで nearest-dc 経路 (毎ステップ syn_dynamics) になる。
+# akita_soc_delay.yaml の dc(per-synapse 到着イベント駆動)版。
+# akita_soc_delay.yaml と同一のネットワーク(ニューロン/シナプス/結合/重み/遅延)だが、
+# delay_by_target(=axonal 経路)を使わず、種別ペア別遅延(E→E:1.5, E→I:0.8, I→E:0.8,
+# I→I:0.8 ms)を network.delay=akita_soc(type_based)で与える → 非axonal の per-synapse
+# dc 経路(pre_arrival_syn_code, 到着イベント駆動)になる。両者の学習挙動比較用のベンチ。
 simulation:
   N: 100
   dt: 0.1
@@ -27,6 +30,7 @@ synapses:
     plasticity:
       type: custom_Akita
       mode: e-stdp
+      pairing: trace
     synapse:
       type: ExpCond
       mode: excitatory
@@ -35,6 +39,7 @@ synapses:
     plasticity:
       type: custom_Akita
       mode: i-stdp
+      pairing: trace
     synapse:
       type: ExpCond
       mode: inhibitory
@@ -43,4 +48,4 @@ network:
   space: no_space
   connection: constant_prob_full
   weight: constant_zero
-  delay: constant
+  delay: akita_soc         # 種別ペア別遅延 = akita_soc_delay.yaml の delay_by_target と同値 (非axonal dc 経路)

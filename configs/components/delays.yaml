@@ -12,3 +12,12 @@ random:
   std: 1.0
   min: 4.0
   max: 10.0
+
+# akita_soc_delay.yaml の delay_by_target (E→E:1.5, E→I:0.8, I→E:0.8, I→I:0.8) を、
+# delay_by_target を使わず network.delay 経由(非axonal の per-synapse dc 経路)で同一に再現する
+# 種別ペア別の均一遅延。type_based クラスが layout の E/I 分類で 4 ブロックに割り当てる。
+akita_soc:
+  d_ee: 1.5   # [ms] Exc→Exc (akita_soc_delay.yaml from_Exc: Layer_Exc)
+  d_ei: 0.8   # [ms] Exc→Inh (akita_soc_delay.yaml from_Exc: Layer_Inh)
+  d_ie: 0.8   # [ms] Inh→Exc (akita_soc_delay.yaml from_Inh: Layer_Exc)
+  d_ii: 0.8   # [ms] Inh→Inh (akita_soc_delay.yaml from_Inh: Layer_Inh)

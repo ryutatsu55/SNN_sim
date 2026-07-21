@@ -77,6 +77,59 @@ class DistanceBasedDelay(BaseDelay):
 
         return delays
 
+@DELAY_MODELS.register("type_based")
+class TypeBasedDelay(BaseDelay):
+    """種別(E/I)ペア別の均一遅延。
+
+    `layout.ids_by_mode()` で興奮性/抑制性のグローバルIDを分け、送信種別 × 受信種別の
+    4 ブロック(EE/EI/IE/II)にそれぞれ一定の遅延[ms]を割り当てる。`delay_by_target`
+    (= NetworkBuilder の axonal 経路)を使わずに per-(src,tgt)-type 遅延を network.delay
+    経由(非axonal の per-synapse dc 経路)で与えるための手段。空間座標は不要(coords 非依存)。
+
+    config(フラットなスカラーフィールド, 単位 [ms]):
+        d_ee (Exc→Exc), d_ei (Exc→Inh), d_ie (Inh→Exc), d_ii (Inh→Inh)
+    """
+
+    def generate(self):
+        if self.layout is None:
+            raise ValueError(
+                "TypeBasedDelay requires a NetworkLayout to resolve E/I populations."
+            )
+
+        ids = self.layout.ids_by_mode()
+        exc = ids["excitatory"]
+        inh = ids["inhibitory"]
+
+        delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
+
+        # 送信種別(行) × 受信種別(列)の 4 ブロックにそれぞれの遅延を割り当てる。
+        # global_delays は [source, target] 配向(NetworkBuilder が np.ix_(src, tgt) で切出す)。
+        blocks = (
+            (exc, exc, self.config.d_ee),
+            (exc, inh, self.config.d_ei),
+            (inh, exc, self.config.d_ie),
+            (inh, inh, self.config.d_ii),
+        )
+        for src_ids, tgt_ids, value in blocks:
+            if len(src_ids) == 0 or len(tgt_ids) == 0:
+                continue
+            v = float(value)
+            if not isinstance(value, Real) or isinstance(value, bool):
+                raise ValueError("type_based delays (d_ee/d_ei/d_ie/d_ii) must be real numbers.")
+            if v < 0.0:
+                raise ValueError("type_based delays must be greater than or equal to 0.0.")
+            delays[np.ix_(src_ids, tgt_ids)] = v
+
+        # 結合がない箇所の遅延は0にする(既存 delay モデルと同じ規約)。
+        delays[self.mask == 0] = 0.0
+        return delays
+
+@DELAY_MODELS.register("akita_soc")
+class AkitaSocTypeDelay(TypeBasedDelay):
+    """akita_soc_delay.yaml の delay_by_target と同一の遅延を network.delay 経由で再現する
+    種別ペア別均一遅延プロファイル。具体値は YAML から読む。"""
+    pass
+
 @DELAY_MODELS.register("random")
 class RandomDelay(BaseDelay):
     def generate(self) -> np.ndarray:
