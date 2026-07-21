@@ -60,6 +60,22 @@ class NetworkBuilder:
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
 
+        # GeNN のデバイス RNG シード。config.simulation.seed は NetworkBuilder の
+        # np.random.RandomState (= ネットワーク構造の生成) にしか使われておらず、
+        # GeNN 側は既定値 0 (= 実行ごとにランダムな種) のままだった。そのため
+        # escape noise (gennrand_uniform) を使うモデルは同一 seed でも実行ごとに
+        # 別のスパイク列になっていた (CPU で 3422/4437/4814 spikes と実測)。
+        # ここで明示的に渡すことでシミュレーション全体が再現可能になる。
+        # ※ GeNN では seed=0 が「ランダムな種」を意味するため 0 は避ける。
+        # seed: null (= 明示的にランダム、configs/test.yaml など) は np.random.RandomState(None)
+        # と揃えて GeNN 側もランダム (=0) のままにする。
+        _seed = self.config.simulation.seed
+        if _seed is None:
+            self.genn_model.seed = 0
+        else:
+            _genn_seed = int(_seed)
+            self.genn_model.seed = _genn_seed if _genn_seed != 0 else 1
+
         self._component_lifeline = []
         self.global_coords = None
         self.global_mask = None
