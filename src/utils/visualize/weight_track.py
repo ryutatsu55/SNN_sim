@@ -51,14 +51,59 @@ def discover_weight_files(run_dir: Path) -> list[WeightFile]:
     return sorted(files, key=lambda item: item.hour)
 
 
+# 疎 (COO) の重みファイルから密行列を復元してよい上限。これを超えると
+# (N,N) が確保できないため、呼び出し側で COO のまま扱う必要がある。
+DENSE_RECONSTRUCTION_LIMIT = 20000
+
+
 def load_weight_matrix(path: Path) -> np.ndarray:
-    data = np.load(path)
-    if "weights" not in data.files:
-        raise KeyError(f"{path} does not contain 'weights'.")
-    weights = np.asarray(data["weights"], dtype=np.float64)
-    if weights.ndim != 2 or weights.shape[0] != weights.shape[1]:
-        raise ValueError(f"{path} must contain a square 2D weight matrix.")
-    return weights
+    """重み npz を密な (N,N) 行列として読む。
+
+    2 つの形式を受け付ける:
+      - 旧来の密形式: キー "weights" に (N,N) 行列
+      - COO 形式    : キー "data" (+ 同ディレクトリの connectivity.npz の row/col)
+    COO の場合は N が大きすぎると復元しない (呼び出し側で COO のまま扱うこと)。
+    """
+    data = np.load(path, allow_pickle=True)
+
+    if "weights" in data.files:
+        weights = np.asarray(data["weights"], dtype=np.float64)
+        if weights.ndim != 2 or weights.shape[0] != weights.shape[1]:
+            raise ValueError(f"{path} must contain a square 2D weight matrix.")
+        return weights
+
+    if "data" not in data.files:
+        raise KeyError(f"{path} does not contain 'weights' or 'data'.")
+
+    # COO 形式。row/col は記録ごとに繰り返さず connectivity.npz に一度だけ持つ。
+    values = np.asarray(data["data"], dtype=np.float64)
+    if "row" in data.files and "col" in data.files:
+        row = np.asarray(data["row"], dtype=np.int64)
+        col = np.asarray(data["col"], dtype=np.int64)
+        size = int(np.asarray(data["shape"])[0]) if "shape" in data.files else None
+    else:
+        connectivity_path = path.parent / "connectivity.npz"
+        if not connectivity_path.exists():
+            raise FileNotFoundError(
+                f"{path} は COO 形式ですが、結合情報 {connectivity_path} が見つかりません。"
+            )
+        connectivity = np.load(connectivity_path, allow_pickle=True)
+        row = np.asarray(connectivity["row"], dtype=np.int64)
+        col = np.asarray(connectivity["col"], dtype=np.int64)
+        size = int(np.asarray(connectivity["shape"])[0])
+
+    if size is None:
+        size = int(max(row.max(), col.max())) + 1
+    if size > DENSE_RECONSTRUCTION_LIMIT:
+        raise MemoryError(
+            f"{path} は N={size} の疎行列です。密行列 ({size**2 * 8 / 2**30:.1f} GiB) には"
+            " 復元しません。COO のまま扱ってください"
+            " (src/utils/visualize/network_structure.py の粗視化プロットを参照)。"
+        )
+
+    matrix = np.zeros((size, size), dtype=np.float64)
+    matrix[row, col] = values
+    return matrix
 
 
 def _load_yaml(path: Path) -> dict:

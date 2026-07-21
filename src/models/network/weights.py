@@ -8,7 +8,11 @@ from src.core.registry import WEIGHT_MODELS
 
 class BaseWeight(ABC):
     """シナプスの重みを生成する基底クラス"""
-    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: np.ndarray, rng: np.random.RandomState, layout=None):
+
+    # 密な (N,N) を作らずに COO 上の 1D 重みを直接生成できるか。
+    supports_sparse: bool = False
+
+    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: Optional[np.ndarray] = None, rng: np.random.RandomState = None, layout=None):
         self.config = config
         self.num_neurons = num_neurons
         self.coords = coords
@@ -25,6 +29,12 @@ class BaseWeight(ABC):
             np.ndarray: 形状 (num_neurons, num_neurons) の重み行列 (np.float32)
         """
         pass
+
+    def generate_sparse(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """COO (rows, cols) に対応する 1D 重み配列 (np.float32) を返す。"""
+        raise NotImplementedError(
+            f"{type(self).__name__} は疎生成に対応していません (supports_sparse=False)。"
+        )
 
 @WEIGHT_MODELS.register("constant")
 class ConstantWeight(BaseWeight):

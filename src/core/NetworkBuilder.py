@@ -2,6 +2,7 @@ import os
 import inspect
 import numpy as np
 import pygenn
+from dataclasses import dataclass
 from typing import Dict, Any, Tuple
 from pathlib import Path
 import sys
@@ -31,6 +32,27 @@ if project_root not in sys.path:
 from src.core.config_manager import AppConfig
 from src.core.layout import NetworkLayout
 from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
+
+@dataclass(frozen=True)
+class SynapseIndex:
+    """1つのシナプス集団 (src_pop -> tgt_pop) の接続インデックスを保持する。
+
+    GeNN のシナプス変数は「集団ローカルの (pre, post) 行優先ソート順」で読み書きされる
+    (pygenn が set_sparse_connections で lexsort し、値の getter は行優先で返す)。
+    ここに保持する配列はその順序と一致しており、`simulator.pull_synapse` 系はこれを使って
+    結合マスクを再走査せずに値をグローバルIDへ散布できる。
+    """
+    src_name: str
+    tgt_name: str
+    local_src: np.ndarray   # int32, 集団ローカル pre index
+    local_tgt: np.ndarray   # int32, 集団ローカル post index
+    global_src: np.ndarray  # int32, グローバル pre ID
+    global_tgt: np.ndarray  # int32, グローバル post ID
+
+    @property
+    def num_synapses(self) -> int:
+        return int(self.local_src.size)
+
 
 class NetworkBuilder:
     def __init__(self, config: AppConfig, model_name: str = "SNN_Model", code_gen_dir: str | None = None):
@@ -81,6 +103,15 @@ class NetworkBuilder:
         self.global_mask = None
         self.global_weights = None
         self.global_delays = None
+        # 疎生成経路で使う COO (すべて index 整合の 1D 配列)。密経路では None のまま。
+        self.sparse_rows = None
+        self.sparse_cols = None
+        self.sparse_weights = None
+        self.sparse_delays = None
+        # 疎経路での グローバルID -> (集団コード, ローカルindex) 索引表 (遅延構築)
+        self._index_table = None
+        # "src_to_tgt" -> SynapseIndex。_build_synapses が GeNN へ登録した接続順を記録する。
+        self.synapse_index: Dict[str, SynapseIndex] = {}
 
     def build(self, rec_spike: bool = True) -> Tuple[pygenn.GeNNModel, NetworkLayout]:
         print("=== ネットワーク構築 (Network Building) ===")
@@ -95,9 +126,56 @@ class NetworkBuilder:
 
         return self.genn_model, self.layout
 
+    def _component_classes(self):
+        network = self.config.network
+        return (
+            SPATIAL_MODELS.get(network.space.profile_name),
+            CONNECTION_MODELS.get(network.connection.profile_name),
+            WEIGHT_MODELS.get(network.weight.profile_name),
+            DELAY_MODELS.get(network.delay.profile_name),
+        )
+
+    def _use_sparse(self) -> bool:
+        """疎生成経路を使うかどうかを config と各コンポーネントの対応状況から決める。
+
+        "auto"(既定): 結合/重み/遅延の3段すべてが疎対応なら疎。1段でも非対応なら密。
+        "force"     : 疎を必須とし、非対応クラス名を挙げて即エラー(大規模実行で
+                      20分走ってから OOM kill されるのを防ぐ)。
+        "off"       : 常に密(過去のネットワーク実現を再現したいとき)。
+        """
+        mode = getattr(self.config.network, "sparse", "auto")
+        if mode not in ("auto", "force", "off"):
+            raise ValueError(
+                f"network.sparse は 'auto' / 'force' / 'off' のいずれかです (got {mode!r})。"
+            )
+        if mode == "off":
+            return False
+
+        _, connect_cls, weight_cls, delay_cls = self._component_classes()
+        unsupported = [
+            cls.__name__
+            for cls in (connect_cls, weight_cls, delay_cls)
+            if not getattr(cls, "supports_sparse", False)
+        ]
+        if not unsupported:
+            return True
+        if mode == "force":
+            raise ValueError(
+                "network.sparse='force' ですが、疎生成に対応していないコンポーネントがあります: "
+                f"{', '.join(unsupported)}。'auto' にするか、疎対応のプロファイルを選んでください。"
+            )
+        return False
+
     def _generate_global_matrices(self):
-        """全ニューロンの座標と、グローバルな結合行列を一括生成する"""
+        """全ニューロンの座標と、グローバルな結合情報を生成する"""
         print("  Generating Global Coordinates and Matrices...")
+        if self._use_sparse():
+            self._generate_global_sparse()
+        else:
+            self._generate_global_dense()
+
+    def _generate_global_dense(self):
+        """密な (N, N) 行列として結合・重み・遅延を生成する(従来経路)"""
         network = self.config.network
 
         # Pydanticモデルから辞書を取得
@@ -105,24 +183,53 @@ class NetworkBuilder:
         conn_cfg = network.connection
         weight_cfg = network.weight
         delay_cfg = network.delay
-        # ======================================================================================
-        # ニューロン数が数万単位の場合、scipy.sparse.csr_matrixを使用して疎行列として生成することも検討
-        # ======================================================================================
+
+        spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+
         # 1. 空間座標の生成
-        spaceClass = SPATIAL_MODELS.get(space_cfg.profile_name)
         self.global_coords = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout).generate()
 
         # 2. 結合マスクの生成
-        connectClass = CONNECTION_MODELS.get(conn_cfg.profile_name)
         self.global_mask = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout).generate()
 
         # 3. 重み行列の生成
-        weightClass = WEIGHT_MODELS.get(weight_cfg.profile_name)
         self.global_weights = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout).generate()
 
         # 4. 遅延行列の生成
-        delayClass = DELAY_MODELS.get(delay_cfg.profile_name)
         self.global_delays = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout).generate()
+
+    def _generate_global_sparse(self):
+        """COO (rows, cols, weights, delays) として結合情報を生成する。
+
+        密行列を一切作らないため、N が数万規模でもメモリに収まる。乱数の消費順は
+        密経路と一致するよう各コンポーネント側で保証している
+        (connectors.GaussianDistanceTypeTopology.generate_sparse の docstring 参照)。
+        """
+        network = self.config.network
+        spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+
+        self.global_coords = spaceClass(
+            network.space, self.total_neurons, self.rng, layout=self.layout
+        ).generate()
+
+        rows, cols = connectClass(
+            network.connection, self.total_neurons, self.global_coords, self.rng, layout=self.layout
+        ).generate_sparse()
+        self.sparse_rows = np.asarray(rows, dtype=np.int32)
+        self.sparse_cols = np.asarray(cols, dtype=np.int32)
+
+        self.sparse_weights = weightClass(
+            network.weight, self.total_neurons, self.global_coords,
+            mask=None, rng=self.rng, layout=self.layout,
+        ).generate_sparse(self.sparse_rows, self.sparse_cols)
+
+        self.sparse_delays = delayClass(
+            network.delay, self.total_neurons, self.global_coords,
+            mask=None, rng=self.rng, layout=self.layout,
+        ).generate_sparse(self.sparse_rows, self.sparse_cols)
+
+        print(f"    Sparse connectivity: {self.sparse_rows.size} synapses "
+              f"({self.sparse_rows.size / max(self.total_neurons, 1):.1f} per neuron)")
 
     def _build_neuron_populations(self):
         """GeNN上にニューロンポピュレーションを定義"""
@@ -142,24 +249,100 @@ class NetworkBuilder:
             )
             print(f"  Added NeuronGroup: {group_name} ({num_neurons} neurons)")
 
+    def _quantize_delays(self, delays_ms: np.ndarray, pop_label: str) -> np.ndarray:
+        """遅延[ms]をシミュレーションステップ数(uint8)へ量子化する。
+
+        GeNN スニペット側で遅延変数 `d` は uint8_t 宣言 (かつ per-synapse 到着機構の
+        arrival_delay_var) のため 255 ステップが上限。従来はここで無言に折り返していたので、
+        明示的なエラーにする。
+        """
+        dt = self.config.simulation.dt
+        steps = np.rint(np.asarray(delays_ms, dtype=np.float64) / dt)
+        if steps.size and steps.max() > 255:
+            max_ms = float(steps.max()) * dt
+            raise ValueError(
+                f"{pop_label}: 遅延 {max_ms:.2f} ms = {int(steps.max())} ステップ が uint8 の上限 "
+                f"(255 ステップ = {255 * dt:.1f} ms) を超えています。"
+                f" network.delay の max_delay を {255 * dt:.1f} ms 以下にするか、"
+                f" 伝導速度を上げてください。"
+            )
+        return steps.astype(np.uint8)
+
+    def _local_index_table(self):
+        """グローバルID -> (集団コード, 集団ローカルindex) の索引表を作る。
+
+        layout の集団は 0..N-1 の分割なので、全ID に対して一意に定まる。
+        """
+        n = self.total_neurons
+        pop_code = np.full(n, -1, dtype=np.int16)
+        local_of = np.zeros(n, dtype=np.int32)
+        code_of_name = {}
+        for code, (name, spec) in enumerate(self.layout.items()):
+            ids = np.asarray(self.layout.global_indices(name), dtype=np.int64)
+            pop_code[ids] = code
+            local_of[ids] = np.arange(ids.size, dtype=np.int32)
+            code_of_name[name] = code
+        return pop_code, local_of, code_of_name
+
+    def _pair_coo(self, src_name: str, tgt_name: str):
+        """(src_pop -> tgt_pop) の接続を集団ローカルの COO として取り出す。
+
+        Returns:
+            (local_src, local_tgt, weights_flat, delays_ms) いずれも行優先ソート済みで
+            index が整合した 1D 配列。接続が無ければすべて空配列。
+        """
+        if self.sparse_rows is None:
+            # 密経路: 従来どおりグローバル行列から np.ix_ で切り出す。
+            src_indices = self.layout.global_indices(src_name)
+            tgt_indices = self.layout.global_indices(tgt_name)
+            sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)]
+            local_src, local_tgt = np.where(sub_mask != 0)
+            sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)]
+            sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)]
+            return (
+                local_src,
+                local_tgt,
+                sub_weights[local_src, local_tgt],
+                sub_delays[local_src, local_tgt].astype(np.float64),
+            )
+
+        # 疎経路: グローバル COO をブールフィルタする。
+        # layout.global_indices は昇順なので local_of は各集団上で単調増加であり、
+        # 行優先ソート済みキーへの単調写像はソート順を保つ。よって密経路の
+        # np.where(sub_mask) と同一の順序が得られる。
+        if self._index_table is None:
+            self._index_table = self._local_index_table()
+        pop_code, local_of, code_of_name = self._index_table
+
+        sel = (
+            (pop_code[self.sparse_rows] == code_of_name[src_name])
+            & (pop_code[self.sparse_cols] == code_of_name[tgt_name])
+        )
+        rows = self.sparse_rows[sel]
+        cols = self.sparse_cols[sel]
+        return (
+            local_of[rows],
+            local_of[cols],
+            self.sparse_weights[sel],
+            self.sparse_delays[sel].astype(np.float64),
+        )
+
     def _build_synapses(self):
-        """グローバル行列からインデックスで切り出し、シナプスを構築"""
+        """グローバルな結合情報からシナプス集団ごとに切り出し、GeNN へ登録する"""
         print("  Building Synapse Populations...")
+        self._index_table = None
         for syn_group_name, syn_cfg in self.config.synapses.items():
             for tgt_name in self.layout.names():
                 src_name = syn_cfg.source
                 # tgt_name = syn_cfg.target
                 print(f"src:{src_name}, tgt:{tgt_name}")
 
-                # population は正準グローバルID空間で散在しうる(assignment=random)。
-                # 昇順ソート済みのメンバー集合で np.ix_ 抽出する(連番のときは連続スライスと等価)。
                 src_indices = self.layout.global_indices(src_name)
                 tgt_indices = self.layout.global_indices(tgt_name)
 
-                # グローバル行列からの抽出
-                sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)].copy()
-                sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)].copy()
-                sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)]
+                local_src_idx, local_tgt_idx, weights_flat, delays_flat_ms = self._pair_coo(
+                    src_name, tgt_name
+                )
 
                 delay_by_target = getattr(syn_cfg, "delay_by_target", None)
                 # delay_by_target 指定は集団内で単一定数 = 均一遅延。この場合のみ GeNN の
@@ -167,17 +350,14 @@ class NetworkBuilder:
                 # イベント駆動化して毎ステップの syn_dynamics_code を撤廃する(高速化)。
                 use_axonal = delay_by_target is not None and tgt_name in delay_by_target
                 if use_axonal:
-                    sub_delays[sub_mask != 0] = float(delay_by_target[tgt_name])
+                    delays_flat_ms = np.full_like(delays_flat_ms, float(delay_by_target[tgt_name]))
                 elif hasattr(syn_cfg, "delay"):
-                    sub_delays[sub_mask != 0] = float(syn_cfg.delay)
+                    delays_flat_ms = np.full_like(delays_flat_ms, float(syn_cfg.delay))
 
-                local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
                 if len(local_src_idx) == 0:
                     print(f"    Skipping SynapseGroup: {src_name}_to_{tgt_name} (No connections found)")
                     continue
-                weights_flat = sub_weights[local_src_idx, local_tgt_idx]
-                delays_flat = sub_delays[local_src_idx, local_tgt_idx]
-                delays_flat = np.rint(delays_flat / self.config.simulation.dt).astype(np.uint8)
+                delays_flat = self._quantize_delays(delays_flat_ms, f"{src_name}_to_{tgt_name}")
 
                 src_pop = self.genn_model.neuron_populations[src_name]
                 tgt_pop = self.genn_model.neuron_populations[tgt_name]
@@ -243,6 +423,17 @@ class NetworkBuilder:
                     weight_update_init=weight_init, 
                     postsynaptic_init=post_init
                 )
+                # GeNN へ渡した接続順をそのまま記録する。以降 simulator 側は結合マスクを
+                # 再走査せずにシナプス変数をグローバルIDへ散布できる。
+                self.synapse_index[f"{src_name}_to_{tgt_name}"] = SynapseIndex(
+                    src_name=src_name,
+                    tgt_name=tgt_name,
+                    local_src=local_src_idx.astype(np.int32, copy=False),
+                    local_tgt=local_tgt_idx.astype(np.int32, copy=False),
+                    global_src=np.asarray(src_indices, dtype=np.int32)[local_src_idx],
+                    global_tgt=np.asarray(tgt_indices, dtype=np.int32)[local_tgt_idx],
+                )
+
                 sg.set_sparse_connections(local_src_idx, local_tgt_idx)
                 if use_axonal:
                     # 軸索遅延: ソーススパイクを axonal_steps 分遅延スロットから読み、到着時刻に

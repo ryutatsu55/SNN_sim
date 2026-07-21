@@ -4,6 +4,11 @@ import numpy as np
 from typing import Dict, Any, List, Tuple
 from src.core.NetworkBuilder import NetworkBuilder
 
+# pull_synapse が確保してよい密行列の上限。これを超えたら COO 版へ誘導する。
+# (N=40000 では密行列だけで 6.4 GiB になり、ホストメモリが尽きる)
+DENSE_PULL_LIMIT_BYTES = 2 * 1024 ** 3
+
+
 class GeNNSimulator:
     def __init__(self, genn_model: pygenn.GeNNModel, config: Any, builder: NetworkBuilder):
         self.model = genn_model
@@ -21,8 +26,15 @@ class GeNNSimulator:
         
         self.is_setup = False
 
-    def setup(self):
-        """GeNNモデルのコード生成、コンパイル、およびGPUへのロード"""
+    def setup(self, backup_initial_states: bool = True):
+        """GeNNモデルのコード生成、コンパイル、およびGPUへのロード
+
+        Args:
+            backup_initial_states: 全変数の初期状態を控えるか。`reset()` (複数トライアル実行)
+                に必須だが、大規模ネットワークではシナプス変数の控えだけで GB 級のホストメモリを
+                消費し、かつ pygenn の値取得が行ごとの Python ループなので setup が非常に遅い。
+                単発の自発活動シミュレーションのように `reset()` を呼ばない用途では False にする。
+        """
         print(f"=== [Simulator] Setup: Building model '{self.model.name}' ===")
 
         # コード生成先。builder.code_gen_dir が指定されていれば
@@ -45,6 +57,12 @@ class GeNNSimulator:
             'synapses': {},
             'current_sources': {}
         }
+
+        if not backup_initial_states:
+            self.initial_states = None
+            self.is_setup = True
+            print("  [Simulator] Setup complete (initial states NOT backed up; reset() is unavailable).")
+            return
 
         # 1. ニューロンの初期状態保存
         # GPU で初期化された値を CPU に pull してから保存する
@@ -161,40 +179,94 @@ class GeNNSimulator:
             global_data[self.layout.global_indices(src_name)] = values
         return global_data
 
+    def pull_synapse_flat(self, var_name: str) -> Dict[str, np.ndarray]:
+        """シナプス変数を集団ごとの 1D 配列として引き上げる。
+
+        各配列の並びは `builder.synapse_index[pop].local_src/local_tgt` と一致する
+        (集団ローカルの (pre, post) 行優先ソート順)。密行列を作らないため、
+        大規模ネットワークではこちらを使う。
+        """
+        values: Dict[str, np.ndarray] = {}
+        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
+            syn_pop.vars[var_name].pull_from_device()
+            values[syn_pop_name] = np.copy(syn_pop.vars[var_name].values)
+        return values
+
+    def pull_synapse_coo(self, var_name: str) -> Dict[str, Any]:
+        """シナプス変数をグローバルID空間の COO 形式で引き上げる。
+
+        Returns:
+            row / col       : int32, グローバル pre/post ID
+            data            : float32, 対応する変数値
+            pair_names      : シナプス集団名 (連結順)
+            pair_offsets    : 各集団の data 内での開始位置 (末尾に総数)
+            shape           : (total_neurons, total_neurons)
+
+        連結順は集団ごとの「ペア major」であり、グローバルにソートはしない
+        (数千万要素のソートを記録のたびに払わないため)。
+        """
+        rows, cols, datas = [], [], []
+        pair_names, pair_offsets = [], [0]
+
+        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
+            index = self.builder.synapse_index.get(syn_pop_name)
+            if index is None:
+                raise KeyError(
+                    f"synapse_index に '{syn_pop_name}' がありません。"
+                    " NetworkBuilder.build() を経ずに構築されたモデルの可能性があります。"
+                )
+            syn_pop.vars[var_name].pull_from_device()
+            values = np.asarray(syn_pop.vars[var_name].values, dtype=np.float32)
+            if values.size != index.num_synapses:
+                raise ValueError(
+                    f"'{syn_pop_name}' の値数 {values.size} が記録済み接続数 "
+                    f"{index.num_synapses} と一致しません。"
+                )
+            rows.append(index.global_src)
+            cols.append(index.global_tgt)
+            datas.append(values)
+            pair_names.append(syn_pop_name)
+            pair_offsets.append(pair_offsets[-1] + values.size)
+
+        empty_i = np.array([], dtype=np.int32)
+        empty_f = np.array([], dtype=np.float32)
+        return {
+            "row": np.concatenate(rows) if rows else empty_i,
+            "col": np.concatenate(cols) if cols else empty_i,
+            "data": np.concatenate(datas) if datas else empty_f,
+            "pair_names": np.array(pair_names, dtype=object),
+            "pair_offsets": np.array(pair_offsets, dtype=np.int64),
+            "shape": np.array([self.total_neurons, self.total_neurons], dtype=np.int64),
+        }
+
     def pull_synapse(self, var_name: str) -> np.ndarray:
         """
         ネットワーク全体のシナプス変数の現在状態を、
         (total_neurons, total_neurons) のグローバル行列の形状で引き上げる
+
+        大規模ネットワークでは密行列が確保できないため、`DENSE_PULL_LIMIT_BYTES` を
+        超える場合は COO 版へ誘導する。
         """
-        # 1. 現在のグローバル行列の雛形を作成 (初期値0)
+        required_bytes = self.total_neurons ** 2 * 4
+        if required_bytes > DENSE_PULL_LIMIT_BYTES:
+            raise MemoryError(
+                f"pull_synapse は {required_bytes / 2**30:.1f} GiB の密行列を確保しようとしました "
+                f"(total_neurons={self.total_neurons})。"
+                " pull_synapse_coo() / pull_synapse_flat() を使ってください。"
+            )
+
         global_matrix = np.zeros((self.total_neurons, self.total_neurons), dtype=np.float32)
-        
-        # 2. 全てのシナプスポピュレーションを走査
+
         for syn_pop_name, syn_pop in self.model.synapse_populations.items():
-            # GPUから最新の値を引き上げる
+            index = self.builder.synapse_index.get(syn_pop_name)
+            if index is None:
+                raise KeyError(
+                    f"synapse_index に '{syn_pop_name}' がありません。"
+                    " NetworkBuilder.build() を経ずに構築されたモデルの可能性があります。"
+                )
             syn_pop.vars[var_name].pull_from_device()
-            
-            # このポピュレーションにおける各接続の現在の値 (flatな配列)
-            current_values = syn_pop.vars[var_name].values
-            
-            # NetworkBuilder側で保持している「どのグローバル座標にマッピングするか」の情報を使用
-            # syn_pop_name は "src_to_tgt" の形式であることを前提とする
-            src_name, _, tgt_name = syn_pop_name.partition("_to_")
+            global_matrix[index.global_src, index.global_tgt] = syn_pop.vars[var_name].values
 
-            src_indices = self.layout.global_indices(src_name)
-            tgt_indices = self.layout.global_indices(tgt_name)
-
-            # SPARSE接続のインデックスを取得 (NetworkBuilderの _build_synapses で指定したもの)
-            # ※もしシミュレーター側で保持していない場合は、再計算が必要
-            sub_mask = self.builder.global_mask[np.ix_(src_indices, tgt_indices)]
-            local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
-            
-            # グローバル行列の該当箇所に値を書き戻す
-            global_indices_src = src_indices[local_src_idx]
-            global_indices_tgt = tgt_indices[local_tgt_idx]
-            
-            global_matrix[global_indices_src, global_indices_tgt] = current_values
-            
         return global_matrix
 
     def get_global_spikes(self) -> Dict[str, np.ndarray]:
@@ -234,6 +306,11 @@ class GeNNSimulator:
         """
         次のトライアルに向けてシミュレータの状態（ニューロン、シナプス、入力源）を完全にリセット
         """
+        if self.initial_states is None:
+            raise RuntimeError(
+                "reset() には初期状態の控えが必要ですが、setup(backup_initial_states=False) で "
+                "省略されています。reset() を使うなら setup() を既定 (True) で呼んでください。"
+            )
         self.model.timestep = 0
         # self.model.t = 0.0
 

@@ -7,7 +7,11 @@ from src.core.registry import DELAY_MODELS
 
 class BaseDelay(ABC):
     """シナプスの伝播遅延を生成する基底クラス"""
-    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: np.ndarray, rng: np.random.RandomState, layout=None):
+
+    # 密な (N,N) を作らずに COO 上の 1D 遅延を直接生成できるか。
+    supports_sparse: bool = False
+
+    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: Optional[np.ndarray] = None, rng: np.random.RandomState = None, layout=None):
         self.config = config
         self.num_neurons = num_neurons
         self.coords = coords
@@ -25,6 +29,12 @@ class BaseDelay(ABC):
         """
         pass
 
+    def generate_sparse(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """COO (rows, cols) に対応する 1D 遅延配列 [ms] (np.float32) を返す。"""
+        raise NotImplementedError(
+            f"{type(self).__name__} は疎生成に対応していません (supports_sparse=False)。"
+        )
+
 @DELAY_MODELS.register("constant")
 class ConstantDelay(BaseDelay):
     def generate(self):
@@ -37,8 +47,11 @@ class ConstantDelay(BaseDelay):
 
 @DELAY_MODELS.register("distance_based")
 class DistanceBasedDelay(BaseDelay):
-    def generate(self):
-        """物理的な距離を伝播速度で割って遅延を決定する"""
+
+    supports_sparse = True
+
+    def _params(self):
+        """遅延パラメータを検証して (velocity, min_delay, max_delay, synaptic_delay) を返す。"""
         if self.coords is None:
             raise ValueError("DistanceBasedDelay requires spatial coordinates (coords cannot be None).")
 
@@ -55,12 +68,6 @@ class DistanceBasedDelay(BaseDelay):
         if synaptic_delay < 0.0:
             raise ValueError("synaptic_delay must be greater than or equal to 0.0.")
 
-        # 距離行列の計算
-        dist_matrix = squareform(pdist(self.coords))
-
-        # 距離 / 速度(軸索伝導) + 最小遅延 + シナプス遅延オフセット
-        calc_delays = (dist_matrix / velocity) + min_delay + float(synaptic_delay)
-
         if max_delay is not None:
             if not isinstance(max_delay, Real) or isinstance(max_delay, bool):
                 raise ValueError("max_delay must be a real number or None.")
@@ -68,7 +75,19 @@ class DistanceBasedDelay(BaseDelay):
                 raise ValueError(
                     f"max_delay ({max_delay}) must not be less than min_delay ({min_delay})."
                 )
-            calc_delays = np.minimum(calc_delays, float(max_delay))
+
+        return velocity, min_delay, max_delay, float(synaptic_delay)
+
+    def _delays_from_distance(self, distance):
+        velocity, min_delay, max_delay, synaptic_delay = self._params()
+        calc = (distance / velocity) + min_delay + synaptic_delay
+        if max_delay is not None:
+            calc = np.minimum(calc, float(max_delay))
+        return calc
+
+    def generate(self):
+        """物理的な距離を伝播速度で割って遅延を決定する"""
+        calc_delays = self._delays_from_distance(squareform(pdist(self.coords)))
 
         # 結合がない箇所の遅延は0にする（メモリ効率とバグ防止のため）
         delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
@@ -76,6 +95,16 @@ class DistanceBasedDelay(BaseDelay):
         delays[idx] = calc_delays[idx]
 
         return delays
+
+    def generate_sparse(self, rows, cols):
+        self._params()  # coords / パラメータの検証
+        rows = np.asarray(rows)
+        cols = np.asarray(cols)
+        if rows.size == 0:
+            return np.zeros(0, dtype=np.float32)
+        coords = np.asarray(self.coords, dtype=np.float64)
+        distance = np.linalg.norm(coords[rows] - coords[cols], axis=1)
+        return self._delays_from_distance(distance).astype(np.float32)
 
 @DELAY_MODELS.register("type_based")
 class TypeBasedDelay(BaseDelay):

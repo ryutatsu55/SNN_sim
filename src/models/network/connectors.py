@@ -7,6 +7,12 @@ from src.core.registry import CONNECTION_MODELS
 
 class BaseConnection(ABC):
     """シナプス結合の有無(マスク)を決定する基底クラス"""
+
+    # 密な (N,N) マスクを作らずに COO を直接生成できるか。True を宣言したクラスは
+    # generate_sparse() を実装しなければならない。NetworkBuilder は結合/重み/遅延の
+    # 3 段すべてが True のときだけ疎生成経路を選ぶ。
+    supports_sparse: bool = False
+
     def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState, layout=None):
         self.config = config
         self.num_neurons = num_neurons
@@ -23,6 +29,16 @@ class BaseConnection(ABC):
             np.ndarray: 形状 (num_neurons, num_neurons) の結合マスク (0 or 1の np.int8 配列など)
         """
         pass
+
+    def generate_sparse(self) -> tuple[np.ndarray, np.ndarray]:
+        """結合を COO (rows, cols) で返す。行優先ソート済みであること。
+
+        Returns:
+            (rows, cols): それぞれ int32 のグローバル pre/post ID
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} は疎生成に対応していません (supports_sparse=False)。"
+        )
 
 @CONNECTION_MODELS.register("constant_prob")
 class ConstantProbabilityTopology(BaseConnection):

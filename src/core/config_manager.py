@@ -58,6 +58,15 @@ class NetworkConfig(BaseModel):
     connection: ComponentConfig
     weight: ComponentConfig
     delay: ComponentConfig
+    sparse: str = Field(
+        default="auto",
+        description=(
+            "結合行列の生成経路。"
+            '"auto"=結合/重み/遅延の3段すべてが疎対応なら疎生成、'
+            '"force"=疎生成を必須(非対応ならエラー)、'
+            '"off"=常に密生成(過去の実現を再現したいとき)'
+        ),
+    )
 
 class LayerSpecConfig(BaseModel):
     """構造層(グローバルID空間で連続するブロック)の1層分の設定"""
@@ -183,6 +192,9 @@ class ConfigManager:
             profile_data = data[profile_name].copy()
             profile_data["profile_name"] = profile_name
             resolved["network"][key_name] = profile_data
+
+        # 疎/密の生成経路の選択 (未指定なら "auto")
+        resolved["network"]["sparse"] = network.get("sparse", "auto")
 
         # タスク設定の読み込み
         tasks_data = self._load_yaml(components_dir / "tasks.yaml")
