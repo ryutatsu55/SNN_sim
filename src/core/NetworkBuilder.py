@@ -20,7 +20,7 @@ if not os.environ.get("CUDA_PATH"):
 # 自動選択の根拠: per-synapse 到着イベント駆動化 (pre_arrival_syn_code) 後の実測で、小規模では
 # CPU が最速 (100n=11.4µs/step, GPU 40.8µs は per-step 起動 floor 律速で勝てない)、~400n 付近が
 # crossover で大規模は GPU が平坦有利。詳細: docs/gpu_vs_cpu.md「実装後の実測」。
-USE_GPU = False
+USE_GPU = True
 GPU_NEURON_THRESHOLD = 400
 
 project_root = str(Path(__file__).resolve().parent.parent.parent)
@@ -251,6 +251,32 @@ class NetworkBuilder:
                 else:
                     max_delay_steps = int(np.max(delays_flat)) + 1
                     sg.max_dendritic_delay_timesteps = max_delay_steps
+                    sg.num_threads_per_spike = self._arrival_threads_per_spike(
+                        local_src_idx, max_delay_steps, f"{src_name}_to_{tgt_name}")
+
+    @staticmethod
+    def _arrival_threads_per_spike(local_src_idx, max_delay_steps, label):
+        """per-synapse 到着 kernel の 1 スパイクあたりスレッド数を決める。
+
+        到着 kernel は既定 (=1) だと「並列度=キュー内スパイク数(数十)、直列深さ=行長
+        (数百〜千)」という GPU の苦手な形になり、依存するランダムアクセスのレイテンシが
+        素通しで積み上がる。1 スパイクを T スレッドで分担すると presynaptic kernel と同じ
+        「広くて浅い」形に転置でき、遅延バケツ内は連続アクセス (coalesced) になる。
+
+        T は「1 スパイク・1 遅延ステップあたり平均何本のシナプスが届くか」= 行長/遅延段数
+        を目安に、warp 幅 32 を上限として 2 の冪へ丸める。バケツより T が大きいと余ったスレッド
+        が遊ぶだけなので、上振れを避けてこの規模に合わせる。
+        """
+        if len(local_src_idx) == 0:
+            return 1
+        _, counts = np.unique(np.asarray(local_src_idx), return_counts=True)
+        mean_bucket = float(counts.mean()) / max(1, int(max_delay_steps))
+        t = 1
+        while t < 32 and t < mean_bucket:
+            t *= 2
+        print(f"    [arrival] {label}: 行長 {counts.mean():.0f} / 遅延 {max_delay_steps} 段"
+              f" -> num_threads_per_spike = {t}")
+        return t
 
     def _build_input_ports(self):
         """GeNN上に入力専用のglobal_popを定義し、本体へ1対1で接続する"""

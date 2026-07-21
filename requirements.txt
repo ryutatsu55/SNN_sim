@@ -51,7 +51,7 @@ psutil==7.2.2
 pybind11==3.0.3
 pydantic==2.12.5
 pydantic_core==2.41.5
--e git+https://github.com/ryutatsu55/genn.git@de5ff9d9ca7fe67ab7637b628b651dc267d58b00#egg=pygenn
+-e git+https://github.com/ryutatsu55/genn.git@0c3c248eec0b54219e967a1abe1f2fe282b4eb94#egg=pygenn
 Pygments==2.20.0
 pyparsing==3.3.2
 pytest==9.0.3

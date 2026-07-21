@@ -1,0 +1,44 @@
+# ベンチ用: akita_soc.yaml から delay_by_target を外し per-synapse 遅延(=dc, 到着イベント駆動)にした版。
+# 目的: 新 pre_arrival_syn_code 機構 (event-driven dc) の CPU/GPU 性能計測 (docs/gpu_vs_cpu.md 更新用)。
+simulation:
+  N: 400
+  dt: 0.1
+  seed: 1
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+neurons:
+  Layer_Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    num: 320
+  Layer_Inh:
+    type: akita_escape_lif
+    mode: inhibitory
+    num: 80
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+network:
+  space: no_space
+  connection: constant_prob_full
+  weight: constant_zero
+  delay: constant
