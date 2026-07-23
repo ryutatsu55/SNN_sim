@@ -1,0 +1,13 @@
+拝啓
+
+こんにちわ
+configs/criticality_test.yamlをもとに今までと同じakita_soc.pyの実験をして臨界状態に到達する条件を見つけてください
+臨界状態の遷移過程は問いません。ΔCr < 0.5が好ましいです。
+参考にしているパラメーターの範囲はdocs/parameters.mdにまとめてあります。
+
+configs/criticality_test.yamlで実行するにあたり2つほど新規で導入が必要なモデルが2つほどあります。それらの作成もお願いします
+
+GPUで実験する場合、pip install -r requirements.txtのほかに別途GPU用の環境構築が別途必要になります。
+docs/manual/python_env_setup.mdを参考にしてください。
+
+敬具

@@ -3,7 +3,7 @@ constant:
 
 distance_based:
   velocity: 500.0   # [um/ms] 実コネクトーム(~800um スケール)向け。
-  synaptic_delay: 0.5  # [ms] シナプス伝達遅延の固定オフセット(軸索伝導 距離/速度 に加算)
+  synaptic_delay: 1.0  # [ms] シナプス伝達遅延の固定オフセット(軸索伝導 距離/速度 に加算)
   min_delay: 0.5  # [ms] 遅延の最小値。距離/速度 + synaptic_delay がこの値未満の場合、min_delay にクリップ
   max_delay: 25.0   # [ms] 任意の安全キャップ。uint8 ステップ上限(255*dt=25.5ms@dt0.1)超えの折り返し防止
 
@@ -21,12 +21,3 @@ akita_soc:
   d_ei: 0.8   # [ms] Exc→Inh (akita_soc_delay.yaml from_Exc: Layer_Inh)
   d_ie: 0.8   # [ms] Inh→Exc (akita_soc_delay.yaml from_Inh: Layer_Exc)
   d_ii: 0.8   # [ms] Inh→Inh (akita_soc_delay.yaml from_Inh: Layer_Inh)
-
-# Beggs & Plenz (2003) 再現用の距離依存遅延 (docs/refs/SNN_PA~1.MD §4)。
-# distance_based クラスが delay(d) = d/velocity + min_delay + synaptic_delay を計算する。
-# MD の式 delay(d)=max(1.0, d/500 + τ_syn), τ_syn=1.0 に一致 (d/500≥0 なので max は自明)。
-beggs_plenz:
-  velocity: 500.0       # [um/ms] 無髄軸索伝導速度 (Swadlow 1994, J Neurophysiol; MD §4 保守的中央値)
-  synaptic_delay: 1.0   # [ms] 最小シナプス遅延 τ_syn (Sabatini & Regehr 1996, J Neurosci)
-  min_delay: 0.0        # [ms] 追加オフセット無し (τ_syn が実質の下限)
-  max_delay: 25.0       # [ms] uint8 ステップ上限(255*dt=25.5ms@dt0.1)超えの折り返し防止の安全キャップ

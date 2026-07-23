@@ -1,0 +1,54 @@
+# 臨界状態テスト暫定版
+# (custom_Akita e/i-stdp・ExpCond・akita_escape_lif)。
+# 空間配置 + 距離依存結合 + 距離依存遅延 を組み合わせる。
+# 初期重みは対数正規 (MD §10)、STDP は custom_Akita を MD §7 に整合 (e/i-stdp_beggs)。
+simulation:
+  N: 3600  # 面積より算出（例：(3×3mm^2)× 400 neuron/mm^2 = 3,600 neurons）
+  dt: 0.1
+  seed: 1
+
+inputs:
+  # akita_escape_lif の escape 発火(f_rest)が自発活動を供給するため外部ノイズは不要。
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  # E/I = 80/20
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    num: 2880
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    num: 720
+
+synapses:
+  from_Exc:
+    source: Layer_Exc
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: Layer_Inh
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  space: module_2d          # 2×2モジュール結合 × 4 (該当クラスなし。作ってください)
+  connection: axon          # 軸索伸長アルゴリズム(該当クラスなし。下記の文献参考に作ってください)
+  weight: lognormal_broad   # 対数正規初期重み (all zeroでもいい)
+  delay: distance_based     # 距離依存遅延 delay(d)=d/500 + 1.0ms
+
+# 軸索 参考文献：https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2025.1570783/full)

@@ -9,17 +9,11 @@ normal_broad:
   std: 0.2
   
 lognormal_broad:
-  mean: 0.5
-  std: 0.02
-
-# Beggs & Plenz (2003) 再現用の初期重み (docs/refs/SNN_PA~1.MD §10)。
-# 28 DIV 成熟培養網を模し、ゼロ初期を避けて対数正規から開始し [w_min, w_max] へ切り捨てる。
-# custom_Akita の重み w は正規化 [0, Wmax=1.0] 空間なので w_max=Wmax に合わせる。
-beggs_plenz:
-  mu_ln: -0.857    # = ln(0.7) - sigma_ln^2/2 (平均 ~0.7 EPSP; Song 2005 / Lefort 2009, J Neurosci/Neuron)
-  sigma_ln: 1.0    # 分布の広がり (MD §10: 0.8〜1.2)
-  w_min: 0.0       # 下限 (MD §7 Wmin)
-  w_max: 1.0       # 上限 = custom_Akita Wmax ハードバウンド (MD §7/§10)
+  # (LogNormalRandomWeight)。シナプス強度の対数正規性は Song 2005 / Lefort 2009 が報告。
+  mean: 0.5        # 物理的意味を持たない。コンダクタンス等含めてPSPが計算されて初めて意味を持つ
+  sigma_ln: 1.0    # 下地正規分布の広がり (Song 2005 相当: 0.8〜1.2)
+  w_min: 0.0       # クリップ下限 (任意。省略でクリップ無し)
+  w_max: 1.0       # クリップ上限 (任意。省略でクリップ無し。custom_Akita Wmax ハードバウンドに一致)
 
 offset_scaled_normal:
   offset: 1.0

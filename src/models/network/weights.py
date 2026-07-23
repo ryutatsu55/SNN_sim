@@ -66,56 +66,60 @@ class NormalRandomWeight(BaseWeight):
 
 @WEIGHT_MODELS.register("lognormal_broad")
 class LogNormalRandomWeight(BaseWeight):
-    def generate(self):
-        """結合がある箇所に、対数正規分布に従うランダムな重みを割り当てる"""
-        mean = self.config.mean
-        std = self.config.std
-        
-        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        idx = (self.mask != 0)
-        num_conns = np.sum(idx)
-        
-        weights[idx] = self.rng.lognormal(mean, std, size=num_conns)
-        return weights
+    """対数正規分布に従う初期重み(任意で [w_min, w_max] クリップ)。
 
-@WEIGHT_MODELS.register("lognormal_clip")
-class LogNormalClipWeight(BaseWeight):
-    """対数正規分布 + [w_min, w_max] クリップの初期重み。
+    シナプス強度が対数正規分布に従うことは Song et al. 2005 (PLoS Biol) /
+    Lefort et al. 2009 (Neuron) が報告している。利用者は「目標平均 mean(線形スケール)」と
+    「広がり sigma_ln(下地正規分布の標準偏差)」を指定するだけでよく、下地正規分布の平均
+    mu_ln はクラスが逆算する(人間が ln(mean) - sigma_ln^2/2 を手計算しなくてよい):
 
-    Beggs & Plenz (2003) 再現用(docs/refs/SNN_PA~1.MD §10)。28 DIV の成熟培養網を模し、
-    ゼロ初期を避けて `w ~ LogNormal(mu_ln, sigma_ln^2)` を `[w_min, w_max]` に切り捨てる
-    (既存 `lognormal_broad` はクリップ無しのため別クラスにする)。custom_Akita の重み `w` は
-    正規化 [0, Wmax] 空間なので w_max は Wmax(既定 1.0)に合わせる。
+        w ~ LogNormal(mu_ln, sigma_ln^2),   mu_ln = ln(mean) - sigma_ln^2 / 2
 
-    config(フラットなスカラーフィールド):
-        mu_ln    … 台形正規分布(下地の正規分布)の平均。MD §10 は mu_ln = ln(0.7) - sigma_ln^2/2
-        sigma_ln … 広がり(MD §10: 0.8〜1.2)
-        w_min, w_max … クリップ範囲(= custom_Akita の Wmin/Wmax に対応)
+    こうすると(クリップ前の)線形スケールでの平均が mean にちょうど一致する。
+
+    config パラメータ:
+        mean     … 目標とする平均(線形スケール, > 0)
+        sigma_ln … 下地正規分布の広がり(>= 0。Song 2005 相当は 0.8〜1.2)
+        w_min    … クリップ下限(任意。省略時はクリップ無し = -inf)
+        w_max    … クリップ上限(任意。省略時はクリップ無し = +inf。custom_Akita の Wmax に合わせる)
+
+    注: w_min/w_max でクリップした場合、実現される平均は目標 mean から少しずれる
+        (裾を切り落とすため)。
     """
 
     supports_sparse = True
 
     def _params(self):
-        mu_ln = self.config.mu_ln
+        mean = self.config.mean
         sigma_ln = self.config.sigma_ln
-        w_min = self.config.w_min
-        w_max = self.config.w_max
+        w_min = getattr(self.config, "w_min", None)
+        w_max = getattr(self.config, "w_max", None)
 
-        for pname, pval in (("mu_ln", mu_ln), ("sigma_ln", sigma_ln),
-                            ("w_min", w_min), ("w_max", w_max)):
+        for pname, pval in (("mean", mean), ("sigma_ln", sigma_ln)):
             if not isinstance(pval, Real) or isinstance(pval, bool):
                 raise ValueError(f"{pname} must be a real number.")
+        if mean <= 0.0:
+            raise ValueError("mean must be positive (対数正規分布の線形平均).")
         if sigma_ln < 0.0:
             raise ValueError("sigma_ln must be greater than or equal to 0.0.")
-        if w_min > w_max:
-            raise ValueError(f"w_min ({w_min}) must not exceed w_max ({w_max}).")
-        return float(mu_ln), float(sigma_ln), float(w_min), float(w_max)
+
+        for pname, pval in (("w_min", w_min), ("w_max", w_max)):
+            if pval is not None and (not isinstance(pval, Real) or isinstance(pval, bool)):
+                raise ValueError(f"{pname} must be a real number or omitted.")
+        lo = float(w_min) if w_min is not None else -np.inf
+        hi = float(w_max) if w_max is not None else np.inf
+        if lo > hi:
+            raise ValueError(f"w_min ({lo}) must not exceed w_max ({hi}).")
+
+        # 目標平均 mean から下地正規分布の平均 mu_ln を逆算(逆算をクラスに閉じ込める)。
+        mu_ln = float(np.log(float(mean)) - float(sigma_ln) ** 2 / 2.0)
+        return mu_ln, float(sigma_ln), lo, hi
 
     def _sample(self, num_conns: int) -> np.ndarray:
-        mu_ln, sigma_ln, w_min, w_max = self._params()
+        mu_ln, sigma_ln, lo, hi = self._params()
         sampled = self.rng.lognormal(mu_ln, sigma_ln, size=num_conns)
-        # MD §10: 切り捨て [w_min, w_max]
-        return np.clip(sampled, w_min, w_max).astype(np.float32)
+        # w_min/w_max が指定された場合のみ切り捨て(未指定は ±inf でノークリップ)。
+        return np.clip(sampled, lo, hi).astype(np.float32)
 
     def generate(self):
         self._params()  # 疎版と同じ検証を先に通す
@@ -136,11 +140,6 @@ class LogNormalClipWeight(BaseWeight):
             self._params()
             return np.zeros(0, dtype=np.float32)
         return self._sample(num_conns)
-
-@WEIGHT_MODELS.register("beggs_plenz")
-class BeggsPlenzLogNormalWeight(LogNormalClipWeight):
-    """Beggs & Plenz (2003) 再現用の対数正規初期重みプロファイル。具体値は YAML から読む。"""
-    pass
 
 @WEIGHT_MODELS.register("offset_scaled_normal")
 class OffsetScaledNormalWeight(BaseWeight):
