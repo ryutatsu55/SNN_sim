@@ -24,6 +24,9 @@ random_2d_n10000:
   x_range: [0.0, 750.0]   # um  (N=10000)
   y_range: [0.0, 750.0]   # um
 
+random_circle_2d:
+  r: 3000.0   # um
+
 block_2d:
   x_range: [0.0, 100.0]  # um
   y_range: [0.0, 100.0]  # um

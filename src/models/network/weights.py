@@ -66,7 +66,7 @@ class NormalRandomWeight(BaseWeight):
 
 @WEIGHT_MODELS.register("lognormal_broad")
 class LogNormalRandomWeight(BaseWeight):
-    """対数正規分布に従う初期重み(任意で [w_min, w_max] クリップ)。
+    """対数正規分布に従う初期重み(任意で [w_min, w_max] に切断 = 範囲内へ再サンプリング)。
 
     シナプス強度が対数正規分布に従うことは Song et al. 2005 (PLoS Biol) /
     Lefort et al. 2009 (Neuron) が報告している。利用者は「目標平均 mean(線形スケール)」と
@@ -80,11 +80,12 @@ class LogNormalRandomWeight(BaseWeight):
     config パラメータ:
         mean     … 目標とする平均(線形スケール, > 0)
         sigma_ln … 下地正規分布の広がり(>= 0。Song 2005 相当は 0.8〜1.2)
-        w_min    … クリップ下限(任意。省略時はクリップ無し = -inf)
-        w_max    … クリップ上限(任意。省略時はクリップ無し = +inf。custom_Akita の Wmax に合わせる)
+        w_min    … 下限(任意。省略時は制限無し = -inf)
+        w_max    … 上限(任意。省略時は制限無し = +inf。custom_Akita の Wmax に合わせる)
 
-    注: w_min/w_max でクリップした場合、実現される平均は目標 mean から少しずれる
-        (裾を切り落とすため)。
+    注: w_min/w_max を指定した場合、範囲外のサンプルは境界に丸めず範囲内へ再抽選するため、
+        境界にピークは立たない。ただし裾を範囲内に押し戻す分、実現される平均は目標 mean から
+        少しずれる(切断分布のため)。
     """
 
     supports_sparse = True
@@ -118,8 +119,24 @@ class LogNormalRandomWeight(BaseWeight):
     def _sample(self, num_conns: int) -> np.ndarray:
         mu_ln, sigma_ln, lo, hi = self._params()
         sampled = self.rng.lognormal(mu_ln, sigma_ln, size=num_conns)
-        # w_min/w_max が指定された場合のみ切り捨て(未指定は ±inf でノークリップ)。
-        return np.clip(sampled, lo, hi).astype(np.float32)
+        # w_min/w_max が指定された場合、範囲外はクリップ(上限/下限に値が堆積する)ではなく
+        # 範囲内に収まるまで再サンプリングする(= 切断対数正規)。これにより境界に
+        # デルタ状のピークが立たず、[lo, hi] 内で滑らかな分布になる。未指定 (±inf) は何もしない。
+        if np.isfinite(lo) or np.isfinite(hi):
+            outside = (sampled < lo) | (sampled > hi)
+            max_redraws = 10000
+            redraws = 0
+            while outside.any() and redraws < max_redraws:
+                n = int(outside.sum())
+                sampled[outside] = self.rng.lognormal(mu_ln, sigma_ln, size=n)
+                outside = (sampled < lo) | (sampled > hi)
+                redraws += 1
+            if outside.any():
+                raise ValueError(
+                    f"[{lo}, {hi}] に収まるサンプルを {max_redraws} 回の再抽選で得られませんでした。"
+                    " 分布パラメータ (mu_ln/sigma_ln) と範囲がほぼ両立していません。"
+                )
+        return sampled.astype(np.float32)
 
     def generate(self):
         self._params()  # 疎版と同じ検証を先に通す

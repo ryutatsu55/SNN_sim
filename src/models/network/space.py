@@ -101,6 +101,25 @@ class Random2DSpaceN10000(Random2DSpace):
     """Beggs&Plenz 検証ラダー T2 (N=10000) 用の縮小空間。範囲は YAML から読む。"""
     pass
 
+@SPATIAL_MODELS.register("random_circle_2d")
+class RandomCircle2DSpace(BaseSpace):
+    def generate(self):
+        """半径 r の円盤内に一様乱数で2次元座標を生成する。
+
+        単純に半径を uniform(0, r) で引くと面積要素 (r dr dθ) を無視するため
+        中心に密集する。面積一様にするには r = R*sqrt(u) と補正する。
+        """
+        R = self.config.r
+
+        radius = R * np.sqrt(self.rng.uniform(0.0, 1.0, self.num_neurons))
+        theta = self.rng.uniform(0.0, 2.0 * np.pi, self.num_neurons)
+
+        coords = np.zeros((self.num_neurons, 3), dtype=np.float32)
+        coords[:, 0] = radius * np.cos(theta)
+        coords[:, 1] = radius * np.sin(theta)
+
+        return coords
+
 @SPATIAL_MODELS.register("block_2d")
 class Block2DSpace(BaseSpace):
     def generate(self):
