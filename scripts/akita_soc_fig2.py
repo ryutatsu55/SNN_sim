@@ -2,12 +2,10 @@ import argparse
 import csv
 import os
 import re
-import shutil
 import sys
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/snn_sim_matplotlib")
 
@@ -20,6 +18,7 @@ from src.core.layout import NetworkLayout
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.output_manager import create_run_output_dir, create_timestamped_output_dir, organize_output
 from src.core.simulator import GeNNSimulator
+from src.utils.runio import save_axes
 from src.utils.akita_soc import (
     bimodality_d,
     burstiness_index,
@@ -170,21 +169,6 @@ def capture_membrane_window(sim: GeNNSimulator, window_s: float, neuron_id: int)
     return V, I, spikes, actual_window_s
 
 
-def _to_python_native(obj):
-    if isinstance(obj, dict):
-        return {k: _to_python_native(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_to_python_native(v) for v in obj]
-    if isinstance(obj, np.generic):
-        return obj.item()
-    return obj
-
-
-def save_config(config, out_dir: Path):
-    with open(out_dir / "config.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump(_to_python_native(config.model_dump()), f, allow_unicode=True, sort_keys=False)
-
-
 def resolve_output_dir(out_dir_arg: str | None, suffix: str | None = None) -> Path:
     if out_dir_arg:
         output_dir = create_timestamped_output_dir(out_dir_arg, suffix=suffix)
@@ -197,7 +181,7 @@ def resolve_output_dir(out_dir_arg: str | None, suffix: str | None = None) -> Pa
 
 def get_group_ids(config, layout):
     # config は後方互換のため残置。興奮性/抑制性の分類は NetworkLayout に集約された。
-    return layout.ids_by_mode()
+    return layout.ids_by("polarity")
 
 
 def max_plasticity_weight(config) -> float:
@@ -237,13 +221,14 @@ def replot_existing_output(run_dir: Path) -> None:
         raise FileNotFoundError(f"No spikes_*h.npz files found in: {run_dir}")
 
     # ラスターをニューロングループ順に並べ替えるためのグループ割り当てを再構築する。
-    # NetworkLayout.from_config は config のニューロン順に連番割り当てを決定論的に行うため、
-    # GeNN コンパイルなしでも本番実行と同一のグローバルインデックス割当を再現できる。
+    # NetworkLayout.from_config は config.layout.assignment (と seed) から割当を決定論的に
+    # 再構築するため、GeNN コンパイルなしでも本番実行と同一のグローバルインデックス割当が
+    # 得られる。
     group_ids = None
     layout = None
     try:
         layout = NetworkLayout.from_config(config)
-        group_ids = layout.ids_by_mode()
+        group_ids = layout.ids_by("polarity")
     except Exception as e:
         print(f"  Warning: could not reconstruct group ids for grouped raster: {e}")
 
@@ -327,16 +312,19 @@ def main():
     #   同一 config を複数 seed で並列実行しても衝突しない。
     seed_tag = f"seed{config.simulation.seed}"
     out_dir = resolve_output_dir(args.out_dir, suffix=seed_tag)
-    save_config(config, out_dir)
-    shutil.copy2(args.config, out_dir / "source_config.yaml")
+    # config.yaml (実 seed 入りの解決後 config) と source_config.yaml (入力の逐語コピー)
+    manager.save_config(config, save_dir=out_dir)
 
     model_name = f"{Path(args.config).stem}_{seed_tag}"
     builder = NetworkBuilder(config, model_name=model_name, code_gen_dir=args.genn_code_dir)
     genn_model, layout = builder.build(rec_spike=True)
+    # 外部軸 (layer / module など) は config だけからは復元できないので保存しておく。
+    # 解析側は runio.resolve_layout() がこれを自動で読み戻す。
+    save_axes(out_dir, layout)
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
 
-    group_ids = layout.ids_by_mode()
+    group_ids = layout.ids_by("polarity")
     wmax = max_plasticity_weight(config)
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)

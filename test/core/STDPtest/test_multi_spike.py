@@ -438,7 +438,7 @@ def run_config(label, config_path):
     # (グループ名 Layer_Exc/from_Exc・Layer_Inh/from_Inh をハードコードしない)。
     syn_name = next(iter(config.synapses))
     syn_cfg = config.synapses[syn_name]
-    neuron_name = syn_cfg.source
+    (neuron_name,) = syn_cfg.source   # source は population 名のリスト
     plast = syn_cfg.plasticity
 
     print("Building Network with GeNN...")

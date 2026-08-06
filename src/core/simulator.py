@@ -279,7 +279,7 @@ class GeNNSimulator:
         all_times = []
         all_global_ids = []
 
-        for pop_name in self.layout.names():
+        for pop_name in self.config.neurons:
             # GeNNからローカルデータを直接参照
             times, local_ids = self.model.neuron_populations[pop_name].spike_recording_data[0]
 

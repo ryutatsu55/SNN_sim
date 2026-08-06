@@ -95,7 +95,7 @@ def main():
         
     print("=== Simulation Complete! ===")
     
-    # manager.save_resolved(config)
+    # manager.save_config(config)
 
     # 6. Readout (学習)
     # print("Training Readout layer...")

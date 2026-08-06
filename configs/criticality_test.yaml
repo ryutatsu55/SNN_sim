@@ -6,6 +6,7 @@ simulation:
   N: 3600  # 面積より算出（例：(3×3mm^2)× 400 neuron/mm^2 = 3,600 neurons）
   dt: 0.1
   seed: 1
+  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
 
 inputs:
   # akita_escape_lif の escape 発火(f_rest)が自発活動を供給するため外部ノイズは不要。
@@ -19,15 +20,17 @@ neurons:
   Layer_Exc:
     type: akita_escape_lif_physical
     mode: excitatory
+    polarity: excitatory
     num: 2880
   Layer_Inh:
     type: akita_escape_lif_physical
     mode: inhibitory
+    polarity: inhibitory
     num: 720
 
 synapses:
   from_Exc:
-    source: Layer_Exc
+    source: [Layer_Exc]
     plasticity:
       type: custom_Akita
       mode: e-stdp_physical
@@ -36,7 +39,7 @@ synapses:
       type: ExpCond
       mode: excitatory
   from_Inh:
-    source: Layer_Inh
+    source: [Layer_Inh]
     plasticity:
       type: custom_Akita
       mode: i-stdp_physical

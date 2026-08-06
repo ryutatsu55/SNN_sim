@@ -5,6 +5,20 @@ import numpy as np
 from src.core.config_manager import AppConfig
 from src.core.layout import NetworkLayout
 
+# 入力データ用のシード派生オフセット。NetworkBuilder の RandomState(seed)(結合・重み・遅延)
+# とは別ストリームにするために seed へ加算する定数。
+#
+# なぜ必要か: RandomState は決定論的なので、同じ seed で作った 2 つのインスタンスは
+# **先頭から同じ数列**を吐く。オフセット無しだと「刺激の乱数」と「ネットワーク構造の乱数」が
+# 同じ乱数を共有し、入力と構造の間に隠れた依存が生まれる (例: 教師ラベル列と最初の
+# ニューロン群の座標が同じ生ビットから作られる)。NetworkLayout が E/I 割当で
+# `_ASSIGN_SEED_OFFSET` を使って避けているのと同じリスク。
+#
+# 値は layout 側と別の素数。オフセット同士が近いと意味がないわけではない (MT19937 の
+# 初期化は seed を撹拌するので隣接 seed でもストリームは独立) が、由来の違う定数にしておく。
+_LOADER_SEED_OFFSET = 15485863
+
+
 class BaseDataLoader(ABC):
     def __init__(self, config: 'AppConfig', layout: NetworkLayout):
         self.config = config
@@ -17,8 +31,15 @@ class BaseDataLoader(ABC):
         self.duration = config.task.duration
         self.total_steps = int(self.duration / self.dt)
         
-        seed = getattr(self.config.simulation, 'seed', 42)
-        self.rng = np.random.RandomState(seed)
+        # seed が None (= 記録の無い保存済み config を読んだ場合) のときは OS エントロピー
+        # 初期化に任せる。ここで実値を捏造すると「再現できない run」が再現できるように
+        # 見えてしまうため (ConfigManager.load_resolved と同じ立場)。resolve() を通っていれば
+        # seed は必ず実値なので、この分岐に落ちるのは記録が欠けている場合だけ。
+        seed = getattr(self.config.simulation, 'seed', None)
+        if seed is None:
+            self.rng = np.random.RandomState(None)
+        else:
+            self.rng = np.random.RandomState((int(seed) + _LOADER_SEED_OFFSET) % (2 ** 32))
 
     @abstractmethod
     def generate(self) -> Iterator[Tuple[List[Tuple[Dict[str, np.ndarray], int]], Dict[str, Any]]]:

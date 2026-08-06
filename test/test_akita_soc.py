@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 root_path = Path(__file__).resolve().parent.parent
 sys.path.append(str(root_path))
@@ -37,12 +38,12 @@ from src.utils.akita_soc import (
     weight_block_metrics,
 )
 from scripts.akita_soc_fig2 import discover_spike_files, parse_hour_from_spike_path, replot_existing_output
-from scripts.visualize_weight_matrix import (
+from src.utils.runio.layout import resolve_layout
+from src.utils.visualize.weight_track import (
     compute_block_metrics,
     discover_weight_files,
-    infer_group_ids,
     parse_hour_from_weight_path,
-    visualize_run,
+    visualize_weight_tracks,
 )
 
 
@@ -250,6 +251,54 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertEqual(diagnosis["diagnosis"], "overactive_and_weight_saturated")
 
 
+# E/I が 2 個ずつの最小構成。sequential 割当なので興奮性=[0,1] / 抑制性=[2,3] になる。
+MINIMAL_RUN_CONFIG = """
+simulation:
+  N: 4
+  dt: 0.1
+  seed: 1
+layout:
+  assignment: sequential
+inputs:
+  GaussianNoise:
+    enable: false
+neurons:
+  Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    polarity: excitatory
+    num: 2
+  Inh:
+    type: akita_escape_lif
+    mode: inhibitory
+    polarity: inhibitory
+    num: 2
+synapses: {}
+network:
+  space:
+    profile_name: no_space
+  connection:
+    profile_name: constant_prob_full
+    p: 1.0
+    allow_self_connections: false
+  weight:
+    profile_name: constant_zero
+  delay:
+    profile_name: constant
+task:
+  profile_name: test
+meta:
+  timestamp: test
+"""
+
+
+def write_minimal_run_config(run_dir: Path) -> Path:
+    """最小構成の resolved config.yaml を run_dir に書き出す。"""
+    config_path = run_dir / "config.yaml"
+    config_path.write_text(MINIMAL_RUN_CONFIG, encoding="utf-8")
+    return config_path
+
+
 class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
     def test_parse_hour_from_weight_path(self):
         self.assertEqual(parse_hour_from_weight_path(Path("weights_0h.npz")), 0.0)
@@ -276,15 +325,16 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
             ],
             dtype=np.float32,
         )
-        group_ids = infer_group_ids(Path("missing"), matrix_size=4)
-        group_ids = type(group_ids)(
-            excitatory=np.array([0, 1], dtype=np.int32),
-            inhibitory=np.array([2, 3], dtype=np.int32),
-            total_neurons=4,
-            source="test",
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            write_minimal_run_config(run_dir)
+            layout = resolve_layout(run_dir)
 
-        rows = compute_block_metrics(hour=6.0, weights=weights, group_ids=group_ids)
+        ids = layout.ids_by("polarity")
+        self.assertEqual(ids["excitatory"].tolist(), [0, 1])
+        self.assertEqual(ids["inhibitory"].tolist(), [2, 3])
+
+        rows = compute_block_metrics(hour=6.0, weights=weights, layout=layout)
         by_block = {row["block"]: row for row in rows}
 
         self.assertEqual(set(by_block), {"all", "ee", "ei", "ie", "ii"})
@@ -296,45 +346,11 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
     def test_visualize_run_generates_weight_matrix_outputs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
-            config = """
-simulation:
-  N: 4
-  dt: 0.1
-  seed: 1
-inputs:
-  GaussianNoise:
-    enable: false
-neurons:
-  Exc:
-    type: akita_escape_lif
-    mode: excitatory
-    num: 2
-  Inh:
-    type: akita_escape_lif
-    mode: inhibitory
-    num: 2
-synapses: {}
-network:
-  space:
-    profile_name: no_space
-  connection:
-    profile_name: constant_prob_full
-    p: 1.0
-    allow_self_connections: false
-  weight:
-    profile_name: constant_zero
-  delay:
-    profile_name: constant
-task:
-  profile_name: test
-meta:
-  timestamp: test
-"""
-            (run_dir / "config.yaml").write_text(config, encoding="utf-8")
+            write_minimal_run_config(run_dir)
             np.savez_compressed(run_dir / "weights_0h.npz", weights=np.zeros((4, 4), dtype=np.float32))
             np.savez_compressed(run_dir / "weights_6h.npz", weights=np.ones((4, 4), dtype=np.float32))
 
-            out_dir = visualize_run(run_dir)
+            out_dir = visualize_weight_tracks(run_dir)
 
             self.assertTrue((out_dir / "weight_matrix_0h.png").exists())
             self.assertTrue((out_dir / "weight_matrix_6h.png").exists())
@@ -385,7 +401,19 @@ class AkitaSocReplotTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
-            (run_dir / "config.yaml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
+            # polarity 軸 / source のリスト必須化 / layout.assignment の実値保存より前に
+            # 保存された config なので、コピーする際に現行スキーマへ寄せる。このテストの
+            # 主題は replot であって旧 config の読み込みではない。
+            saved = yaml.safe_load(source_config.read_text(encoding="utf-8"))
+            for n_cfg in saved["neurons"].values():
+                n_cfg.setdefault("polarity", n_cfg["mode"])
+            for s_cfg in (saved.get("synapses") or {}).values():
+                if isinstance(s_cfg.get("source"), str):
+                    s_cfg["source"] = [s_cfg["source"]]
+            saved.setdefault("layout", {"assignment": "sequential"})
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(saved, allow_unicode=True, sort_keys=False), encoding="utf-8"
+            )
             np.savez_compressed(
                 run_dir / "spikes_0h.npz",
                 times=np.array([0.0, 1000.0, 29000.0, 31000.0]),

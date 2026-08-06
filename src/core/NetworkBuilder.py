@@ -1,5 +1,6 @@
 import os
 import inspect
+import itertools
 import numpy as np
 import pygenn
 from dataclasses import dataclass
@@ -14,15 +15,9 @@ if not os.environ.get("CUDA_PATH"):
             os.environ["CUDA_PATH"] = _candidate
             break
 
-# CPU/GPU バックエンド選択:
-#   None  = ニューロン数で自動選択 (total_neurons <= GPU_NEURON_THRESHOLD なら CPU、超えたら GPU)
-#   True  = 常に GPU (cuda) を強制
-#   False = 常に CPU (single_threaded_cpu) を強制
-# 自動選択の根拠: per-synapse 到着イベント駆動化 (pre_arrival_syn_code) 後の実測で、小規模では
-# CPU が最速 (100n=11.4µs/step, GPU 40.8µs は per-step 起動 floor 律速で勝てない)、~400n 付近が
-# crossover で大規模は GPU が平坦有利。詳細: docs/gpu_vs_cpu.md「実装後の実測」。
-USE_GPU = True
-GPU_NEURON_THRESHOLD = 400
+# config の backend 値 -> GeNN のバックエンド名。config 側を "cpu" という短い名前にしてあるのは
+# メイン config に人が書く値だから。GeNN の実装名 (single_threaded_cpu) はここで吸収する。
+_GENN_BACKEND = {"cuda": "cuda", "cpu": "single_threaded_cpu"}
 
 project_root = str(Path(__file__).resolve().parent.parent.parent)
 if project_root not in sys.path:
@@ -65,19 +60,28 @@ class NetworkBuilder:
 
         # config のニューロン宣言順に連番でグローバルインデックスを割り当てる決定論的レイアウト。
         # RandomState を消費しないため、GeNN ビルドなしでも from_config だけで再現できる。
-        # backend 自動選択 (USE_GPU is None) がニューロン数を参照するため、モデル生成より先に確定させる。
         self.layout = NetworkLayout.from_config(config)
         self.total_neurons = self.layout.total_neurons
 
-        # backend 選択: USE_GPU が None ならニューロン数で自動、True/False なら強制。
-        if USE_GPU is None:
-            use_gpu = self.total_neurons > GPU_NEURON_THRESHOLD
-            _reason = f"auto (total_neurons={self.total_neurons} {'>' if use_gpu else '<='} {GPU_NEURON_THRESHOLD})"
-        else:
-            use_gpu = bool(USE_GPU)
-            _reason = "forced (USE_GPU)"
-        _backend = "cuda" if use_gpu else "single_threaded_cpu"
-        print(f"[NetworkBuilder] backend = {_backend}  [{_reason}]")
+        # backend は config が決める。ここで既定値を持たないのは seed / layout.assignment と
+        # 同じ理由で、無言で埋めるとその値が記録に残らないまま結果が決まってしまうから
+        # (GeNN のデバイス RNG はバックエンドごとに別の乱数列を出すので、backend が違えば
+        #  同じ seed でも別のスパイク列になる)。既定の適用と "auto" の解決は
+        # `ConfigManager._materialize_backend()` の仕事で、そこを通れば実値になっている。
+        backend = getattr(self.config.simulation, "backend", None)
+        if backend is None:
+            raise ValueError(
+                "config.simulation.backend がありません。ConfigManager.resolve() を通せば"
+                " 実値が入ります (backend を記録していない古い config.yaml を再実行する"
+                " 場合は simulation.backend に 'cuda' か 'cpu' を明示してください)。"
+            )
+        if backend not in _GENN_BACKEND:
+            raise ValueError(
+                f"未知の simulation.backend: {backend!r} (cuda | cpu)。"
+                " 'auto' は ConfigManager が実値へ解決するので、ここには現れないはずです。"
+            )
+        _backend = _GENN_BACKEND[backend]
+        print(f"[NetworkBuilder] backend = {_backend}  [config.simulation.backend={backend!r}]")
         self.genn_model = pygenn.GeNNModel("double", model_name, time_precision="double", backend=_backend)
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
@@ -174,6 +178,21 @@ class NetworkBuilder:
         else:
             self._generate_global_dense()
 
+    def _inject_axes(self, component):
+        """コンポーネントが宣言するカテゴリ/ソート軸を NetworkLayout に注入する。
+
+        `generate()` / `generate_sparse()` の**直後**に呼ぶこと。コンポーネントは自身が
+        計算した座標・マスク等から軸を導出できる。後段のコンポーネント(結合→重み→遅延)は
+        先行コンポーネントが宣言した軸を `layout.ids_by(...)` などで参照できる。
+        """
+        axes = component.describe_axes()
+        if not axes:
+            return
+        for name, values in axes.items():
+            self.layout.add_axis(name, values)
+            print(f"    Axis '{name}' declared by {type(component).__name__} "
+                  f"({len(self.layout.ids_by(name))} categories)")
+
     def _generate_global_dense(self):
         """密な (N, N) 行列として結合・重み・遅延を生成する(従来経路)"""
         network = self.config.network
@@ -187,16 +206,24 @@ class NetworkBuilder:
         spaceClass, connectClass, weightClass, delayClass = self._component_classes()
 
         # 1. 空間座標の生成
-        self.global_coords = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout).generate()
+        space = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout)
+        self.global_coords = space.generate()
+        self._inject_axes(space)
 
         # 2. 結合マスクの生成
-        self.global_mask = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout).generate()
+        connection = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout)
+        self.global_mask = connection.generate()
+        self._inject_axes(connection)
 
         # 3. 重み行列の生成
-        self.global_weights = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout).generate()
+        weight = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout)
+        self.global_weights = weight.generate()
+        self._inject_axes(weight)
 
         # 4. 遅延行列の生成
-        self.global_delays = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout).generate()
+        delay = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout)
+        self.global_delays = delay.generate()
+        self._inject_axes(delay)
 
     def _generate_global_sparse(self):
         """COO (rows, cols, weights, delays) として結合情報を生成する。
@@ -208,34 +235,45 @@ class NetworkBuilder:
         network = self.config.network
         spaceClass, connectClass, weightClass, delayClass = self._component_classes()
 
-        self.global_coords = spaceClass(
+        space = spaceClass(
             network.space, self.total_neurons, self.rng, layout=self.layout
-        ).generate()
+        )
+        self.global_coords = space.generate()
+        self._inject_axes(space)
 
-        rows, cols = connectClass(
+        connection = connectClass(
             network.connection, self.total_neurons, self.global_coords, self.rng, layout=self.layout
-        ).generate_sparse()
+        )
+        rows, cols = connection.generate_sparse()
+        self._inject_axes(connection)
         self.sparse_rows = np.asarray(rows, dtype=np.int32)
         self.sparse_cols = np.asarray(cols, dtype=np.int32)
 
-        self.sparse_weights = weightClass(
+        weight = weightClass(
             network.weight, self.total_neurons, self.global_coords,
             mask=None, rng=self.rng, layout=self.layout,
-        ).generate_sparse(self.sparse_rows, self.sparse_cols)
+        )
+        self.sparse_weights = weight.generate_sparse(self.sparse_rows, self.sparse_cols)
+        self._inject_axes(weight)
 
-        self.sparse_delays = delayClass(
+        delay = delayClass(
             network.delay, self.total_neurons, self.global_coords,
             mask=None, rng=self.rng, layout=self.layout,
-        ).generate_sparse(self.sparse_rows, self.sparse_cols)
+        )
+        self.sparse_delays = delay.generate_sparse(self.sparse_rows, self.sparse_cols)
+        self._inject_axes(delay)
 
         print(f"    Sparse connectivity: {self.sparse_rows.size} synapses "
               f"({self.sparse_rows.size / max(self.total_neurons, 1):.1f} per neuron)")
 
     def _build_neuron_populations(self):
-        """GeNN上にニューロンポピュレーションを定義"""
-        for group_name, grp in self.layout.items():
-            params = grp.params
-            num_neurons = grp.num
+        """GeNN上にニューロンポピュレーションを定義
+
+        population 名・個数・モデルパラメータはすべて config が源なので、ここでは
+        layout を参照しない(グローバルIDを使わないため変換表が不要)。
+        """
+        for group_name, params in self.config.neurons.items():
+            num_neurons = params.num
 
             NeuronClass = NEURON_MODELS.get(params.type)
             neuron_instance = NeuronClass(params, self.config.simulation.dt)
@@ -277,7 +315,7 @@ class NetworkBuilder:
         pop_code = np.full(n, -1, dtype=np.int16)
         local_of = np.zeros(n, dtype=np.int32)
         code_of_name = {}
-        for code, (name, spec) in enumerate(self.layout.items()):
+        for code, name in enumerate(self.config.neurons):
             ids = np.asarray(self.layout.global_indices(name), dtype=np.int64)
             pop_code[ids] = code
             local_of[ids] = np.arange(ids.size, dtype=np.int32)
@@ -331,10 +369,11 @@ class NetworkBuilder:
         """グローバルな結合情報からシナプス集団ごとに切り出し、GeNN へ登録する"""
         print("  Building Synapse Populations...")
         self._index_table = None
-        for syn_group_name, syn_cfg in self.config.synapses.items():
-            for tgt_name in self.layout.names():
-                src_name = syn_cfg.source
-                # tgt_name = syn_cfg.target
+        # source は population 名のリスト (単一名も ConfigManager が 1 要素に正規化済み)。
+        # 同じ極性のニューロンを動特性 mode 別に複数 population へ分けても、シナプス種別
+        # (可塑性・コンダクタンス) の定義は 1 箇所で済む。
+        for syn_cfg in self.config.synapses.values():
+            for src_name, tgt_name in itertools.product(syn_cfg.source, self.config.neurons):
                 print(f"src:{src_name}, tgt:{tgt_name}")
 
                 src_indices = self.layout.global_indices(src_name)
@@ -473,7 +512,7 @@ class NetworkBuilder:
         """GeNN上に入力専用のglobal_popを定義し、本体へ1対1で接続する"""
 
         if self.config.inputs.GaussianNoise.enable:
-            for pop_name in self.layout.names():
+            for pop_name in self.config.neurons:
                 cs_name = f"GaussianNoise_CS_to_{pop_name}"
 
                 cs = self.genn_model.add_current_source(
@@ -551,7 +590,9 @@ if __name__ == "__main__":
         # --- 本体層の存在確認 ---
         for body_name in config.neurons.keys():
             assert body_name in Npop_names, f"Body Pop '{body_name}' not found in GeNN model."
-            assert body_name in layout.names(), f"'{body_name}' missing in layout."
+            # config の写しではなく population 軸そのものを見る (config と突き合わせても
+            # 恒真になるだけで、実際にグローバルIDが割り当たったかを検査できない)。
+            assert body_name in layout.values("population"), f"'{body_name}' missing in layout."
         print("  ✓ Body populations successfully validated.")
 
         # --- Current Source の確認 ---

@@ -100,7 +100,7 @@ def main():
         
     print("=== Simulation Complete! ===")
     
-    manager.save_resolved(config, save_dir=output_dir)
+    manager.save_config(config, save_dir=output_dir)
 
     # 7. 評価と可視化
     # I_in[:] = config.neurons["Layer_Exc"].Ioffset
