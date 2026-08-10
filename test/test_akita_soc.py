@@ -29,22 +29,28 @@ from src.models.plasticity.custom_Akita import (
     i_trace_delta,
     recover_synaptic_resource,
 )
-from src.utils.akita_soc import (
-    avalanche_distribution,
-    diagnose_activity,
-    plot_avalanche_distribution,
-    plot_raster,
-    spike_group_metrics,
+from src.utils.analysis.powerlaw import discrete_distribution, fit_distribution_curves
+from src.utils.analysis.spikes import diagnose_activity, spike_group_metrics
+from src.utils.analysis.weights import (
+    block_values,
+    block_values_coo,
+    compute_block_metrics,
     weight_block_metrics,
 )
-from scripts.akita_soc_fig2 import discover_spike_files, parse_hour_from_spike_path, replot_existing_output
-from src.utils.runio.layout import resolve_layout
-from src.utils.visualize.weight_track import (
-    compute_block_metrics,
-    discover_weight_files,
-    parse_hour_from_weight_path,
-    visualize_weight_tracks,
+from src.utils.plotting.distributions import plot_avalanche_distribution
+from src.utils.plotting.raster import plot_raster
+from scripts.akita_soc_fig2 import replot_existing_output
+from src.core.config_manager import ConfigManager
+from src.core.layout import NetworkLayout
+from src.core.output_manager import AXES_NAME, CONFIG_NAME, locate, require
+from src.utils.experiments.akita_soc.runio import (
+    SPIKES,
+    WEIGHTS,
+    discover_records,
+    parse_hour,
+    record_filename,
 )
+from src.utils.experiments.akita_soc.weight_track import visualize_weight_tracks
 
 
 class AkitaEscapeLIFTest(unittest.TestCase):
@@ -167,21 +173,43 @@ class AkitaPlasticityTest(unittest.TestCase):
 
 
 class AkitaSocMetricsTest(unittest.TestCase):
-    def test_avalanche_distribution_can_include_sizes_above_fitting_limit(self):
+    def test_discrete_distribution_can_include_sizes_above_fitting_limit(self):
         sizes = np.array([1, 2, 100, 101, 150], dtype=np.int32)
 
-        support, prob = avalanche_distribution(sizes, smax=None)
+        support, prob = discrete_distribution(sizes, xmax=None)
 
         self.assertTrue(np.array_equal(support, np.array([1, 2, 100, 101, 150])))
         self.assertTrue(np.allclose(prob, np.full(5, 0.2)))
 
-    def test_avalanche_distribution_keeps_explicit_fitting_limit(self):
+    def test_discrete_distribution_keeps_explicit_fitting_limit(self):
         sizes = np.array([1, 2, 100, 101, 150], dtype=np.int32)
 
-        support, prob = avalanche_distribution(sizes, smax=100)
+        support, prob = discrete_distribution(sizes, xmax=100)
 
         self.assertTrue(np.array_equal(support, np.array([1, 2, 100])))
         self.assertTrue(np.allclose(prob, np.full(3, 1 / 3)))
+
+    def test_fit_distribution_curves_scales_to_empirical_mass(self):
+        # fit_max を超えるサイズを混ぜると、理論曲線は [1, fit_max] の経験質量に合わせて
+        # 縮む (経験 PMF と重ね描きできるようにするため)。
+        rng = np.random.default_rng(0)
+        sizes = np.concatenate([rng.integers(1, 40, size=500), np.array([120, 300])])
+
+        fit = fit_distribution_curves(sizes, fit_max=100)
+
+        mass = float(fit.prob[fit.support <= 100].sum())
+        self.assertLess(mass, 1.0)
+        self.assertAlmostEqual(float(fit.powerlaw.sum()), mass)
+        self.assertAlmostEqual(float(fit.exponential.sum()), mass)
+        self.assertEqual(fit.fit_support.size, 100)
+        self.assertEqual(fit.num_fitted, 500)
+
+    def test_fit_distribution_curves_reports_no_curve_when_underdetermined(self):
+        for sizes in (np.array([], dtype=np.int64), np.array([5])):
+            fit = fit_distribution_curves(sizes, fit_max=100)
+            self.assertEqual(fit.powerlaw.size, 0)
+            self.assertEqual(fit.exponential.size, 0)
+            self.assertTrue(np.isnan(fit.llr))
 
     def test_spike_group_metrics_uses_global_group_ids(self):
         spike_ids = np.array([2, 5, 5, 7, 9, 9, 9])
@@ -209,12 +237,8 @@ class AkitaSocMetricsTest(unittest.TestCase):
         weights[2, 3] = 1.0
         weights[3, 2] = 0.75
 
-        metrics = weight_block_metrics(
-            weights=weights,
-            excitatory_ids=np.array([0, 1]),
-            inhibitory_ids=np.array([2, 3]),
-            wmax=1.0,
-        )
+        blocks = block_values(weights, minimal_layout(num_exc=2, num_inh=2))
+        metrics = weight_block_metrics(blocks, wmax=1.0)
 
         self.assertAlmostEqual(metrics["weight_mean"], float(np.mean(weights)))
         self.assertAlmostEqual(metrics["weight_at_max_fraction"], 3 / 16)
@@ -231,17 +255,33 @@ class AkitaSocMetricsTest(unittest.TestCase):
         mask[0, 1] = 1
         mask[1, 2] = 1
 
-        metrics = weight_block_metrics(
-            weights=weights,
-            excitatory_ids=np.array([0, 1]),
-            inhibitory_ids=np.array([2]),
-            wmax=1.0,
-            connection_mask=mask,
-        )
+        blocks = block_values(weights, minimal_layout(num_exc=2, num_inh=1), connection_mask=mask)
+        metrics = weight_block_metrics(blocks, wmax=1.0)
 
         self.assertAlmostEqual(metrics["weight_mean"], 0.75)
         self.assertAlmostEqual(metrics["weight_at_max_fraction"], 0.5)
         self.assertAlmostEqual(metrics["weight_ei_mean"], 0.5)
+
+    def test_dense_and_coo_block_decomposition_agree(self):
+        rng = np.random.default_rng(0)
+        layout = minimal_layout(num_exc=3, num_inh=2)
+        total = layout.total_neurons
+        weights = rng.random((total, total))
+        mask = rng.random((total, total)) < 0.6
+        np.fill_diagonal(mask, False)
+        weights[~mask] = 0.0
+
+        row, col = np.nonzero(mask)
+        dense = block_values(weights, layout, connection_mask=mask)
+        coo = block_values_coo(weights[row, col], row, col, layout)
+
+        self.assertEqual(set(dense), set(coo))
+        for name in dense:
+            # COO は行優先、密は np.ix_ の順なので、集合として一致すればよい。
+            np.testing.assert_allclose(np.sort(dense[name]), np.sort(coo[name]))
+        self.assertEqual(
+            weight_block_metrics(dense, wmax=1.0), weight_block_metrics(coo, wmax=1.0)
+        )
 
     def test_diagnose_activity_combines_overactivity_and_saturation(self):
         diagnosis = diagnose_activity(mean_rate_hz=101.0, weight_at_max_fraction=0.88)
@@ -251,10 +291,11 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertEqual(diagnosis["diagnosis"], "overactive_and_weight_saturated")
 
 
-# E/I が 2 個ずつの最小構成。sequential 割当なので興奮性=[0,1] / 抑制性=[2,3] になる。
+# 最小構成。sequential 割当なので興奮性が先頭に連番で並ぶ
+# (既定の 2/2 なら興奮性=[0,1] / 抑制性=[2,3])。
 MINIMAL_RUN_CONFIG = """
 simulation:
-  N: 4
+  N: {total}
   dt: 0.1
   seed: 1
 layout:
@@ -267,13 +308,13 @@ neurons:
     type: akita_escape_lif
     mode: excitatory
     polarity: excitatory
-    num: 2
+    num: {num_exc}
   Inh:
     type: akita_escape_lif
     mode: inhibitory
     polarity: inhibitory
-    num: 2
-synapses: {}
+    num: {num_inh}
+synapses: {{}}
 network:
   space:
     profile_name: no_space
@@ -292,18 +333,52 @@ meta:
 """
 
 
-def write_minimal_run_config(run_dir: Path) -> Path:
+def write_minimal_run_config(run_dir: Path, num_exc: int = 2, num_inh: int = 2) -> Path:
     """最小構成の resolved config.yaml を run_dir に書き出す。"""
-    config_path = run_dir / "config.yaml"
-    config_path.write_text(MINIMAL_RUN_CONFIG, encoding="utf-8")
+    config_path = run_dir / CONFIG_NAME
+    config_path.write_text(
+        MINIMAL_RUN_CONFIG.format(total=num_exc + num_inh, num_exc=num_exc, num_inh=num_inh),
+        encoding="utf-8",
+    )
     return config_path
 
 
+def minimal_layout(num_exc: int = 2, num_inh: int = 2):
+    """E/I だけを持つ最小の NetworkLayout を作る (ブロック分解のテスト用)。"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        run_dir = Path(tmp_dir)
+        write_minimal_run_config(run_dir, num_exc=num_exc, num_inh=num_inh)
+        return load_run_layout(run_dir)
+
+
+def load_run_layout(run_dir: Path):
+    """保存物から NetworkLayout を復元する (各 main() が行う手続きと同じ)。"""
+    config = ConfigManager().load_resolved(require(run_dir, CONFIG_NAME))
+    layout = NetworkLayout.from_config(config)
+    axes_path = locate(run_dir, AXES_NAME)
+    if axes_path is not None:
+        layout.load_axes_file(axes_path)
+    return layout
+
+
 class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
-    def test_parse_hour_from_weight_path(self):
-        self.assertEqual(parse_hour_from_weight_path(Path("weights_0h.npz")), 0.0)
-        self.assertEqual(parse_hour_from_weight_path(Path("weights_6h.npz")), 6.0)
-        self.assertEqual(parse_hour_from_weight_path(Path("weights_72h.npz")), 72.0)
+    def test_parse_hour_reads_both_record_kinds(self):
+        self.assertEqual(parse_hour(Path("weights_0h.npz"), WEIGHTS), 0.0)
+        self.assertEqual(parse_hour(Path("weights_6h.npz"), WEIGHTS), 6.0)
+        self.assertEqual(parse_hour(Path("weights_72h.npz"), WEIGHTS), 72.0)
+        self.assertEqual(parse_hour(Path("spikes_1.5h.npz"), SPIKES), 1.5)
+
+    def test_parse_hour_rejects_wrong_kind_and_bad_names(self):
+        with self.assertRaises(ValueError):
+            parse_hour(Path("spikes_6h.npz"), WEIGHTS)
+        for name in ("weights_6.npz", "weights.npz", "connectivity.npz", "weights_xh.npz"):
+            with self.assertRaises(ValueError):
+                parse_hour(Path(name))
+
+    def test_record_filename_round_trips_through_parse_hour(self):
+        for hour in (0.0, 0.5, 6.0, 72.0, 1.25):
+            name = record_filename(WEIGHTS, hour)
+            self.assertEqual(parse_hour(Path(name), WEIGHTS), hour)
 
     def test_discover_weight_files_sorts_by_hour(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -311,7 +386,7 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
             for name in ("weights_72h.npz", "weights_0h.npz", "weights_6h.npz"):
                 np.savez_compressed(run_dir / name, weights=np.zeros((4, 4), dtype=np.float32))
 
-            discovered = discover_weight_files(run_dir)
+            discovered = discover_records(run_dir, WEIGHTS)
 
             self.assertEqual([item.hour for item in discovered], [0.0, 6.0, 72.0])
 
@@ -328,7 +403,7 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
             write_minimal_run_config(run_dir)
-            layout = resolve_layout(run_dir)
+            layout = load_run_layout(run_dir)
 
         ids = layout.ids_by("polarity")
         self.assertEqual(ids["excitatory"].tolist(), [0, 1])
@@ -350,7 +425,7 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
             np.savez_compressed(run_dir / "weights_0h.npz", weights=np.zeros((4, 4), dtype=np.float32))
             np.savez_compressed(run_dir / "weights_6h.npz", weights=np.ones((4, 4), dtype=np.float32))
 
-            out_dir = visualize_weight_tracks(run_dir)
+            out_dir = visualize_weight_tracks(run_dir, load_run_layout(run_dir))
 
             self.assertTrue((out_dir / "weight_matrix_0h.png").exists())
             self.assertTrue((out_dir / "weight_matrix_6h.png").exists())
@@ -379,20 +454,15 @@ class AkitaSocPlotTest(unittest.TestCase):
 
 
 class AkitaSocReplotTest(unittest.TestCase):
-    def test_parse_hour_from_spike_path(self):
-        self.assertEqual(parse_hour_from_spike_path(Path("spikes_0h.npz")), 0.0)
-        self.assertEqual(parse_hour_from_spike_path(Path("spikes_1.5h.npz")), 1.5)
-        self.assertEqual(parse_hour_from_spike_path(Path("spikes_72h.npz")), 72.0)
-
     def test_discover_spike_files_sorts_by_hour(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
             for name in ("spikes_72h.npz", "spikes_0h.npz", "spikes_6h.npz"):
                 np.savez_compressed(run_dir / name, times=np.array([]), ids=np.array([]))
 
-            discovered = discover_spike_files(run_dir)
+            discovered = discover_records(run_dir, SPIKES)
 
-            self.assertEqual([hour for hour, _ in discovered], [0.0, 6.0, 72.0])
+            self.assertEqual([item.hour for item in discovered], [0.0, 6.0, 72.0])
 
     def test_replot_existing_output_generates_plots_without_simulation(self):
         source_config = root_path / "outputs" / "akita_soc_72h" / "20260525-180915" / "config.yaml"

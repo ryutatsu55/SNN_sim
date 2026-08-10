@@ -7,6 +7,9 @@ import warnings
 from typing import Dict, Any, Literal, Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
+# run ディレクトリのファイル名規約は output_manager が唯一の定義元。
+from src.core.output_manager import CONFIG_NAME, SOURCE_CONFIG_NAME
+
 
 # メイン config が layout.assignment を書かなかったときに適用する値。
 # `_materialize_layout()` が resolve 時に実値として焼き込むので、ここを変えても
@@ -123,13 +126,22 @@ class NetworkConfig(BaseModel):
     connection: ComponentConfig
     weight: ComponentConfig
     delay: ComponentConfig
-    sparse: str = Field(
+    # **ホスト側の生成経路**であって、GeNN のデバイス側格納形式ではない。
+    # GeNN へは常に (pre, post) のペア列を渡す (`matrix_type="SPARSE"` 固定) ので、
+    # この設定を変えても GeNN に渡るものも計算されるネットワークも同一になる。
+    # 変わるのは「numpy で N×N 行列を作るか、COO のリストを作るか」だけ。
+    #
+    # 入力値と記録値で意味が違う。seed / backend / layout.assignment と同じく、
+    # **実際にどちらで走ったか**を記録へ焼き込むため、NetworkBuilder が生成時に
+    # 実値 ("on" | "off") で上書きする。入力の "auto" / "force" が保存済み config.yaml に
+    # 残ることはない (元の指示は source_config.yaml に逐語で残る)。
+    sparse: Literal["auto", "force", "off", "on"] = Field(
         default="auto",
         description=(
-            "結合行列の生成経路。"
-            '"auto"=結合/重み/遅延の3段すべてが疎対応なら疎生成、'
-            '"force"=疎生成を必須(非対応ならエラー)、'
-            '"off"=常に密生成(過去の実現を再現したいとき)'
+            "結合行列の**生成経路** (GeNN の格納形式ではない)。"
+            '入力値: "auto"=結合/重み/遅延の3段すべてが疎対応なら疎生成、'
+            '"force"=疎生成を必須(非対応ならエラー)、"off"=常に密生成。'
+            '記録値: "on"=疎生成で走った / "off"=密生成で走った'
         ),
     )
 
@@ -195,7 +207,7 @@ class ConfigManager:
         seed は NetworkBuilder の RandomState (結合・重み・遅延) と GeNN のデバイス RNG
         (escape noise 等) と NetworkLayout の random 割当の 3 つを決める。None のままだと
         いずれもランダムかつ **記録されない** ため、同じ config から別のネットワークが
-        生まれ、`runio.resolve_layout()` が実行時と異なる割当を返す。ここで確定させる
+        生まれ、解析側が実行時と異なる割当を復元してしまう。ここで確定させる
         ことで、resolve() の戻り値と保存される config.yaml が必ず実 seed を持つ。
 
         グローバル np.random の状態を読みも汚しもしないよう、OS エントロピーを直接引く。
@@ -459,7 +471,7 @@ class ConfigManager:
         2 ファイルを書き出す:
 
         - ``config.yaml``        … 結合済み・検証済みの解決後 config。seed は実値。
-                                   `runio.resolve_layout()` や解析スクリプトが読む記録で、
+                                   解析スクリプトが `NetworkLayout` を復元する際に読む記録で、
                                    `load_resolved()` に渡せばそのまま再実行できる。
         - ``source_config.yaml`` … `resolve()` に渡した入力 YAML の逐語コピー
                                    (コメントも seed: null もそのまま)。「何を書いて
@@ -470,10 +482,24 @@ class ConfigManager:
         Returns:
             書き出した config.yaml のパス。
         """
+        # network.sparse は NetworkBuilder が生成時に実値 ("on"/"off") へ焼き込む。
+        # 未解決のまま保存されるのは save_config() を build() より **前** に呼んだとき
+        # (判定と保存の順序が反転している)。この記録からは「どちらの経路で走ったか」が
+        # 復元できず、そのまま再実行しても同じ経路になる保証がない。
+        if resolved_config.network.sparse not in ("on", "off"):
+            warnings.warn(
+                f"network.sparse が未解決のまま保存されます"
+                f" ({resolved_config.network.sparse!r})。"
+                " 疎/密の決定は NetworkBuilder の生成時に行われるので、save_config() は"
+                " build() の **後** に呼んでください。このままでは、どちらの経路で走ったかが"
+                " config.yaml に残りません。",
+                stacklevel=2,
+            )
+
         out_dir = Path(save_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        out_path = out_dir / "config.yaml"
+        out_path = out_dir / CONFIG_NAME
 
         # Pydanticモデルを辞書に変換して保存。safe_load で読み戻せるよう、
         # numpy スカラ等を Python ネイティブに落としてから safe_dump する。
@@ -484,7 +510,7 @@ class ConfigManager:
             )
 
         if self._source_path is not None and self._source_path.exists():
-            shutil.copy2(self._source_path, out_dir / "source_config.yaml")
+            shutil.copy2(self._source_path, out_dir / SOURCE_CONFIG_NAME)
 
         return out_path
     

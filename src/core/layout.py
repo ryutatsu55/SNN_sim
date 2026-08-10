@@ -27,11 +27,13 @@ population のグローバルID集合は**常に昇順**である (`ids_by` が 
 と NetworkBuilder の疎/密経路一致がこの不変条件に依存している。一方、**どの軸にも連続性の
 要求も特権も無い**。切り出しは常に fancy-index (`np.ix_`) で行う。
 
-外部軸はビルド時にしか存在しないため、解析側で復元できるよう `axes_to_dict()` /
-`load_axes()` で永続化する (`src/utils/runio/layout.py` 参照)。
+外部軸はビルド時にしか存在しないため、解析側で復元できるよう `save_axes()` /
+`load_axes_file()` で npz に永続化する。**どの run ディレクトリのどのファイル名か**は
+呼び出し側が決める (規約は `src/core/output_manager.py`)。
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -135,7 +137,7 @@ class NetworkLayout:
             base_seed = getattr(config.simulation, "seed", None)
             if base_seed is None:
                 # seed 無しで RandomState(None) を使うと OS エントロピーで初期化され、
-                # 同じ config から毎回違う割当が出る。そうなると resolve_layout() が
+                # 同じ config から毎回違う割当が出る。そうなると保存済み config からの復元が
                 # 実行時と異なる E/I 割当を解析側へ返し、結果が静かに壊れる。
                 raise ValueError(
                     "layout.assignment='random' には simulation.seed が必須です "
@@ -222,7 +224,7 @@ class NetworkLayout:
 
         pandas の文字列列 (`df["Layer"].to_numpy()`) などは dtype=object で渡ってくるが、
         object 配列は npz に `allow_pickle=False` で保存できず (= 永続化した軸を
-        `resolve_layout()` が読めない)、`np.unique` / `lexsort` も遅い。要素から dtype を
+        保存した軸を読み戻せない)、`np.unique` / `lexsort` も遅い。要素から dtype を
         再推論して解決する。
         """
         arr = np.asarray(values)
@@ -339,6 +341,19 @@ class NetworkLayout:
         if not axes:
             raise ValueError("order_by には少なくとも1つの軸名が必要です。")
         return self._lexsort(np.arange(self._total), axes, ascending)
+
+    def rank_by(self, *axes: str, ascending: bool = True) -> np.ndarray:
+        """各グローバルIDが `order_by(*axes)` の何番目に来るかを返す (0 始まり)。
+
+        `order_by` の逆写像。`order_by` が「表示順に並べたID列」を返すのに対し、こちらは
+        「そのIDの表示位置」を引ける長さ N の配列を返す。ラスターの y 座標のように
+        **グローバルIDを表示位置へ写したい**場合に使う (dict と Python ループを使わずに
+        `rank[ids]` の fancy-index で一括変換できる)。
+        """
+        order = self.order_by(*axes, ascending=ascending)
+        rank = np.empty(self._total, dtype=np.int64)
+        rank[order] = np.arange(self._total, dtype=np.int64)
+        return rank
 
     def sort_ids(self, ids: Sequence[int], *axes: str, ascending: bool = True) -> np.ndarray:
         """グローバルIDの部分集合を指定軸で並べ替えて返す。
@@ -461,3 +476,26 @@ class NetworkLayout:
         """`axes_to_dict()` で保存した軸を復元する(既存の同名軸は上書き)。"""
         for name, values in axes.items():
             self.add_axis(name, values, overwrite=True)
+
+    def save_axes(self, path: Path | str) -> Optional[Path]:
+        """外部軸を npz として `path` に書き出す。保存すべき軸が無ければ何もせず None。
+
+        **置き場所 (どの run ディレクトリの、どのファイル名か) は呼び出し側が決める。**
+        このクラスが知っているのは「軸をどう npz に直列化するか」だけで、`outputs/` の
+        ディレクトリ規約は持たない (それは `src/core/output_manager.py` の担当)。
+
+        `add_axis` が dtype=object を具体 dtype へ正規化しているのは、この npz を
+        `allow_pickle=False` で読み書きできるようにするためである。
+        """
+        axes = self.axes_to_dict()
+        if not axes:
+            return None
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(path, **axes)
+        return path
+
+    def load_axes_file(self, path: Path | str) -> None:
+        """`save_axes()` が書いた npz から外部軸を復元する(既存の同名軸は上書き)。"""
+        with np.load(Path(path), allow_pickle=False) as data:
+            self.load_axes({name: data[name] for name in data.files})

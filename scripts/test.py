@@ -13,7 +13,7 @@ from src.core.NetworkBuilder import NetworkBuilder
 from src.core.output_manager import create_run_output_dir
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
-import src.utils.visualize as visualize
+import src.utils.plotting as plotting
 
 # --- プラグイン(モデル)の登録トリガー ---
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
@@ -105,7 +105,7 @@ def main():
     # 7. 評価と可視化
     # I_in[:] = config.neurons["Layer_Exc"].Ioffset
 
-    visualize.neuron_test(
+    plotting.neuron_test(
         results,
         I_in,
         trial_results["times"],
@@ -114,7 +114,7 @@ def main():
         save_path=output_dir
     )
 
-    visualize.network(
+    plotting.network(
         weights=builder.global_weights, 
         coords=builder.global_coords, 
         config=config,

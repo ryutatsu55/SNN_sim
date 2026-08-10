@@ -1,4 +1,4 @@
-"""src/utils/beggs_plenz.py の解析関数を合成データで検算する。
+"""Beggs & Plenz 系の解析関数を合成データで検算する。
 
 実シミュレーション結果には正解が無いため、指数や σ が既知の人工データを与えて
 推定量が正しく復元できることを確認する。
@@ -20,7 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.utils import beggs_plenz as bp  # noqa: E402
+from src.utils.analysis import avalanche, criticality, powerlaw  # noqa: E402
+from src.utils.experiments import beggs_plenz as bp  # noqa: E402
 
 
 # --------------------------------------------------------------------------------------
@@ -36,7 +37,7 @@ def test_detect_avalanches_on_handmade_bins():
     times = []
     for bin_index, count in enumerate([2, 3, 0, 1, 0, 0, 4, 1]):
         times.extend([bin_index + 0.5] * count)
-    result = bp.detect_avalanches_binned(np.array(times), duration_ms=8.0, bin_ms=1.0)
+    result = avalanche.detect_avalanches_binned(np.array(times), duration_ms=8.0, bin_ms=1.0)
 
     assert result.num_avalanches == 3
     assert list(result.sizes) == [5, 1, 5]
@@ -49,7 +50,7 @@ def test_detect_avalanches_on_handmade_bins():
 
 
 def test_detect_avalanches_handles_empty_input():
-    result = bp.detect_avalanches_binned(np.array([]), duration_ms=100.0, bin_ms=1.0)
+    result = avalanche.detect_avalanches_binned(np.array([]), duration_ms=100.0, bin_ms=1.0)
     assert result.num_avalanches == 0
     assert result.sizes.size == 0
 
@@ -66,24 +67,24 @@ def test_bin_width_is_floored_at_simulation_dt():
     # dt 格子上に多数のスパイクを置く -> 平均 IEI << dt
     steps = rng.integers(0, 1000, size=20_000)
     times = np.sort(steps.astype(np.float64) * dt)
-    assert bp.mean_iei_ms(times) < dt  # 前提: IEI が dt を下回っている
+    assert avalanche.mean_iei_ms(times) < dt  # 前提: IEI が dt を下回っている
 
-    floored = bp.detect_avalanches_binned(times, duration_ms=100.0, bin_ms=None, min_bin_ms=dt)
+    floored = avalanche.detect_avalanches_binned(times, duration_ms=100.0, bin_ms=None, min_bin_ms=dt)
     assert floored.bin_ms == pytest.approx(dt)
     # 寿命が 1 ビンに潰れていない = 分岐パラメータが意味を持つ
     assert floored.lifetimes_bins.max() > 1
-    assert bp.branching_parameter(floored)["sigma_bp"] > 0.0
+    assert avalanche.branching_parameter(floored)["sigma_bp"] > 0.0
 
     # 下限を指定しないと潰れることも確認しておく (退行検知の対照)
-    collapsed = bp.detect_avalanches_binned(times, duration_ms=100.0, bin_ms=None)
+    collapsed = avalanche.detect_avalanches_binned(times, duration_ms=100.0, bin_ms=None)
     assert collapsed.bin_ms < dt
     assert collapsed.lifetimes_bins.max() == 1
 
 
 def test_default_bin_width_is_mean_iei():
     times = np.array([0.0, 2.0, 4.0, 6.0])  # IEI = 2.0
-    assert bp.mean_iei_ms(times) == pytest.approx(2.0)
-    result = bp.detect_avalanches_binned(times, duration_ms=8.0, bin_ms=None)
+    assert avalanche.mean_iei_ms(times) == pytest.approx(2.0)
+    result = avalanche.detect_avalanches_binned(times, duration_ms=8.0, bin_ms=None)
     assert result.bin_ms == pytest.approx(2.0)
 
 
@@ -101,7 +102,7 @@ def test_fit_exponent_recovers_known_alpha(true_alpha):
     pmf /= pmf.sum()
     samples = rng.choice(support, size=200_000, p=pmf)
 
-    fit = bp.fit_exponent(samples, xmin=1, xmax=xmax)
+    fit = powerlaw.fit_exponent(samples, xmin=1, xmax=xmax)
     assert fit["alpha_mle"] == pytest.approx(true_alpha, abs=0.05)
     # log-log 回帰の傾きは -alpha 付近 (裾のサンプリングノイズで MLE より粗い)
     assert fit["slope_loglog"] == pytest.approx(-true_alpha, abs=0.25)
@@ -118,11 +119,11 @@ def test_fit_exponent_prefers_exponential_for_exponential_data():
     pmf /= pmf.sum()
     samples = rng.choice(support, size=50_000, p=pmf)
 
-    assert bp.fit_exponent(samples, xmin=1, xmax=xmax)["llr"] < 0
+    assert powerlaw.fit_exponent(samples, xmin=1, xmax=xmax)["llr"] < 0
 
 
 def test_fit_exponent_handles_insufficient_data():
-    fit = bp.fit_exponent(np.array([5.0]), xmin=1, xmax=100)
+    fit = powerlaw.fit_exponent(np.array([5.0]), xmin=1, xmax=100)
     assert np.isnan(fit["alpha_mle"])
 
 
@@ -158,9 +159,9 @@ def test_branching_parameter_recovers_known_sigma(true_sigma):
     """
     rng = np.random.default_rng(2024)
     counts = _simulate_branching_process(true_sigma, num_avalanches=20_000, rng=rng)
-    avalanches = bp.avalanches_from_bin_counts(counts, bin_ms=1.0)
+    avalanches = avalanche.avalanches_from_bin_counts(counts, bin_ms=1.0)
 
-    stats = bp.branching_parameter(avalanches)
+    stats = avalanche.branching_parameter(avalanches)
     assert stats["sigma_bp"] == pytest.approx(true_sigma, abs=0.05)
 
 
@@ -169,7 +170,7 @@ def test_branching_parameter_flags_supercritical():
     rng = np.random.default_rng(11)
     counts = _simulate_branching_process(1.3, num_avalanches=300, rng=rng,
                                          max_generations=40, max_population=2000)
-    stats = bp.branching_parameter(bp.avalanches_from_bin_counts(counts, bin_ms=1.0))
+    stats = avalanche.branching_parameter(avalanche.avalanches_from_bin_counts(counts, bin_ms=1.0))
     assert stats["sigma_bp"] > 1.05
 
 
@@ -177,9 +178,9 @@ def test_critical_branching_process_gives_expected_size_exponent():
     """臨界分岐過程 (σ=1) のサイズ分布が α≈1.5 になること (理論値)。"""
     rng = np.random.default_rng(99)
     counts = _simulate_branching_process(1.0, num_avalanches=60_000, rng=rng)
-    avalanches = bp.avalanches_from_bin_counts(counts, bin_ms=1.0)
+    avalanches = avalanche.avalanches_from_bin_counts(counts, bin_ms=1.0)
 
-    fit = bp.fit_exponent(avalanches.sizes, xmin=1, xmax=100)
+    fit = powerlaw.fit_exponent(avalanches.sizes, xmin=1, xmax=100)
     assert fit["alpha_mle"] == pytest.approx(1.5, abs=0.15)
 
 
@@ -204,14 +205,14 @@ def test_cross_correlogram_reports_undetermined_for_independent_neurons():
     times = np.concatenate(times)
     ids = np.concatenate(ids)
 
-    lags, corr, used = bp.pair_cross_correlogram(
+    lags, corr, used = criticality.pair_cross_correlogram(
         times, ids, duration, num_pairs=30, bin_ms=5.0, max_lag_ms=500.0,
         rng=np.random.default_rng(1),
     )
     assert used == 30
     assert lags.size == corr.size and lags.size > 0
     assert lags[0] == pytest.approx(-500.0)
-    assert np.isnan(bp.correlation_decay_ms(lags, corr))
+    assert np.isnan(criticality.correlation_decay_ms(lags, corr))
 
 
 def test_cross_correlogram_measures_decay_for_correlated_neurons():
@@ -232,21 +233,21 @@ def test_cross_correlogram_measures_decay_for_correlated_neurons():
     times = np.concatenate(times)
     ids = np.concatenate(ids)
 
-    lags, corr, _ = bp.pair_cross_correlogram(
+    lags, corr, _ = criticality.pair_cross_correlogram(
         times, ids, duration, num_pairs=40, bin_ms=5.0, max_lag_ms=500.0,
         rng=np.random.default_rng(2),
     )
     zero_index = int(np.argmin(np.abs(lags)))
     assert corr[zero_index] == max(corr), "ゼロラグにピークが立っていない"
 
-    decay = bp.correlation_decay_ms(lags, corr)
+    decay = criticality.correlation_decay_ms(lags, corr)
     assert np.isfinite(decay), "相関があるのに収束時間が判定不能になっている"
     # ジッタ 15 ms なので相関は 100 ms 程度までに消えるはず
     assert 0.0 < decay <= 200.0
 
 
 def test_cross_correlogram_handles_empty_input():
-    lags, corr, used = bp.pair_cross_correlogram(
+    lags, corr, used = criticality.pair_cross_correlogram(
         np.array([]), np.array([]), 1000.0,
     )
     assert used == 0 and lags.size == 0 and corr.size == 0
@@ -256,7 +257,7 @@ def test_correlation_decay_reports_inf_when_never_converging():
     """最終ラグまでノイズ帯へ入らなければ inf を返すこと。"""
     lags = np.arange(-100, 101, 5, dtype=np.float64)
     corr = np.ones_like(lags)  # 常に一定 -> tail の std=0 -> band=0 -> 収束しない
-    assert bp.correlation_decay_ms(lags, corr) == float("inf")
+    assert criticality.correlation_decay_ms(lags, corr) == float("inf")
 
 
 # --------------------------------------------------------------------------------------

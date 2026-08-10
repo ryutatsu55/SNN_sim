@@ -1,6 +1,7 @@
 import os
 import inspect
 import itertools
+import warnings
 import numpy as np
 import pygenn
 from dataclasses import dataclass
@@ -142,18 +143,26 @@ class NetworkBuilder:
     def _use_sparse(self) -> bool:
         """疎生成経路を使うかどうかを config と各コンポーネントの対応状況から決める。
 
-        "auto"(既定): 結合/重み/遅延の3段すべてが疎対応なら疎。1段でも非対応なら密。
-        "force"     : 疎を必須とし、非対応クラス名を挙げて即エラー(大規模実行で
-                      20分走ってから OOM kill されるのを防ぐ)。
-        "off"       : 常に密(過去のネットワーク実現を再現したいとき)。
+        入力値:
+          "auto"(既定): 結合/重み/遅延の3段すべてが疎対応なら疎。1段でも非対応なら密。
+          "force"     : 疎を必須とし、非対応クラス名を挙げて即エラー(大規模実行で
+                        20分走ってから OOM kill されるのを防ぐ)。
+          "off"       : 常に密(過去のネットワーク実現を再現したいとき)。
+
+        記録値 ("on" / "off"): 保存済み config.yaml をそのまま再実行するための入口。
+        `_generate_global_matrices()` が決定結果をここへ焼き込むため、記録された config は
+        必ずこの形になっている。"on" は「疎で走った」の意なので `force` と同じ扱い
+        (非対応ならエラー)にし、黙って密へ落ちて別の実現になるのを防ぐ。
         """
         mode = getattr(self.config.network, "sparse", "auto")
-        if mode not in ("auto", "force", "off"):
+        if mode not in ("auto", "force", "off", "on"):
             raise ValueError(
-                f"network.sparse は 'auto' / 'force' / 'off' のいずれかです (got {mode!r})。"
+                f"network.sparse は 'auto' / 'force' / 'off' / 'on' のいずれかです (got {mode!r})。"
             )
         if mode == "off":
             return False
+        if mode == "on":
+            mode = "force"
 
         _, connect_cls, weight_cls, delay_cls = self._component_classes()
         unsupported = [
@@ -168,12 +177,43 @@ class NetworkBuilder:
                 "network.sparse='force' ですが、疎生成に対応していないコンポーネントがあります: "
                 f"{', '.join(unsupported)}。'auto' にするか、疎対応のプロファイルを選んでください。"
             )
+
+        # auto で密へ落ちたケース。密は N×N を 3 本 (mask int8 + weights/delays float32 =
+        # 9N² バイト) 確保し、生成中は距離行列・確率行列 (float64) でさらに数倍になる。
+        # 全結合のように「密のほうが軽い」構成なら意図どおりだが、その場合は off を明示して
+        # 記録に残すべきなので、黙って落ちずに知らせる。
+        dense_bytes = self.total_neurons ** 2 * 9
+        warnings.warn(
+            f"network.sparse='auto' ですが疎生成に非対応のコンポーネントがあるため密経路を使います: "
+            f"{', '.join(unsupported)}。"
+            f" 密な N×N 行列に約 {dense_bytes / 2**30:.2f} GiB (生成中のピークはこの数倍) を確保します。"
+            " 意図的に密を選んでいる場合 (全結合など、疎より軽くなる構成) は"
+            " network.sparse='off' を明示してください。",
+            stacklevel=2,
+        )
         return False
+
+    @property
+    def is_sparse(self) -> bool:
+        """疎生成経路で構築されたか。真実の在り処は `config.network.sparse`。
+
+        `_generate_global_matrices()` が決定結果を config へ焼き込むので、ビルド後は
+        ここを見れば分岐が分かる。`sparse_rows is not None` のような副作用からの推測は
+        しないこと (真実が 2 箇所になる)。
+        """
+        return self.config.network.sparse == "on"
 
     def _generate_global_matrices(self):
         """全ニューロンの座標と、グローバルな結合情報を生成する"""
         print("  Generating Global Coordinates and Matrices...")
-        if self._use_sparse():
+        use_sparse = self._use_sparse()
+
+        # 決定結果を config へ焼き込む。以後この分岐を見たい人は config.network.sparse を
+        # 読む (seed / backend / layout.assignment と同じく、実際にどちらで走ったかを
+        # 記録に残すため)。`sparse_rows is not None` のような副作用からの推測はしない。
+        self.config.network.sparse = "on" if use_sparse else "off"
+
+        if use_sparse:
             self._generate_global_sparse()
         else:
             self._generate_global_dense()
@@ -329,7 +369,7 @@ class NetworkBuilder:
             (local_src, local_tgt, weights_flat, delays_ms) いずれも行優先ソート済みで
             index が整合した 1D 配列。接続が無ければすべて空配列。
         """
-        if self.sparse_rows is None:
+        if not self.is_sparse:
             # 密経路: 従来どおりグローバル行列から np.ix_ で切り出す。
             src_indices = self.layout.global_indices(src_name)
             tgt_indices = self.layout.global_indices(tgt_name)
