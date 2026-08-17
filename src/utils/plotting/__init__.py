@@ -7,6 +7,7 @@
 - 数値計算         … `src/utils/analysis/`
 """
 from .animation import spike_animation
+from .area import draw_area, plot_area
 from .distributions import plot_avalanche_distribution
 from .matrices import plot_single_weight_matrix, plot_weight_panel
 from .network import (
@@ -23,9 +24,11 @@ from .traces import PQN_test, neuron_test, neuron_trace, stdp_window
 __all__ = [
     "DEFAULT_ORDER_AXES",
     "PQN_test",
+    "draw_area",
     "network",
     "neuron_test",
     "neuron_trace",
+    "plot_area",
     "plot_avalanche_distribution",
     "plot_connection_mask_coarse",
     "plot_delay_distribution",

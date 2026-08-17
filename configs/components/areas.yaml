@@ -1,0 +1,47 @@
+# ニューロンを配置し、軸索を閉じ込める 2D 領域。
+# space (soma 配置) より先に構築され、space と connection (軸索の境界処理) に渡される。
+# 他の 4 コンポーネントと同じく **メイン config で必須**。領域の制約を置かない場合も
+# `area: no_space` と明示的に書く。
+#
+# 領域は符号付き距離関数 (SDF) で表す。composite で min/max 合成すれば、円や矩形の
+# 組み合わせで任意の複雑形状 (モジュール構造、トラック、穴あき) が作れる。
+
+# 領域の制約を置かない = 無界。確率ベースの結合モデル (constant_prob, beggs_plenz など) は
+# 領域を参照しないので、それらを使う config はこれを指定する。
+no_space: {}
+# ↑ 空マッピングであること。`no_space:` とだけ書くと値が None になり、
+#   ConfigManager.resolve() の data[profile].copy() が AttributeError で落ちる
+#   (space.yaml の `no_space: {hoge: null}` が置かれているのと同じ事情)。
+
+disk:
+  radius: 1500.0    # um。Sumi et al. (2025) Front. Neurosci. 19:1570783 §2.8 の直径 3 mm
+  center: [0.0, 0.0]
+
+rect:
+  x_range: [0.0, 1500.0]  # um
+  y_range: [0.0, 1500.0]  # um
+
+# 4 モジュール (円) を十字のブリッジ (矩形) で連結したモジュール構造。
+# part の index が AreaUniformSpace によって `module` 軸になるので、
+# 以降 layout.ids_by("module") で M0..M5 を参照できる。
+modular_4:
+  op: union
+  parts:
+    - {type: disk, center: [-500.0, -500.0], radius: 400.0}
+    - {type: disk, center: [ 500.0, -500.0], radius: 400.0}
+    - {type: disk, center: [-500.0,  500.0], radius: 400.0}
+    - {type: disk, center: [ 500.0,  500.0], radius: 400.0}
+    - {type: rect, x_range: [-500.0, 500.0], y_range: [ -60.0,  60.0]}
+    - {type: rect, x_range: [ -60.0,  60.0], y_range: [-500.0, 500.0]}
+
+# modular_4 を 2.01 倍に拡大したもの。面積 8.997 mm^2 なので 400 neurons/mm^2 で
+# N = 3599 ~ 3600 になり、criticality_test.yaml が想定する規模と密度に揃う。
+modular_4_3mm:
+  op: union
+  parts:
+    - {type: disk, center: [-1005.0, -1005.0], radius: 804.0}
+    - {type: disk, center: [ 1005.0, -1005.0], radius: 804.0}
+    - {type: disk, center: [-1005.0,  1005.0], radius: 804.0}
+    - {type: disk, center: [ 1005.0,  1005.0], radius: 804.0}
+    - {type: rect, x_range: [-1005.0, 1005.0], y_range: [ -120.6,  120.6]}
+    - {type: rect, x_range: [ -120.6,  120.6], y_range: [-1005.0, 1005.0]}

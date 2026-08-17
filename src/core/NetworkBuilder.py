@@ -27,7 +27,7 @@ if project_root not in sys.path:
 # Pydanticの設定モデルと、コンポーネントを動的ロードするレジストリをインポート
 from src.core.config_manager import AppConfig
 from src.core.layout import NetworkLayout
-from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
+from src.core.registry import AREA_MODELS, SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
 
 @dataclass(frozen=True)
 class SynapseIndex:
@@ -108,6 +108,8 @@ class NetworkBuilder:
         self.global_mask = None
         self.global_weights = None
         self.global_delays = None
+        # ニューロンを配置し軸索を閉じ込める 2D 領域 (_generate_global_matrices で構築)
+        self.area = None
         # 疎生成経路で使う COO (すべて index 整合の 1D 配列)。密経路では None のまま。
         self.sparse_rows = None
         self.sparse_cols = None
@@ -134,6 +136,7 @@ class NetworkBuilder:
     def _component_classes(self):
         network = self.config.network
         return (
+            AREA_MODELS.get(network.area.profile_name),
             SPATIAL_MODELS.get(network.space.profile_name),
             CONNECTION_MODELS.get(network.connection.profile_name),
             WEIGHT_MODELS.get(network.weight.profile_name),
@@ -164,7 +167,8 @@ class NetworkBuilder:
         if mode == "on":
             mode = "force"
 
-        _, connect_cls, weight_cls, delay_cls = self._component_classes()
+        # area と space は行列を作らないので疎/密の判定対象外。
+        _, _, connect_cls, weight_cls, delay_cls = self._component_classes()
         unsupported = [
             cls.__name__
             for cls in (connect_cls, weight_cls, delay_cls)
@@ -238,29 +242,36 @@ class NetworkBuilder:
         network = self.config.network
 
         # Pydanticモデルから辞書を取得
+        area_cfg = network.area
         space_cfg = network.space
         conn_cfg = network.connection
         weight_cfg = network.weight
         delay_cfg = network.delay
 
-        spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
 
-        # 1. 空間座標の生成
-        space = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout)
+        # 1. 領域の構築 (soma の配置範囲と軸索の伸長範囲)。
+        #    RandomState を渡さないのは、area が rng を消費すると空間→結合→重み→遅延の
+        #    単一ストリームが全部ずれ、同じ seed の既存ネットワークが別物になるから。
+        #    乱数は area.sample(n, rng) の引数としてのみ空間モデルから渡る。
+        self.area = areaClass(area_cfg, self.total_neurons, layout=self.layout)
+
+        # 2. 空間座標の生成
+        space = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout, area=self.area)
         self.global_coords = space.generate()
         self._inject_axes(space)
 
-        # 2. 結合マスクの生成
-        connection = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout)
+        # 3. 結合マスクの生成
+        connection = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout, area=self.area)
         self.global_mask = connection.generate()
         self._inject_axes(connection)
 
-        # 3. 重み行列の生成
+        # 4. 重み行列の生成
         weight = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout)
         self.global_weights = weight.generate()
         self._inject_axes(weight)
 
-        # 4. 遅延行列の生成
+        # 5. 遅延行列の生成
         delay = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout)
         self.global_delays = delay.generate()
         self._inject_axes(delay)
@@ -273,16 +284,20 @@ class NetworkBuilder:
         (connectors.GaussianDistanceTypeTopology.generate_sparse の docstring 参照)。
         """
         network = self.config.network
-        spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+
+        # 密経路と同じく area は rng を受け取らない (_generate_global_dense のコメント参照)。
+        self.area = areaClass(network.area, self.total_neurons, layout=self.layout)
 
         space = spaceClass(
-            network.space, self.total_neurons, self.rng, layout=self.layout
+            network.space, self.total_neurons, self.rng, layout=self.layout, area=self.area
         )
         self.global_coords = space.generate()
         self._inject_axes(space)
 
         connection = connectClass(
-            network.connection, self.total_neurons, self.global_coords, self.rng, layout=self.layout
+            network.connection, self.total_neurons, self.global_coords, self.rng,
+            layout=self.layout, area=self.area,
         )
         rows, cols = connection.generate_sparse()
         self._inject_axes(connection)

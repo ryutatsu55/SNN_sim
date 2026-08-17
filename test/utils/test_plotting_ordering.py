@@ -37,6 +37,7 @@ neurons:
   Inh: {{type: akita_escape_lif, mode: inhibitory, polarity: inhibitory, num: {num_inh}}}
 synapses: {{}}
 network:
+  area: {{profile_name: no_space}}
   space: {{profile_name: no_space}}
   connection: {{profile_name: constant_prob_full, p: 1.0, allow_self_connections: false}}
   weight: {{profile_name: constant_zero}}

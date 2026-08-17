@@ -19,6 +19,7 @@ import numpy as np
 # プロジェクトルートにパスを通す
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.utils.plotting.area import plot_area
 from src.utils.plotting.network import (
     network,
     plot_connection_mask_coarse,
@@ -73,6 +74,7 @@ def _register_plugins():
     import src.models.neurons.akita_escape_lif  # noqa: F401
     import src.models.neurons.akita_escape_lif_physical  # noqa: F401
     import src.models.neurons.lif  # noqa: F401
+    import src.models.network.area  # noqa: F401
     import src.models.network.space  # noqa: F401
     import src.models.network.connectors  # noqa: F401
     import src.models.network.weights  # noqa: F401
@@ -129,6 +131,16 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
     has_space = coords is not None and np.all(np.isfinite(np.asarray(coords, dtype=np.float64)))
 
     # --- 図の生成 ---
+    # エリアの図は has_space ではなく area.is_bounded で判定する。両者は独立で、
+    # 有界なエリアは no_space の座標とも共存しうる (逆もまた然り)。
+    area = builder.area
+    if plot_area(area, output_dir / "area.png",
+                 title=f"Area: {config.network.area.profile_name}"):
+        print(f"  Area visualization saved to {output_dir}/area.png")
+    else:
+        print(f"  エリアが無界 ({config.network.area.profile_name}) のため "
+              f"area.png はスキップしました。")
+
     plot_connection_mask_coarse(
         row, col, layout, total, output_dir / "connection_mask_coarse.png",
     )
@@ -150,7 +162,7 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
             network(
                 weights=_dense_weights(builder), coords=coords, config=config,
                 layout=layout, title="network_sample", save_path=str(output_dir),
-                seed=seed,
+                seed=seed, area=area,
             )
         else:
             print(f"  ニューロン数 {total} > {DENSE_MAX_NEURONS} のため "

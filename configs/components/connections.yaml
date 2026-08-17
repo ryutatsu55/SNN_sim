@@ -56,3 +56,16 @@ beggs_plenz:
   sigma_ii: 125.0   # [um]
   p0_ii: 0.20
   allow_self_connections: false   # オートシナプス禁止 (MD §8; Bekkers & Stevens 1991, PNAS)
+
+# 軸索伸長アルゴリズムによる結合生成。
+# Sumi et al. (2025) Front. Neurosci. 19:1570783 §2.8 / Orlandi et al. (2013)。
+# 軸索は network.area の内部から出ない (境界に当たると壁沿いに偏向する)。
+axon_growth:
+  mean_axon_length: 1100.0   # um  軸索全長 (Rayleigh 分布) の平均
+  segment_length: 100.0      # um  1 セグメントの長さ
+  angle_sigma: 0.1           # rad 1 ステップあたりの方向の揺らぎ (= 5.73 deg)
+  dendrite_radius: 150.0     # um  樹状突起円の半径 (結合の受容範囲)
+  connection_prob: 0.2       #     交差 1 回あたりの結合確率
+  boundary: deflect          #     境界処理: deflect | reflect | stop
+  max_deflect: 4             #     偏向の再試行回数。超えたらその軸索は打ち切り
+  allow_self_connections: false

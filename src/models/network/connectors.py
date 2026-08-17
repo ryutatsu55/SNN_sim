@@ -1,9 +1,14 @@
+import itertools
 import numpy as np
 from abc import ABC, abstractmethod
+from types import SimpleNamespace
 from typing import Optional, Dict, Any
 from pathlib import Path
+from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist, pdist, squareform
 from src.core.registry import CONNECTION_MODELS
+
+from .area import BaseArea
 
 class BaseConnection(ABC):
     """シナプス結合の有無(マスク)を決定する基底クラス"""
@@ -13,7 +18,8 @@ class BaseConnection(ABC):
     # 3 段すべてが True のときだけ疎生成経路を選ぶ。
     supports_sparse: bool = False
 
-    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState, layout=None):
+    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState, layout=None,
+                 area: Optional[BaseArea] = None):
         self.config = config
         self.num_neurons = num_neurons
         self.coords = coords
@@ -21,6 +27,9 @@ class BaseConnection(ABC):
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
         # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
         self.layout = layout
+        # BaseArea。幾何的に結合を作るモデル(軸索伸長など)が、軸索を領域内に
+        # 閉じ込めるために使う。確率ベースのモデルは参照しない。
+        self.area = area
 
     def describe_axes(self) -> Dict[str, Any]:
         """任意フック: このコンポーネントが定義するカテゴリ/ソート軸を宣言する。
@@ -270,6 +279,265 @@ class GaussianDistanceTypeTopology(BaseConnection):
 class BeggsPlenzGaussianTopology(GaussianDistanceTypeTopology):
     """Beggs & Plenz (2003) 再現用の種別別ガウス結合プロファイル。具体値は YAML から読む。"""
     pass
+
+@CONNECTION_MODELS.register("axon_growth")
+class AxonGrowthTopology(BaseConnection):
+    """軸索の伸長過程から結合を生成する。
+
+    Sumi et al. (2025) Front. Neurosci. 19:1570783 §2.8 / Orlandi et al. (2013)。
+    確率を距離の関数として与えるのではなく、**軸索を折れ線として実際に伸ばし、
+    樹状突起円と交差したら結合する**。
+
+    1. 軸索の全長 L を Rayleigh 分布から引く (平均 `mean_axon_length`)
+    2. セグメント本数 = floor(L / `segment_length`)。0 本 (= 出力を持たない) も論文どおり許容
+    3. 方向は角度のランダムウォーク: theta[k] = theta[k-1] + N(0, `angle_sigma`)。
+       theta[0] は一様。sigma が小さい (0.1 rad) ので "pseudo-straight" な軌跡になる
+    4. 伸長先が `network.area` の外なら境界処理 (既定は壁沿いへの偏向) を行い、
+       **軸索は領域外へ出ない**
+    5. セグメントと細胞体の距離が `dendrite_radius` 以下なら、その交差ごとに独立に
+       確率 `connection_prob` で結合を張る
+
+    config:
+        mean_axon_length, segment_length, angle_sigma, dendrite_radius [um]
+        connection_prob                         … 交差 1 回あたりの結合確率
+        boundary: deflect | reflect | stop      … 領域境界に当たったときの挙動
+        max_deflect (int)                       … 偏向の再試行回数。超えたらその軸索は打ち切り
+        allow_self_connections (bool, 既定 False)
+
+    `generate()` は `generate_sparse()` に委譲して散布するだけなので、密と疎は定義上一致する
+    (`GaussianDistanceTypeTopology` が乱数ストリームを手で揃えているのとは対照的)。
+    """
+
+    supports_sparse = True
+
+    # 交差判定を何セグメントずつ処理するか。1 セグメントあたりの候補が ~50 なので、
+    # 8192 で 1 ブロック ~40 万行。
+    _SEGMENT_BLOCK = 8192
+
+    _BOUNDARY_MODES = ("deflect", "reflect", "stop")
+
+    def _params(self):
+        c = self.config
+        p = SimpleNamespace(
+            mean_axon_length=float(getattr(c, "mean_axon_length", 1100.0)),
+            segment_length=float(getattr(c, "segment_length", 100.0)),
+            angle_sigma=float(getattr(c, "angle_sigma", 0.1)),
+            dendrite_radius=float(getattr(c, "dendrite_radius", 150.0)),
+            connection_prob=float(getattr(c, "connection_prob", 0.2)),
+            boundary=str(getattr(c, "boundary", "deflect")),
+            max_deflect=int(getattr(c, "max_deflect", 4)),
+            allow_self=bool(getattr(c, "allow_self_connections", False)),
+        )
+        if p.boundary not in self._BOUNDARY_MODES:
+            raise ValueError(
+                f"axon_growth の boundary は {self._BOUNDARY_MODES} のいずれかです (got {p.boundary!r})"
+            )
+        for name in ("mean_axon_length", "segment_length", "angle_sigma", "dendrite_radius"):
+            if getattr(p, name) <= 0:
+                raise ValueError(f"axon_growth の {name} は正である必要があります (got {getattr(p, name)})")
+        if not 0.0 <= p.connection_prob <= 1.0:
+            raise ValueError(f"axon_growth の connection_prob は [0, 1] です (got {p.connection_prob})")
+        if p.max_deflect < 1:
+            raise ValueError(f"axon_growth の max_deflect は 1 以上です (got {p.max_deflect})")
+        return p
+
+    def _validate_inputs(self):
+        if self.coords is None:
+            raise ValueError(
+                "AxonGrowthTopology は空間座標を必要とします (network.space に no_space 以外を"
+                " 指定してください)。"
+            )
+        if np.asarray(self.coords).shape[1] < 2:
+            raise ValueError("AxonGrowthTopology は 2 次元以上の座標を必要とします。")
+        if self.area is None:
+            raise ValueError(
+                "AxonGrowthTopology は network.area を必要とします (軸索を領域内に閉じ込めるため)。"
+            )
+
+    def _grow_axons(self, p):
+        """軸索を折れ線として伸ばし、セグメント列を返す。
+
+        境界処理があるためセグメント方向は逐次依存で、単純な cumsum にはできない。
+        代わりに**ステップ index について反復し、ニューロン方向はベクトル化**する
+        (ステップ数は平均 11、最大でも数十なので反復回数は小さい)。
+
+        乱数の消費は rayleigh(N) -> uniform(N) -> 各ステップで normal(伸長中の本数) の順で、
+        本数は n_seg から決まるので完全に決定的。偏向自体は乱数を引かない。
+
+        Returns:
+            (seg_start, seg_end, seg_owner, arc_length)
+            seg_* は (S, 2) / (S,) で **(owner, step) の昇順**にソート済み。
+            arc_length は実際に伸びた長さ (N,) [um] (打ち切られた軸索は短くなる)。
+        """
+        soma = np.ascontiguousarray(np.asarray(self.coords)[:, :2], dtype=np.float64)
+        n = self.num_neurons
+
+        # 1. 全長と本数。Rayleigh の平均は scale * sqrt(pi/2)。
+        lengths = self.rng.rayleigh(p.mean_axon_length / np.sqrt(np.pi / 2.0), n)
+        n_seg = np.floor(lengths / p.segment_length).astype(np.int64)
+        # 2. 初期方向は等方ランダム
+        theta = self.rng.uniform(0.0, 2.0 * np.pi, n)
+
+        pos = soma.copy()
+        alive = n_seg > 0
+
+        starts: list = []
+        ends: list = []
+        owners: list = []
+        steps: list = []
+
+        max_steps = int(n_seg.max()) if n else 0
+        for k in range(max_steps):
+            act = np.nonzero(alive & (k < n_seg))[0]
+            if act.size == 0:
+                break
+
+            # 3. 角度のランダムウォーク
+            theta[act] += self.rng.normal(0.0, p.angle_sigma, act.size)
+            u = np.stack([np.cos(theta[act]), np.sin(theta[act])], axis=1)
+            base = pos[act]
+            cand = base + p.segment_length * u
+
+            # 4. 境界処理。領域外に出た軸索だけを壁沿いへ寄せる。
+            if p.boundary != "stop":
+                for _ in range(p.max_deflect):
+                    out = ~self.area.contains(cand)
+                    if not out.any():
+                        break
+                    nv = self.area.normal(cand[out])       # 外向き単位法線
+                    uo = u[out]
+                    dot = (uo * nv).sum(axis=1, keepdims=True)
+                    if p.boundary == "deflect":
+                        ut = uo - dot * nv                 # 接線成分だけ残す = 壁沿い
+                    else:                                  # reflect
+                        ut = uo - 2.0 * dot * nv           # 鏡面反射
+                    nrm = np.linalg.norm(ut, axis=1, keepdims=True)
+                    # 壁に正面衝突すると接線成分が消えて向きが決まらない。法線を 90° 回して逃がす。
+                    fallback = np.stack([-nv[:, 1], nv[:, 0]], axis=1)
+                    u[out] = np.where(nrm > 1e-9, ut / np.maximum(nrm, 1e-12), fallback)
+                    cand[out] = base[out] + p.segment_length * u[out]
+                theta[act] = np.arctan2(u[:, 1], u[:, 0])
+
+            # 偏向しても領域内に入れないもの (凹の袋小路) はここで打ち切る。
+            outside = ~self.area.contains(cand)
+            if outside.any():
+                alive[act[outside]] = False
+
+            keep = np.nonzero(~outside)[0]
+            if keep.size == 0:
+                continue
+            kept = act[keep]
+            starts.append(base[keep])
+            ends.append(cand[keep])
+            owners.append(kept)
+            steps.append(np.full(kept.size, k, dtype=np.int64))
+            pos[kept] = cand[keep]
+
+        if not owners:
+            empty2 = np.zeros((0, 2), dtype=np.float64)
+            return empty2, empty2, np.zeros(0, dtype=np.int64), np.zeros(n, dtype=np.float64)
+
+        seg_start = np.concatenate(starts, axis=0)
+        seg_end = np.concatenate(ends, axis=0)
+        seg_owner = np.concatenate(owners)
+        seg_step = np.concatenate(steps)
+
+        # ステップごとに積んだので今は (step, owner) 順。(owner, step) 順に並べ替えて、
+        # 折れ線としての順序と、以降の乱数消費順を決定論的にする。
+        order = np.lexsort((seg_step, seg_owner))
+        seg_start, seg_end, seg_owner = seg_start[order], seg_end[order], seg_owner[order]
+
+        arc_length = np.bincount(seg_owner, minlength=n).astype(np.float64) * p.segment_length
+        return seg_start, seg_end, seg_owner, arc_length
+
+    def generate_sparse(self):
+        self._validate_inputs()
+        p = self._params()
+
+        seg_start, seg_end, seg_owner, arc_length = self._grow_axons(p)
+        self._arc_length = arc_length
+
+        soma = np.ascontiguousarray(np.asarray(self.coords)[:, :2], dtype=np.float64)
+        empty = np.array([], dtype=np.int32)
+        if seg_owner.size == 0:
+            return empty, empty
+
+        # 樹状突起円との交差判定。セグメント中点から半径 (セグメント長/2 + 樹状突起半径) 以内に
+        # 細胞体があることが必要条件なので、まず KD-tree でその候補を絞る。
+        tree = cKDTree(soma)
+        query_r = 0.5 * p.segment_length + p.dendrite_radius
+
+        pre_list: list = []
+        post_list: list = []
+
+        for s0 in range(0, seg_owner.size, self._SEGMENT_BLOCK):
+            s1 = min(s0 + self._SEGMENT_BLOCK, seg_owner.size)
+            a = seg_start[s0:s1]
+            b = seg_end[s0:s1]
+            own = seg_owner[s0:s1]
+
+            cand = tree.query_ball_point(0.5 * (a + b), query_r)
+            counts = np.fromiter((len(c) for c in cand), dtype=np.int64, count=len(cand))
+            total = int(counts.sum())
+            if total == 0:
+                continue
+            flat_j = np.fromiter(itertools.chain.from_iterable(cand), dtype=np.int64, count=total)
+            seg_idx = np.repeat(np.arange(len(cand), dtype=np.int64), counts)
+
+            # query_ball_point の返す順序は未定義。ここで固定しないと再現性が壊れる。
+            order = np.lexsort((flat_j, seg_idx))
+            seg_idx, flat_j = seg_idx[order], flat_j[order]
+
+            # 点-線分の厳密な距離。t は線分上の最近接点のパラメータ [0, 1]。
+            ab = b[seg_idx] - a[seg_idx]
+            ap = soma[flat_j] - a[seg_idx]
+            ab2 = np.einsum("ij,ij->i", ab, ab)
+            t = np.clip(np.einsum("ij,ij->i", ap, ab) / np.maximum(ab2, 1e-12), 0.0, 1.0)
+            perp = ap - t[:, None] * ab
+            hit = np.einsum("ij,ij->i", perp, perp) <= p.dendrite_radius ** 2
+
+            # 自己結合は**抽選の前に**落とす。密版が疎版に委譲する構成なので、
+            # GaussianDistanceTypeTopology のように対角のドローを消費して捨てる必要がない。
+            if not p.allow_self:
+                hit &= own[seg_idx] != flat_j
+            if not hit.any():
+                continue
+            seg_idx, flat_j = seg_idx[hit], flat_j[hit]
+
+            # 交差 1 回につき独立に 1 回抽選する (Orlandi et al. 2013)。同じ相手を複数の
+            # セグメントが横切れば、その回数だけ試行が行われる。
+            accept = self.rng.random(seg_idx.size) < p.connection_prob
+            if not accept.any():
+                continue
+            pre_list.append(own[seg_idx[accept]])
+            post_list.append(flat_j[accept])
+
+        if not pre_list:
+            return empty, empty
+
+        pairs = np.stack([np.concatenate(pre_list), np.concatenate(post_list)], axis=1)
+        # 重複除去 + 行優先ソート (np.unique(axis=0) は辞書式に並べる)
+        pairs = np.unique(pairs, axis=0)
+        return pairs[:, 0].astype(np.int32), pairs[:, 1].astype(np.int32)
+
+    def generate(self):
+        """密な (N, N) マスク。疎版を呼んで散布するだけなので、密と疎は定義上一致する。"""
+        rows, cols = self.generate_sparse()
+        mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
+        mask[rows, cols] = 1
+        return mask
+
+    def describe_axes(self) -> Dict[str, Any]:
+        """実際に伸びた軸索の長さを数値軸として宣言する (generate 後に有効)。
+
+        `layout.order_by("axon_length")` で軸索長順に並べ替えられるので、軸索長と出次数の
+        関係や、境界で打ち切られた軸索の分布を解析できる。
+        """
+        arc = getattr(self, "_arc_length", None)
+        if arc is None:
+            return {}
+        return {"axon_length": arc}
+
 
 @CONNECTION_MODELS.register("prob_based_block")
 class BlockRandomTopology(BaseConnection):

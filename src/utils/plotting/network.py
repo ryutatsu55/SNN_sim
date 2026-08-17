@@ -42,7 +42,8 @@ def _save(fig, out_path: Path) -> None:
 
 
 def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_size=10,
-            title="network", save_path=".", n_sample=500, max_edges=4000, seed=0):
+            title="network", save_path=".", n_sample=500, max_edges=4000, seed=0,
+            area=None):
     """
     ニューロンの空間配置と重み行列からネットワーク構造を可視化する。
 
@@ -62,6 +63,7 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
         n_sample (int): 描画に用いるニューロンのサンプリング数。
         max_edges (int): 描画するエッジ数の上限 (annotate ループを抑える)。
         seed (int): サンプリングの乱数シード。
+        area: BaseArea。渡すと領域の境界線を背景に敷き、軸範囲もそこから取る。
     """
     weights = np.asarray(weights)
     coords = np.asarray(coords)
@@ -85,6 +87,13 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
         is_exc[exc_ids] = True
 
     fig, ax = plt.subplots(figsize=(12, 10))
+
+    # --- 領域の境界線を背景に敷く (ノードは zorder=3、エッジは 1 なので下に回る) ---
+    # 塗りは入れない。この図の主役はグラフで、part ごとの塗り分けはエッジと色が競合して
+    # 読みにくくなる。領域そのものを見たいときは plot_area の図を見る。
+    # 循環 import を避けるため関数内 import (area.py が network._save を使っている)。
+    from src.utils.plotting.area import draw_area
+    area_drawn = draw_area(ax, area, fill=False, boundary=True, zorder=0)
 
     # --- ノード描画 (layout があれば E/I で色分け) ---
     if is_exc is not None:
@@ -151,16 +160,20 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
     ax.set_title(f"{title}\n{sample.size} neurons sampled, {sources.size} edges drawn")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
-    # x_range/y_range を持つ矩形空間なら明示的に範囲を合わせる。
-    # 持たない空間 (random_circle_2d など) は座標からの自動スケールに任せる。
-    space_cfg = config.network.space
-    x_range = getattr(space_cfg, "x_range", None)
-    y_range = getattr(space_cfg, "y_range", None)
-    if x_range is not None and y_range is not None:
-        ax.set_xlim(x_range)
-        ax.set_ylim(y_range)
-    else:
-        ax.margins(0.05)
+    # 軸範囲の優先順位:
+    #   1. エリアの境界箱 (draw_area が set_limits で設定済み)。領域が図の外に切れない
+    #   2. x_range/y_range を持つ矩形空間
+    #   3. 座標からの自動スケール (random_circle_2d など、どちらも持たない場合)
+    # space: area_uniform は x_range を持たないので、エリアを渡さないと 3 に落ちる。
+    if not area_drawn:
+        space_cfg = config.network.space
+        x_range = getattr(space_cfg, "x_range", None)
+        y_range = getattr(space_cfg, "y_range", None)
+        if x_range is not None and y_range is not None:
+            ax.set_xlim(x_range)
+            ax.set_ylim(y_range)
+        else:
+            ax.margins(0.05)
 
     plt.tight_layout()
 

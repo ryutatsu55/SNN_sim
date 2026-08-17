@@ -316,6 +316,8 @@ neurons:
     num: {num_inh}
 synapses: {{}}
 network:
+  area:
+    profile_name: no_space
   space:
     profile_name: no_space
   connection:
@@ -471,9 +473,9 @@ class AkitaSocReplotTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
-            # polarity 軸 / source のリスト必須化 / layout.assignment の実値保存より前に
-            # 保存された config なので、コピーする際に現行スキーマへ寄せる。このテストの
-            # 主題は replot であって旧 config の読み込みではない。
+            # polarity 軸 / source のリスト必須化 / layout.assignment の実値保存 /
+            # network.area の追加より前に保存された config なので、コピーする際に現行
+            # スキーマへ寄せる。このテストの主題は replot であって旧 config の読み込みではない。
             saved = yaml.safe_load(source_config.read_text(encoding="utf-8"))
             for n_cfg in saved["neurons"].values():
                 n_cfg.setdefault("polarity", n_cfg["mode"])
@@ -481,6 +483,8 @@ class AkitaSocReplotTest(unittest.TestCase):
                 if isinstance(s_cfg.get("source"), str):
                     s_cfg["source"] = [s_cfg["source"]]
             saved.setdefault("layout", {"assignment": "sequential"})
+            # area 導入前の run なので領域の制約は無かった = no_space
+            saved["network"].setdefault("area", {"profile_name": "no_space"})
             (run_dir / "config.yaml").write_text(
                 yaml.safe_dump(saved, allow_unicode=True, sort_keys=False), encoding="utf-8"
             )
