@@ -19,8 +19,21 @@ class BaseWeight(ABC):
         self.mask = mask
         self.rng = rng
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
-        # 具象クラス側で実装したい場合に self.layout.items() / ids_by_mode() を参照する。
+        # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
         self.layout = layout
+
+    def describe_axes(self) -> Dict[str, Any]:
+        """任意フック: このコンポーネントが定義するカテゴリ/ソート軸を宣言する。
+
+        NetworkBuilder が `generate()` / `generate_sparse()` の**直後**に呼び、戻り値を
+        `NetworkLayout.add_axis()` へ注入する。生成後に呼ばれるので、自身が計算した
+        座標・マスク・重み等から軸を導出してよい(例: 重み強度でのランク付け)。
+
+        Returns:
+            {軸名: 長さ num_neurons の配列}。カテゴリ名(文字列)でもソート用の数値でも
+            よい。既定は空 dict = 軸を定義しない。
+        """
+        return {}
 
     @abstractmethod
     def generate(self) -> np.ndarray:

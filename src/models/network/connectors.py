@@ -19,8 +19,21 @@ class BaseConnection(ABC):
         self.coords = coords
         self.rng = rng
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
-        # 具象クラス側で実装したい場合に self.layout.items() / ids_by_mode() を参照する。
+        # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
         self.layout = layout
+
+    def describe_axes(self) -> Dict[str, Any]:
+        """任意フック: このコンポーネントが定義するカテゴリ/ソート軸を宣言する。
+
+        NetworkBuilder が `generate()` / `generate_sparse()` の**直後**に呼び、戻り値を
+        `NetworkLayout.add_axis()` へ注入する。生成後に呼ばれるので、自身が計算した
+        座標・マスク等から軸を導出してよい(例: コミュニティ検出、次数によるランク付け)。
+
+        Returns:
+            {軸名: 長さ num_neurons の配列}。カテゴリ名(文字列)でもソート用の数値でも
+            よい。既定は空 dict = 軸を定義しない。
+        """
+        return {}
 
     @abstractmethod
     def generate(self) -> np.ndarray:
@@ -126,7 +139,7 @@ class GaussianDistanceTypeTopology(BaseConnection):
         P(結合 | 距離 d) = p0_xy * exp(-d^2 / (2 * sigma_xy^2))
     で、送信種別 x(E/I) × 受信種別 y(E/I) の 4 ブロックごとに独立の
     (sigma_xy, p0_xy) を用いる。興奮性/抑制性のグローバルID集合は
-    layout.ids_by_mode() から取得する。
+    layout.ids_by("polarity") から取得する。
 
     config(フラットなスカラーフィールド):
         sigma_ee/p0_ee, sigma_ei/p0_ei, sigma_ie/p0_ie, sigma_ii/p0_ii  … [um] と確率
@@ -167,7 +180,7 @@ class GaussianDistanceTypeTopology(BaseConnection):
         """
         self._validate_inputs()
 
-        ids = self.layout.ids_by_mode()
+        ids = self.layout.ids_by("polarity")
         exc = ids["excitatory"]
         inh = ids["inhibitory"]
         n = self.num_neurons
@@ -223,7 +236,7 @@ class GaussianDistanceTypeTopology(BaseConnection):
     def generate(self):
         self._validate_inputs()
 
-        ids = self.layout.ids_by_mode()
+        ids = self.layout.ids_by("polarity")
         exc = ids["excitatory"]
         inh = ids["inhibitory"]
 
@@ -263,9 +276,10 @@ class BlockRandomTopology(BaseConnection):
     def generate(self):
         """ブロック分割ベースの確率結合を生成する。
 
-        モジュール境界は、NetworkLayout に構造層(複数)が定義されていればそれを用いる
-        (層 = ブロック)。層が無い/単一層のときは従来通り config.num_modules で等分する。
-        num_modules=1(または単一層)では単一ブロックのランダム結合として振る舞う。
+        モジュール境界は、NetworkLayout に `module` 軸があればそれを用いる(空間モデルが
+        `describe_axes()` で宣言したもの)。無ければ config.num_modules で等分する。
+        num_modules=1(または単一モジュール)では単一ブロックのランダム結合として振る舞う。
+        モジュールのIDが連続か散在かは問わない。
         """
         within_module_connection_prob = self.config.within_module_connection_prob
         between_module_connection_prob = self.config.between_module_connection_prob
@@ -283,57 +297,56 @@ class BlockRandomTopology(BaseConnection):
         if not isinstance(allow_self_connections, bool):
             raise ValueError("allow_self_connections must be a boolean.")
 
-        # ニューロンをモジュールに分割するためのインデックス範囲を計算する。
-        # NetworkLayout に複数の構造層があれば、その連続ブロックをモジュールとして採用する。
-        layers = self.layout.layers() if self.layout is not None else None
-        if layers is not None and len(layers) > 1:
-            module_ranges: list[tuple[int, int]] = [(l.start, l.stop) for l in layers]
-        else:
-            num_modules = self.config.num_modules
-            if not isinstance(num_modules, int) or isinstance(num_modules, bool):
-                raise ValueError("num_modules must be an integer.")
-            if num_modules < 1:
-                raise ValueError("num_modules must be at least 1.")
-            if num_modules > self.num_neurons:
-                raise ValueError("num_modules must not exceed num_neurons.")
-            module_ranges = []
-            for module_idx in range(num_modules):
-                start = int(module_idx * self.num_neurons / num_modules)
-                end = int((module_idx + 1) * self.num_neurons / num_modules)
-                module_ranges.append((start, end))
-
-        num_modules = len(module_ranges)
+        module_ids = self._module_partition()
+        num_modules = len(module_ids)
         mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
 
+        def write_block(src_idx: int, tgt_idx: int, prob: float) -> None:
+            """モジュール src_idx → tgt_idx のブロックに確率 prob の結合を書き込む。
+
+            乱数の消費は「ブロック形状ぶんを1回 rand」なので、モジュール分割が同じなら
+            ID が連続でも散在でも同一の実現になる。
+            """
+            block = self.rng.rand(len(module_ids[src_idx]), len(module_ids[tgt_idx])) < prob
+            mask[np.ix_(module_ids[src_idx], module_ids[tgt_idx])] = block.astype(np.int8)
+
         # モジュール内の結合を生成
-        for start, end in module_ranges:
-            block_shape = (end - start, end - start)
-            block_mask = self.rng.rand(*block_shape) < within_module_connection_prob
-            mask[start:end, start:end] = block_mask.astype(np.int8)
-
-        # モジュール間の結合を生成
         for module_idx in range(num_modules):
-            current_module_start, current_module_end = module_ranges[module_idx]
-            # module_idx + 1 == num_modulesのとき、IndexErrorになる。よって、%演算子を使うことで、module_idx + 1 == num_modulesのときは、0に戻るようにする。
-            next_module_start, next_module_end = module_ranges[(module_idx + 1) % num_modules]
+            write_block(module_idx, module_idx, within_module_connection_prob)
 
-            forward_block_shape = (
-                current_module_end - current_module_start,
-                next_module_end - next_module_start,
-            )
-            backward_block_shape = (
-                next_module_end - next_module_start,
-                current_module_end - current_module_start,
-            )
-
-            # 各モジュールを隣接モジュールと双方向に接続する。
-            forward_mask = self.rng.rand(*forward_block_shape) < between_module_connection_prob
-            backward_mask = self.rng.rand(*backward_block_shape) < between_module_connection_prob
-
-            mask[current_module_start:current_module_end, next_module_start:next_module_end] = forward_mask.astype(np.int8)
-            mask[next_module_start:next_module_end, current_module_start:current_module_end] = backward_mask.astype(np.int8)
+        # モジュール間の結合を生成: 各モジュールを隣接モジュールと双方向に接続する。
+        for module_idx in range(num_modules):
+            # module_idx + 1 == num_modules のとき IndexError になる。よって % 演算子で
+            # 0 に戻す(環状に隣接させる)。
+            next_idx = (module_idx + 1) % num_modules
+            write_block(module_idx, next_idx, between_module_connection_prob)
+            write_block(next_idx, module_idx, between_module_connection_prob)
 
         if not allow_self_connections:
             np.fill_diagonal(mask, 0)
 
         return mask
+
+    def _module_partition(self) -> list[np.ndarray]:
+        """モジュール分割をグローバルID集合のリストとして返す。
+
+        NetworkLayout に `module` 軸があればそれを採用し、無ければ config.num_modules で
+        グローバルID空間を等分する。ID が連続かどうかは問わない。
+        """
+        if self.layout is not None and self.layout.has_axis("module"):
+            return list(self.layout.ids_by("module").values())
+
+        num_modules = self.config.num_modules
+        if not isinstance(num_modules, int) or isinstance(num_modules, bool):
+            raise ValueError("num_modules must be an integer.")
+        if num_modules < 1:
+            raise ValueError("num_modules must be at least 1.")
+        if num_modules > self.num_neurons:
+            raise ValueError("num_modules must not exceed num_neurons.")
+
+        module_ids = []
+        for module_idx in range(num_modules):
+            start = int(module_idx * self.num_neurons / num_modules)
+            end = int((module_idx + 1) * self.num_neurons / num_modules)
+            module_ids.append(np.arange(start, end))
+        return module_ids

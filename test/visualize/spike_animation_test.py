@@ -6,7 +6,7 @@ import numpy as np
 root_path = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(root_path))
 
-from src.utils.visualize.spike_animation import _compute_decay_intensity  # noqa: E402
+from src.utils.plotting.animation import _compute_decay_intensity  # noqa: E402
 
 
 def test_compute_decay_intensity_uses_exponential_decay():

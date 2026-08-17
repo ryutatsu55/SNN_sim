@@ -192,6 +192,52 @@ class GeNNSimulator:
             values[syn_pop_name] = np.copy(syn_pop.vars[var_name].values)
         return values
 
+    def _iter_synapse_index(self):
+        """(集団名, GeNN シナプス集団, SynapseIndex) を **COO の連結順**で列挙する。
+
+        `synapse_connectivity_coo()` と `pull_synapse_coo()` が並びを共有するための
+        唯一の走査。両者が別々にループすると、`connectivity.npz` の row/col と
+        `weights_*h.npz` の data がずれ、重みが別のシナプスに対応づけられたまま
+        **無言で誤った図と指標**が出る。
+        """
+        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
+            index = self.builder.synapse_index.get(syn_pop_name)
+            if index is None:
+                raise KeyError(
+                    f"synapse_index に '{syn_pop_name}' がありません。"
+                    " NetworkBuilder.build() を経ずに構築されたモデルの可能性があります。"
+                )
+            yield syn_pop_name, syn_pop, index
+
+    def synapse_connectivity_coo(self) -> Dict[str, Any]:
+        """結合構造だけを COO で返す (値は含まない)。
+
+        Returns:
+            row / col       : int32, グローバル pre/post ID
+            pair_names      : シナプス集団名 (連結順)
+            pair_offsets    : 各集団の開始位置 (末尾に総数)
+            shape           : (total_neurons, total_neurons)
+
+        構造はシミュレーション中に変わらないので、run につき 1 回保存すれば足りる
+        (`connectivity.npz`)。各記録時刻の `weights_*h.npz` は値だけを持てばよい。
+        """
+        rows, cols = [], []
+        pair_names, pair_offsets = [], [0]
+        for syn_pop_name, _syn_pop, index in self._iter_synapse_index():
+            rows.append(index.global_src)
+            cols.append(index.global_tgt)
+            pair_names.append(syn_pop_name)
+            pair_offsets.append(pair_offsets[-1] + index.num_synapses)
+
+        empty_i = np.array([], dtype=np.int32)
+        return {
+            "row": np.concatenate(rows) if rows else empty_i,
+            "col": np.concatenate(cols) if cols else empty_i,
+            "pair_names": np.array(pair_names, dtype=object),
+            "pair_offsets": np.array(pair_offsets, dtype=np.int64),
+            "shape": np.array([self.total_neurons, self.total_neurons], dtype=np.int64),
+        }
+
     def pull_synapse_coo(self, var_name: str) -> Dict[str, Any]:
         """シナプス変数をグローバルID空間の COO 形式で引き上げる。
 
@@ -203,18 +249,11 @@ class GeNNSimulator:
             shape           : (total_neurons, total_neurons)
 
         連結順は集団ごとの「ペア major」であり、グローバルにソートはしない
-        (数千万要素のソートを記録のたびに払わないため)。
+        (数千万要素のソートを記録のたびに払わないため)。`synapse_connectivity_coo()` と
+        同じ走査を使うので、row/col と data の並びは必ず一致する。
         """
-        rows, cols, datas = [], [], []
-        pair_names, pair_offsets = [], [0]
-
-        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
-            index = self.builder.synapse_index.get(syn_pop_name)
-            if index is None:
-                raise KeyError(
-                    f"synapse_index に '{syn_pop_name}' がありません。"
-                    " NetworkBuilder.build() を経ずに構築されたモデルの可能性があります。"
-                )
+        datas = []
+        for syn_pop_name, syn_pop, index in self._iter_synapse_index():
             syn_pop.vars[var_name].pull_from_device()
             values = np.asarray(syn_pop.vars[var_name].values, dtype=np.float32)
             if values.size != index.num_synapses:
@@ -222,22 +261,11 @@ class GeNNSimulator:
                     f"'{syn_pop_name}' の値数 {values.size} が記録済み接続数 "
                     f"{index.num_synapses} と一致しません。"
                 )
-            rows.append(index.global_src)
-            cols.append(index.global_tgt)
             datas.append(values)
-            pair_names.append(syn_pop_name)
-            pair_offsets.append(pair_offsets[-1] + values.size)
 
-        empty_i = np.array([], dtype=np.int32)
-        empty_f = np.array([], dtype=np.float32)
-        return {
-            "row": np.concatenate(rows) if rows else empty_i,
-            "col": np.concatenate(cols) if cols else empty_i,
-            "data": np.concatenate(datas) if datas else empty_f,
-            "pair_names": np.array(pair_names, dtype=object),
-            "pair_offsets": np.array(pair_offsets, dtype=np.int64),
-            "shape": np.array([self.total_neurons, self.total_neurons], dtype=np.int64),
-        }
+        coo = self.synapse_connectivity_coo()
+        coo["data"] = np.concatenate(datas) if datas else np.array([], dtype=np.float32)
+        return coo
 
     def pull_synapse(self, var_name: str) -> np.ndarray:
         """
@@ -279,7 +307,7 @@ class GeNNSimulator:
         all_times = []
         all_global_ids = []
 
-        for pop_name in self.layout.names():
+        for pop_name in self.config.neurons:
             # GeNNからローカルデータを直接参照
             times, local_ids = self.model.neuron_populations[pop_name].spike_recording_data[0]
 

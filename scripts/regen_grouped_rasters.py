@@ -22,7 +22,9 @@ import numpy as np
 
 from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
-from src.utils.akita_soc import plot_raster
+from src.core.output_manager import AXES_NAME, CONFIG_NAME, locate, require
+from src.utils.experiments.akita_soc.runio import SPIKES, discover_records, record_glob
+from src.utils.plotting.raster import plot_raster
 
 # NetworkBuilder が参照するコンポーネントの登録をトリガーする
 import src.models.neurons.akita_escape_lif  # noqa: F401
@@ -37,33 +39,33 @@ import src.models.synapses.standard_models  # noqa: F401
 from scripts.akita_soc_fig2 import (
     PAPER_RASTER_XLIM_S,
     PAPER_RASTER_YLIM_NEURON,
-    discover_spike_files,
 )
 
 
 def find_run_dirs(base: Path) -> list[Path]:
     """base 自身、または base 以下で config.yaml と spikes_*h.npz を持つ run ディレクトリを列挙。"""
-    if (base / "config.yaml").exists() and any(base.glob("spikes_*h.npz")):
+    if locate(base, CONFIG_NAME) is not None and any(base.glob(record_glob(SPIKES))):
         return [base]
     run_dirs = set()
-    for spike_path in base.rglob("spikes_*h.npz"):
+    for spike_path in base.rglob(record_glob(SPIKES)):
         run_dir = spike_path.parent
-        if (run_dir / "config.yaml").exists():
+        if locate(run_dir, CONFIG_NAME) is not None:
             run_dirs.add(run_dir)
     return sorted(run_dirs)
 
 
-def reconstruct_group_ids(config):
-    return NetworkLayout.from_config(config).ids_by_mode()
-
-
 def regen_run(run_dir: Path, manager: ConfigManager) -> int:
-    config = manager.load_resolved(run_dir / "config.yaml")
-    group_ids = reconstruct_group_ids(config)
-    spike_files = discover_spike_files(run_dir)
+    config = manager.load_resolved(require(run_dir, CONFIG_NAME))
+    layout = NetworkLayout.from_config(config)
+    # config だけでは再導出できない外部軸 (layer / module …) を読み戻す。
+    axes_path = locate(run_dir, AXES_NAME)
+    if axes_path is not None:
+        layout.load_axes_file(axes_path)
+    spike_files = discover_records(run_dir, SPIKES)
     count = 0
-    for hour, spike_path in spike_files:
-        spikes = np.load(spike_path)
+    for record in spike_files:
+        hour = record.hour
+        spikes = np.load(record.path)
         times = spikes["times"]
         ids = spikes["ids"]
         record_start_ms = hour * 60.0 * 60.0 * 1000.0
@@ -75,7 +77,7 @@ def regen_run(run_dir: Path, manager: ConfigManager) -> int:
             f"Raster {hour:g} h",
             xlim_s=PAPER_RASTER_XLIM_S,
             ylim_neuron=PAPER_RASTER_YLIM_NEURON,
-            group_ids=group_ids,
+            layout=layout,
         )
         count += 1
     return count

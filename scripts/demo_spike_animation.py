@@ -19,7 +19,8 @@ import src.models.synapses.standard_models
 import src.models.synapses.custom
 import src.models.plasticity.custom_Akita
 import src.models.plasticity.standard_models
-import src.utils.visualize as visualize
+import src.utils.plotting as plotting
+from src.utils.analysis.spikes import export_spike_csv
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.output_manager import create_run_output_dir
@@ -82,12 +83,13 @@ def main():
     video_path = output_dir / "spike_animation.mp4"
 
     print(f"Saving spike csv to {spike_csv_path} ...")
-    visualize.export_spike_csv(spike_times, spike_ids, output_path=spike_csv_path)
+    export_spike_csv(spike_times, spike_ids, output_path=spike_csv_path)
 
     print(f"Saving raster plot to {output_dir / raster_title} ...")
-    visualize.raster(spike_times, spike_ids, title=raster_title, save_path=output_dir)
+    plotting.plot_raster(spike_times, spike_ids, output_dir / raster_title, "Raster",
+                         layout=builder.layout)
 
-    visualize.network(
+    plotting.network(
         weights=builder.global_weights, 
         coords=builder.global_coords, 
         config=config,
@@ -95,7 +97,7 @@ def main():
     )
 
     print(f"Saving spike animation to {video_path} ...")
-    visualize.spike_animation(
+    plotting.spike_animation(
         spike_time=spike_times,
         neuron_id=spike_ids,
         coords=coords,

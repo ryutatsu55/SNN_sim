@@ -1,103 +1,54 @@
 import os
-import glob
-import re
+import sys
 import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import yaml
+from pathlib import Path
 
-def extract_hour(filename):
-    """ファイル名 (例: weights_6.0h.npz) から時間を抽出する"""
-    match = re.search(r'weights_(\d+\.?\d*)h\.npz', os.path.basename(filename))
-    if match:
-        return float(match.group(1))
-    return -1.0
+# 単体実行 (python -m ... でない直接実行) でも src パッケージを解決できるようにする
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
-def infer_group_ids(folder_path):
-    """config.yaml からグローバル ID を復元（visualize_weight_matrix.py と同じロジック）"""
-    config_path = os.path.join(folder_path, 'config.yaml')
-    if not os.path.exists(config_path):
-        print(f"警告: {config_path} が見つかりません。")
-        return None, None
+from src.core.config_manager import ConfigManager
+from src.core.layout import NetworkLayout
+from src.core.output_manager import AXES_NAME, CONFIG_NAME, data_dir, locate, require
+from src.utils.experiments.akita_soc.runio import WEIGHTS, discover_records, load_weight_matrix
 
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
 
-    simulation = config.get('simulation', {})
-    neurons = config.get('neurons', {})
-
-    if not neurons or 'seed' not in simulation:
-        print("警告: seed または neurons 設定が見つかりません。")
-        return None, None
-
-    total_neurons = int(simulation.get('N', sum(int(cfg['num']) for cfg in neurons.values())))
-    seed = int(simulation['seed'])
-    rng = np.random.RandomState(seed)
-
-    available_indices = np.arange(total_neurons)
-    excitatory_ids = []
-    inhibitory_ids = []
-
-    for cfg in neurons.values():
-        num_neurons = int(cfg['num'])
-        assigned = rng.choice(available_indices, size=num_neurons, replace=False)
-        available_indices = np.setdiff1d(available_indices, assigned)
-        assigned.sort()
-        mode = cfg.get('mode') or ''
-        if mode.startswith('excitatory'):
-            excitatory_ids.append(assigned)
-        elif mode.startswith('inhibitory'):
-            inhibitory_ids.append(assigned)
-
-    exc_ids = np.concatenate(excitatory_ids) if excitatory_ids else np.array([], dtype=np.int32)
-    inh_ids = np.concatenate(inhibitory_ids) if inhibitory_ids else np.array([], dtype=np.int32)
-
-    return exc_ids, inh_ids
-
-def load_weight_trajectories(folder_path, layout=None):
+def load_weight_trajectories(folder_path, layout):
     """
     フォルダ内のnpzファイルを読み込み、各シナプスの時間ごとの重みの軌跡を抽出する。
     グローバル ID ベースで興奮性・抑制性を区別して処理する。
     戻り値: (時間配列, トラジェクトリ辞書)
     トラジェクトリ辞書の各要素は (時間の数, シナプスの数) の2次元配列。
     """
-    npz_files = glob.glob(os.path.join(folder_path, 'weights_*h.npz'))
-    npz_files.sort(key=extract_hour)
+    records = discover_records(Path(folder_path), WEIGHTS)
 
-    if not npz_files:
+    if not records:
         print("警告: フォルダ内に weights_*h.npz が見つかりません。")
         return None, None
 
-    # layout(NetworkLayout)が与えられた場合はそれを使用
-    if layout is not None:
-        ids = layout.ids_by_mode()
-        exc_ids = ids["excitatory"]
-        inh_ids = ids["inhibitory"]
-    else:
-        exc_ids, inh_ids = infer_group_ids(folder_path)
-        if exc_ids is None or inh_ids is None:
-            return None, None
+    ids = layout.ids_by("polarity")
+    exc_ids = ids["excitatory"]
+    inh_ids = ids["inhibitory"]
 
     times = []
     traj_EE, traj_EI, traj_IE, traj_II = [], [], [], []
 
-    for file in npz_files:
-        times.append(extract_hour(file))
-        with np.load(file) as data:
-            array_key = data.files[0]
-            W = data[array_key]
+    for record in records:
+        times.append(record.hour)
+        # 密形式 (キー "weights") と COO 形式 (キー "data" + connectivity.npz) の両方を
+        # 扱えるローダを使う。npz のキーを直接見て 2 次元前提で添字すると、疎経路で
+        # 記録した run で落ちる。
+        W = load_weight_matrix(record.path)
 
-            # グローバル ID を使ってブロックを抽出
-            W_EE = W[np.ix_(exc_ids, exc_ids)]
-            W_EI = W[np.ix_(exc_ids, inh_ids)]
-            W_IE = W[np.ix_(inh_ids, exc_ids)]
-            W_II = W[np.ix_(inh_ids, inh_ids)]
-
-            traj_EE.append(W_EE.flatten())
-            traj_EI.append(W_EI.flatten())
-            traj_IE.append(W_IE.flatten())
-            traj_II.append(W_II.flatten())
+        # グローバル ID を使ってブロックを抽出
+        traj_EE.append(W[np.ix_(exc_ids, exc_ids)].flatten())
+        traj_EI.append(W[np.ix_(exc_ids, inh_ids)].flatten())
+        traj_IE.append(W[np.ix_(inh_ids, exc_ids)].flatten())
+        traj_II.append(W[np.ix_(inh_ids, inh_ids)].flatten())
 
     trajectories = {
         'W_EE': np.array(traj_EE),
@@ -108,11 +59,13 @@ def load_weight_trajectories(folder_path, layout=None):
 
     return np.array(times), trajectories
 
-def plot_figure2c(folder, output_dir=None, layout=None):
+def plot_figure2c(folder, layout, output_dir=None):
     if output_dir is None:
         output_dir = folder
 
-    metrics_path = os.path.join(folder, 'metrics.csv')
+    # organize_output() 後は csv/npz が data/ にあるので、読み込みはそちらを見る。
+    source_dir = str(data_dir(folder))
+    metrics_path = os.path.join(source_dir, 'metrics.csv')
 
     if not os.path.exists(metrics_path):
         print(f"エラー: {metrics_path} が見つかりません。")
@@ -126,7 +79,7 @@ def plot_figure2c(folder, output_dir=None, layout=None):
     csv_times = df['hour'].values
 
     # 左列用: npzファイル群からのトラジェクトリデータ生成
-    npz_times, trajectories = load_weight_trajectories(folder, layout=layout)
+    npz_times, trajectories = load_weight_trajectories(source_dir, layout=layout)
 
     # ==========================================
     # グラフの描画設定
@@ -202,7 +155,17 @@ def main():
     args = parser.parse_args()
 
     output_dir = args.output_dir if args.output_dir else args.folder
-    plot_figure2c(args.folder, output_dir)
+
+    # 保存物から NetworkLayout を復元する。config.yaml から自動軸 (population/mode/polarity)
+    # を再構築し、config だけでは再導出できない外部軸 (layer/module …) は layout_axes.npz
+    # から読み戻す。
+    config = ConfigManager().load_resolved(require(args.folder, CONFIG_NAME))
+    layout = NetworkLayout.from_config(config)
+    axes_path = locate(args.folder, AXES_NAME)
+    if axes_path is not None:
+        layout.load_axes_file(axes_path)
+
+    plot_figure2c(args.folder, layout, output_dir=output_dir)
 
 if __name__ == "__main__":
     main()

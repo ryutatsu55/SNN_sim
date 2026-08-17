@@ -3,7 +3,6 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 from src.core.registry import SPATIAL_MODELS
-from src.core.layout import LayoutPlan
 from pathlib import Path
 
 class BaseSpace(ABC):
@@ -13,22 +12,21 @@ class BaseSpace(ABC):
         self.num_neurons = num_neurons
         self.rng = rng
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
-        # 具象クラス側で実装したい場合に self.layout.items() / ids_by_mode() を参照する。
+        # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
         self.layout = layout
 
-    @classmethod
-    def describe_layout(cls, config, total_neurons: int) -> Optional[LayoutPlan]:
-        """任意フック: この空間モデルが構造層/割当方式を提供する場合に LayoutPlan を返す。
+    def describe_axes(self) -> Dict[str, Any]:
+        """任意フック: この空間モデルが定義するカテゴリ/ソート軸を宣言する。
 
-        `NetworkLayout.from_config` が(明示的な config.layout が無いフィールドについて)
-        参照する。空間構造そのものが構造層に一致するモデル(データ由来の層、モジュール
-        分割など)は、これをオーバーライドして層や `assignment` を宣言できる。
+        NetworkBuilder が `generate()` の**直後**に呼び、戻り値を
+        `NetworkLayout.add_axis()` へ注入する。生成後に呼ばれるので、自身が生成した
+        `self.coords` から軸を導出してよい(例: 空間モジュール、深さ、中心からの距離)。
 
-        - 既定は None → config.layout / 既定挙動(sequential・単一層)にフォールバック。
-        - **決定論的に**導出すること(GeNN ビルド無しの再構築性を保つため)。データ
-          ファイルや自身の config(space.yaml)から層数・層サイズ・割当を決めてよい。
+        Returns:
+            {軸名: 長さ num_neurons の配列}。カテゴリ名(文字列)でもソート用の数値でも
+            よい。既定は空 dict = 軸を定義しない。
         """
-        return None
+        return {}
 
     @abstractmethod
     def generate(self) -> Optional[np.ndarray]:
@@ -122,26 +120,43 @@ class RandomCircle2DSpace(BaseSpace):
 
 @SPATIAL_MODELS.register("block_2d")
 class Block2DSpace(BaseSpace):
+    """矩形モジュールに分割して一様ランダム配置する空間モデル。
+
+    モジュール分割は自身の `config.num_modules` で決める(NetworkLayout の軸を読みに
+    行かない)。分割結果は `describe_axes()` で **`module` 軸**として宣言し、
+    NetworkBuilder 経由で NetworkLayout に注入される。以降の結合生成や解析は
+    `layout.ids_by("module")` でこれを参照できる。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._module_labels: Optional[np.ndarray] = None
+
+    def describe_axes(self) -> Dict[str, Any]:
+        """モジュール分割を `module` 軸として宣言する(generate() 後に有効)。"""
+        if self._module_labels is None:
+            return {}
+        return {"module": self._module_labels}
+
     def generate(self):
         """四角形のモジュール領域を定義し、一様ランダムに配置する"""
         x_range = self.config.x_range
         y_range = self.config.y_range
-        
+
         gap_ratio = self.config.margin
 
         coords = np.zeros((self.num_neurons, 3), dtype=np.float32)
 
-        # --- 1. モジュール分割: NetworkLayout に複数の構造層があればそれを採用 ---
-        #        (層 = モジュール。層が無い/単一のときは従来通り num_modules で均等分割)
-        layers = self.layout.layers() if self.layout is not None else None
-        if layers is not None and len(layers) > 1:
-            num_modules = len(layers)
-            neurons_per_module = np.array([l.num for l in layers], dtype=int)
-        else:
-            num_modules = self.config.num_modules
-            neurons_per_module = np.full(num_modules, self.num_neurons // num_modules)
-            # 余りが出た場合、先頭のモジュールから順に1つずつ追加して吸収する
-            neurons_per_module[:self.num_neurons % num_modules] += 1
+        # --- 1. モジュール分割 (自身の config で完結。層の概念とは独立) ---
+        num_modules = self.config.num_modules
+        neurons_per_module = np.full(num_modules, self.num_neurons // num_modules)
+        # 余りが出た場合、先頭のモジュールから順に1つずつ追加して吸収する
+        neurons_per_module[:self.num_neurons % num_modules] += 1
+
+        # module 軸のラベル(describe_axes で NetworkLayout へ渡す)
+        self._module_labels = np.repeat(
+            [f"M{i}" for i in range(num_modules)], neurons_per_module
+        )
 
         # --- 2. グリッドの分割数とモジュール幾何 ---
         nx = int(np.ceil(np.sqrt(num_modules)))
@@ -189,9 +204,11 @@ class C_elegansSpace(BaseSpace):
     行順がそのまま正準グローバルID順になる。したがって:
 
     - ``generate()`` … X,Y,Z の実 3D 座標(CSV 行順)を返す。
-    - ``describe_layout()`` … ``Layer`` 列の連続ランを構造層(ブロック)として宣言し、
-      興奮性/抑制性(population)は **ランダム割当** (``assignment="random"``) とする。
-      これにより接続/重み行列は層でブロック対角に生成されつつ、E/I は層と無相関に散る。
+    - ``describe_axes()`` … ``Layer`` 列を **``layer`` 軸**として宣言する。
+
+    E/I を層と無相関に散らしたい場合は config 側で ``layout.assignment: random`` を
+    指定する(population 軸の割当は NetworkLayout 自身の管轄であり、空間モデルは
+    関与しない)。
     """
 
     _CSV_NAME = "ordered_coords.csv"
@@ -204,7 +221,7 @@ class C_elegansSpace(BaseSpace):
     def _load_ordered(cls, num_neurons: int) -> pd.DataFrame:
         """CSV を読み、先頭 num_neurons 行(= 正準グローバルID順)を返す。
 
-        generate() と describe_layout() が同じ行集合・同じ順序を共有し、座標と層境界の
+        generate() と describe_axes() が同じ行集合・同じ順序を共有し、座標と層ラベルの
         整合を保証するための単一の読み込み口。
         """
         df = pd.read_csv(cls._csv_path())
@@ -215,30 +232,18 @@ class C_elegansSpace(BaseSpace):
             )
         return df.iloc[:num_neurons].reset_index(drop=True)
 
-    @classmethod
-    def describe_layout(cls, config, total_neurons: int) -> LayoutPlan:
-        """Layer 列の連続ランを構造層とし、E/I をランダム割当にするプランを返す。"""
-        df = cls._load_ordered(total_neurons)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._layer_labels: Optional[np.ndarray] = None
 
-        # Layer 列の連続ラン → [(層名, ニューロン数), ...]。データは層順に整列済み。
-        pairs: List[tuple] = []
-        for lname in df["Layer"].tolist():
-            if pairs and pairs[-1][0] == lname:
-                pairs[-1] = (lname, pairs[-1][1] + 1)
-            else:
-                pairs.append((lname, 1))
-
-        # 同一層名が非連続に出現すると連続ブロック層にできない → 明示的にエラー。
-        names = [n for n, _ in pairs]
-        if len(names) != len(set(names)):
-            raise ValueError(
-                f"{cls._CSV_NAME} の Layer 列が層ごとに連続していません "
-                f"(出現順: {names})。層順にソートしてください。"
-            )
-
-        return LayoutPlan(layers=pairs, assignment="random")
+    def describe_axes(self) -> Dict[str, Any]:
+        """CSV の Layer 列を `layer` 軸として宣言する(generate() 後に有効)。"""
+        if self._layer_labels is None:
+            return {}
+        return {"layer": self._layer_labels}
 
     def generate(self) -> np.ndarray:
         """C. elegans のニューロン座標データから実 3D 座標を読み込む(CSV 行順)。"""
         df = self._load_ordered(self.num_neurons)
+        self._layer_labels = df["Layer"].to_numpy()
         return df[['X', 'Y', 'Z']].values.astype(np.float32)

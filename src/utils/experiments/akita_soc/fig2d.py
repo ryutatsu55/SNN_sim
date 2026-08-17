@@ -1,57 +1,24 @@
 import os
 import sys
-import glob
-import re
 import argparse
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import yaml
 
 # 単体実行 (python -m ... でない直接実行) でも src パッケージを解決できるようにする
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from src.utils.akita_soc import firing_rates
-from src.utils.visualize.akita_soc_fig2c import infer_group_ids
+from src.utils.analysis.spikes import firing_rates
+from src.utils.experiments.akita_soc.runio import SPIKES, discover_records
+from src.core.config_manager import ConfigManager
+from src.core.layout import NetworkLayout
+from src.core.output_manager import AXES_NAME, CONFIG_NAME, data_dir, locate, require
 
 
-def extract_hour(filename):
-    """ファイル名 (例: spikes_6.0h.npz) から時間を抽出する"""
-    match = re.search(r'spikes_(\d+\.?\d*)h\.npz', os.path.basename(filename))
-    if match:
-        return float(match.group(1))
-    return -1.0
-
-
-def _resolve_data_folder(folder):
-    """spikes_*h.npz が入っているフォルダを解決する。
-
-    指定 folder 直下になければ organize_output が作る folder/data/ を確認する。
-    どちらにも無ければ元の folder を返す (呼び出し側で警告)。
-    """
-    if glob.glob(os.path.join(folder, 'spikes_*h.npz')):
-        return folder
-    data_dir = os.path.join(folder, 'data')
-    if glob.glob(os.path.join(data_dir, 'spikes_*h.npz')):
-        return data_dir
-    return folder
-
-
-def resolve_group_ids(folder, layout=None):
-    """興奮性・抑制性のグローバル ID を取得する。
-
-    layout(NetworkLayout) が与えられた場合はそれを使用し、
-    無ければ config.yaml から infer_group_ids() で復元する。
-    """
-    if layout is not None:
-        ids = layout.ids_by_mode()
-        return np.sort(ids["excitatory"]), np.sort(ids["inhibitory"])
-
-    return infer_group_ids(folder)
-
-
-def load_firing_rate_series(folder, layout=None):
+def load_firing_rate_series(folder, layout):
     """spikes_*h.npz 群から各時刻のニューロン別発火レートを収集する。
 
     戻り値:
@@ -59,47 +26,43 @@ def load_firing_rate_series(folder, layout=None):
         rates: shape [T, N] のニューロン別発火レート (Hz)
         exc_ids, inh_ids: 興奮性・抑制性のグローバル ID
     """
-    npz_files = glob.glob(os.path.join(folder, 'spikes_*h.npz'))
-    npz_files.sort(key=extract_hour)
+    records = discover_records(Path(folder), SPIKES)
 
-    if not npz_files:
+    if not records:
         print(f"警告: フォルダ内に spikes_*h.npz が見つかりません: {folder}")
         return None, None, None, None
 
-    config_path = os.path.join(folder, 'config.yaml')
-    if not os.path.exists(config_path):
-        print(f"警告: {config_path} が見つかりません。")
+    config_path = locate(folder, CONFIG_NAME)
+    if config_path is None:
+        print(f"警告: {CONFIG_NAME} が見つかりません: {folder}")
         return None, None, None, None
 
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    simulation = config.get('simulation', {})
-    neurons = config.get('neurons', {})
-    total_neurons = int(simulation.get('N', sum(int(cfg['num']) for cfg in neurons.values())))
     record_window_ms = float(config.get('task', {}).get('record_window_ms', 0.0))
     if record_window_ms <= 0:
         print(f"警告: record_window_ms が不正です ({record_window_ms})。")
         return None, None, None, None
 
-    exc_ids, inh_ids = resolve_group_ids(folder, layout=layout)
-    if exc_ids is None or inh_ids is None:
-        return None, None, None, None
+    polarity_ids = layout.ids_by("polarity")
+    exc_ids, inh_ids = polarity_ids["excitatory"], polarity_ids["inhibitory"]
+    total_neurons = layout.total_neurons
 
     times = []
     rates = []
-    for file in npz_files:
-        times.append(extract_hour(file))
-        with np.load(file) as data:
+    for record in records:
+        times.append(record.hour)
+        with np.load(record.path) as data:
             ids = data['ids']
         rates.append(firing_rates(ids, total_neurons, record_window_ms))
 
     return np.array(times), np.array(rates), exc_ids, inh_ids
 
 
-def plot_figure2d(folder, output_dir=None, layout=None):
+def plot_figure2d(folder, layout, output_dir=None):
     """個々のニューロンの発火レート推移を散布図で描画する (興奮性=赤, 抑制性=青)。"""
-    data_folder = _resolve_data_folder(folder)
+    data_folder = str(data_dir(folder))
     if output_dir is None:
         output_dir = folder
 
@@ -152,7 +115,17 @@ def main():
     args = parser.parse_args()
 
     output_dir = args.output_dir if args.output_dir else args.folder
-    plot_figure2d(args.folder, output_dir)
+
+    # 保存物から NetworkLayout を復元する。config.yaml から自動軸 (population/mode/polarity)
+    # を再構築し、config だけでは再導出できない外部軸 (layer/module …) は layout_axes.npz
+    # から読み戻す。
+    config = ConfigManager().load_resolved(require(args.folder, CONFIG_NAME))
+    layout = NetworkLayout.from_config(config)
+    axes_path = locate(args.folder, AXES_NAME)
+    if axes_path is not None:
+        layout.load_axes_file(axes_path)
+
+    plot_figure2d(args.folder, layout, output_dir=output_dir)
 
 
 if __name__ == "__main__":

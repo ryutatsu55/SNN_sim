@@ -2,6 +2,7 @@ simulation:
   N: 100
   dt: 0.1
   seed: 1
+  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
 
 inputs:
   GaussianNoise:
@@ -13,15 +14,17 @@ neurons:
   Layer_Exc:
     type: akita_escape_lif
     mode: excitatory
+    polarity: excitatory
     num: 80
   Layer_Inh:
     type: akita_escape_lif
     mode: inhibitory
+    polarity: inhibitory
     num: 20
 
 synapses:
   from_Exc:
-    source: Layer_Exc
+    source: [Layer_Exc]
     plasticity:
       type: custom_Akita
       mode: e-stdp
@@ -30,7 +33,7 @@ synapses:
       type: ExpCond
       mode: excitatory
   from_Inh:
-    source: Layer_Inh
+    source: [Layer_Inh]
     plasticity:
       type: custom_Akita
       mode: i-stdp

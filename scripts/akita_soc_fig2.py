@@ -1,13 +1,10 @@
 import argparse
 import csv
 import os
-import re
-import shutil
 import sys
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/snn_sim_matplotlib")
 
@@ -18,25 +15,38 @@ if str(project_root) not in sys.path:
 from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import create_run_output_dir, create_timestamped_output_dir, organize_output
+from src.core.output_manager import (
+    AXES_NAME,
+    CONFIG_NAME,
+    CONNECTIVITY_NAME,
+    create_run_output_dir,
+    create_timestamped_output_dir,
+    locate,
+    organize_output,
+    require,
+)
 from src.core.simulator import GeNNSimulator
-from src.utils.akita_soc import (
+from src.utils.analysis.avalanche import split_avalanches
+from src.utils.analysis.criticality import (
     bimodality_d,
     burstiness_index,
     criticality_index_delta_cr,
-    diagnose_activity,
-    firing_rates,
-    spike_group_metrics,
-    log_likelihood_ratio_power_vs_exponential,
-    plot_avalanche_distribution,
-    plot_raster,
-    split_avalanches,
-    weight_block_metrics,
 )
-from src.utils.visualize.akita_soc_fig2c import plot_figure2c
-from src.utils.visualize.akita_soc_fig2d import plot_figure2d
-from src.utils.visualize.visualize import neuron_trace
-from src.utils.visualize.weight_track import visualize_weight_tracks
+from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
+from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
+from src.utils.analysis.weights import block_values, block_values_coo, weight_block_metrics
+from src.utils.experiments.akita_soc.fig2c import plot_figure2c
+from src.utils.experiments.akita_soc.runio import (
+    SPIKES,
+    WEIGHTS,
+    discover_records,
+    record_filename,
+)
+from src.utils.experiments.akita_soc.fig2d import plot_figure2d
+from src.utils.experiments.akita_soc.weight_track import visualize_weight_tracks
+from src.utils.plotting.distributions import plot_avalanche_distribution
+from src.utils.plotting.raster import plot_raster
+from src.utils.plotting.traces import neuron_trace
 
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
@@ -170,21 +180,6 @@ def capture_membrane_window(sim: GeNNSimulator, window_s: float, neuron_id: int)
     return V, I, spikes, actual_window_s
 
 
-def _to_python_native(obj):
-    if isinstance(obj, dict):
-        return {k: _to_python_native(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_to_python_native(v) for v in obj]
-    if isinstance(obj, np.generic):
-        return obj.item()
-    return obj
-
-
-def save_config(config, out_dir: Path):
-    with open(out_dir / "config.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump(_to_python_native(config.model_dump()), f, allow_unicode=True, sort_keys=False)
-
-
 def resolve_output_dir(out_dir_arg: str | None, suffix: str | None = None) -> Path:
     if out_dir_arg:
         output_dir = create_timestamped_output_dir(out_dir_arg, suffix=suffix)
@@ -197,7 +192,7 @@ def resolve_output_dir(out_dir_arg: str | None, suffix: str | None = None) -> Pa
 
 def get_group_ids(config, layout):
     # config は後方互換のため残置。興奮性/抑制性の分類は NetworkLayout に集約された。
-    return layout.ids_by_mode()
+    return layout.ids_by("polarity")
 
 
 def max_plasticity_weight(config) -> float:
@@ -209,47 +204,34 @@ def max_plasticity_weight(config) -> float:
     return max(wmax_values) if wmax_values else 1.0
 
 
-def parse_hour_from_spike_path(path: Path) -> float:
-    match = re.fullmatch(r"spikes_(.+)h\.npz", path.name)
-    if match is None:
-        raise ValueError(f"Invalid spike filename: {path.name}")
-    return float(match.group(1))
-
-
-def discover_spike_files(run_dir: Path) -> list[tuple[float, Path]]:
-    spike_files = []
-    for path in run_dir.glob("spikes_*h.npz"):
-        spike_files.append((parse_hour_from_spike_path(path), path))
-    return sorted(spike_files, key=lambda item: item[0])
-
-
 def replot_existing_output(run_dir: Path) -> None:
-    config_path = run_dir / "config.yaml"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Missing resolved config: {config_path}")
-
+    config_path = require(run_dir, CONFIG_NAME)
     manager = ConfigManager()
     config = manager.load_resolved(config_path)
     record_window_ms = float(config.task.record_window_ms)
     total_neurons = int(config.simulation.N)
-    spike_files = discover_spike_files(run_dir)
+    spike_files = discover_records(run_dir, SPIKES)
     if not spike_files:
         raise FileNotFoundError(f"No spikes_*h.npz files found in: {run_dir}")
 
     # ラスターをニューロングループ順に並べ替えるためのグループ割り当てを再構築する。
-    # NetworkLayout.from_config は config のニューロン順に連番割り当てを決定論的に行うため、
-    # GeNN コンパイルなしでも本番実行と同一のグローバルインデックス割当を再現できる。
-    group_ids = None
+    # NetworkLayout.from_config は config.layout.assignment (と seed) から割当を決定論的に
+    # 再構築するため、GeNN コンパイルなしでも本番実行と同一のグローバルインデックス割当が
+    # 得られる。
+    # config だけでは再導出できない外部軸 (layer / module …) は layout_axes.npz から読み戻す。
     layout = None
     try:
         layout = NetworkLayout.from_config(config)
-        group_ids = layout.ids_by_mode()
+        axes_path = locate(run_dir, AXES_NAME)
+        if axes_path is not None:
+            layout.load_axes_file(axes_path)
     except Exception as e:
-        print(f"  Warning: could not reconstruct group ids for grouped raster: {e}")
+        print(f"  Warning: could not reconstruct layout for grouped raster: {e}")
 
     metrics_rows = []
-    for hour, spike_path in spike_files:
-        spikes_npz = np.load(spike_path)
+    for record in spike_files:
+        hour = record.hour
+        spikes_npz = np.load(record.path)
         times = spikes_npz["times"]
         ids = spikes_npz["ids"]
         record_start_ms = hour * 60.0 * 60.0 * 1000.0
@@ -278,7 +260,7 @@ def replot_existing_output(run_dir: Path) -> None:
             f"Raster {hour:g} h",
             xlim_s=PAPER_RASTER_XLIM_S,
             ylim_neuron=PAPER_RASTER_YLIM_NEURON,
-            group_ids=group_ids,
+            layout=layout,
         )
         plot_avalanche_distribution(
             avalanche.sizes,
@@ -299,13 +281,13 @@ def replot_existing_output(run_dir: Path) -> None:
     print(f"\nGenerating visualizations...")
     try:
         print(f"  Figure 2c...")
-        plot_figure2c(str(run_dir), layout=layout)
+        plot_figure2c(str(run_dir), layout)
     except Exception as e:
         print(f"  Warning: Figure 2c generation failed: {e}")
 
     try:
         print(f"  Figure 2d...")
-        plot_figure2d(str(run_dir), layout=layout)
+        plot_figure2d(str(run_dir), layout)
     except Exception as e:
         print(f"  Warning: Figure 2d generation failed: {e}")
 
@@ -327,16 +309,35 @@ def main():
     #   同一 config を複数 seed で並列実行しても衝突しない。
     seed_tag = f"seed{config.simulation.seed}"
     out_dir = resolve_output_dir(args.out_dir, suffix=seed_tag)
-    save_config(config, out_dir)
-    shutil.copy2(args.config, out_dir / "source_config.yaml")
 
     model_name = f"{Path(args.config).stem}_{seed_tag}"
     builder = NetworkBuilder(config, model_name=model_name, code_gen_dir=args.genn_code_dir)
     genn_model, layout = builder.build(rec_spike=True)
+
+    # config.yaml (実 seed 入りの解決後 config) と source_config.yaml (入力の逐語コピー)。
+    # **build() の後**に呼ぶこと。network.sparse は生成時に実値 ("on"/"off") へ焼き込まれる
+    # ので、先に保存すると「どちらで走ったか」が記録に残らない。
+    manager.save_config(config, save_dir=out_dir)
+
+    # 外部軸 (layer / module など) は config だけからは復元できないので保存しておく。
+    # 解析側は config.yaml から自動軸を再構築し、これを load_axes_file() で読み戻す。
+    layout.save_axes(out_dir / AXES_NAME)
+
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
 
-    group_ids = layout.ids_by_mode()
+    # 疎経路では重み記録を COO の値だけに絞る (密行列は確保できない)。結合構造は
+    # シミュレーション中に変わらないので run につき 1 回だけ書く。row/col は
+    # pull_synapse_coo と同じ走査から得るので、値との並びが必ず一致する。
+    if builder.is_sparse:
+        connectivity = sim.synapse_connectivity_coo()
+        np.savez_compressed(
+            out_dir / CONNECTIVITY_NAME,
+            row=connectivity["row"], col=connectivity["col"], shape=connectivity["shape"],
+        )
+        print(f"  Saved connectivity: {connectivity['row'].size} synapses -> {CONNECTIVITY_NAME}")
+
+    group_ids = layout.ids_by("polarity")
     wmax = max_plasticity_weight(config)
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
@@ -361,10 +362,21 @@ def main():
         if not out_dir.exists():
             out_dir.mkdir(parents=True, exist_ok=True)
 
-        weights = sim.pull_synapse("w")
-        weights_path = out_dir / f"weights_{hour:g}h.npz"
+        # 疎経路では値だけを COO で保存する (row/col は connectivity.npz に 1 回だけ)。
+        # 密経路は従来どおり (N,N) 行列をキー "weights" で保存する。読み出し側は
+        # npz のキーで形式を判別するので、config を見る必要はない。
+        weights_path = out_dir / record_filename(WEIGHTS, hour)
+        if builder.is_sparse:
+            coo = sim.pull_synapse_coo("w")
+            weights = coo["data"]
+            weights_row, weights_col = coo["row"], coo["col"]
+            payload = {"data": weights}
+        else:
+            weights = sim.pull_synapse("w")
+            weights_row = weights_col = None
+            payload = {"weights": weights}
         try:
-            np.savez_compressed(weights_path, weights=weights)
+            np.savez_compressed(weights_path, **payload)
         except FileNotFoundError as e:
             print(f"Error saving {weights_path}: {e}")
             print(f"Output dir exists: {out_dir.exists()}, is_dir: {out_dir.is_dir()}")
@@ -394,7 +406,8 @@ def main():
         current_ms += record_window_steps * dt
         local_times = spikes["times"] - record_start_ms
         trace_local_times = trace_spikes["times"] - record_start_ms
-        np.savez_compressed(out_dir / f"spikes_{hour:g}h.npz", times=spikes["times"], ids=spikes["ids"])
+        np.savez_compressed(out_dir / record_filename(SPIKES, hour),
+                            times=spikes["times"], ids=spikes["ids"])
 
         avalanche = split_avalanches(local_times)
         rates = firing_rates(spikes["ids"], builder.total_neurons, record_window_ms)
@@ -417,15 +430,13 @@ def main():
                 record_window_ms,
             )
         )
-        row.update(
-            weight_block_metrics(
-                weights,
-                group_ids["excitatory"],
-                group_ids["inhibitory"],
-                wmax=wmax,
-                connection_mask=builder.global_mask,
-            )
-        )
+        # 疎版は O(nnz)。COO は実結合のみを持つので、密版に connection_mask を渡したのと
+        # 等価な分解になる (以降の統計は分解結果しか見ないので、列も完全に同じ)。
+        if builder.is_sparse:
+            blocks = block_values_coo(weights, weights_row, weights_col, layout)
+        else:
+            blocks = block_values(weights, layout, connection_mask=builder.global_mask)
+        row.update(weight_block_metrics(blocks, wmax=wmax))
         row.update(
             diagnose_activity(
                 mean_rate_hz=row["mean_rate_hz"],
@@ -441,7 +452,7 @@ def main():
             f"Raster {hour:g} h",
             xlim_s=PAPER_RASTER_XLIM_S,
             ylim_neuron=PAPER_RASTER_YLIM_NEURON,
-            group_ids=group_ids,
+            layout=layout,
         )
         plot_avalanche_distribution(
             avalanche.sizes,
@@ -477,19 +488,19 @@ def main():
     print(f"\nGenerating visualizations...")
     try:
         print(f"  Figure 2c...")
-        plot_figure2c(str(out_dir), layout=layout)
+        plot_figure2c(str(out_dir), layout)
     except Exception as e:
         print(f"  Warning: Figure 2c generation failed: {e}")
 
     try:
         print(f"  Figure 2d...")
-        plot_figure2d(str(out_dir), layout=layout)
+        plot_figure2d(str(out_dir), layout)
     except Exception as e:
         print(f"  Warning: Figure 2d generation failed: {e}")
 
     try:
         print(f"  Weight matrix tracks...")
-        visualize_weight_tracks(out_dir, layout=layout)
+        visualize_weight_tracks(out_dir, layout)
     except Exception as e:
         print(f"  Warning: Weight matrix visualization failed: {e}")
 

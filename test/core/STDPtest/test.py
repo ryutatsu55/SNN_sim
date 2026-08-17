@@ -15,7 +15,7 @@ from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
-import src.utils.visualize as visualize
+import src.utils.plotting as plotting
 
 # --- プラグイン(モデル)の登録トリガー ---
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
@@ -113,7 +113,7 @@ def main():
         
     print("=== Simulation Complete! ===")
     
-    # manager.save_resolved(config)
+    # manager.save_config(config)
 
     # 6. Readout (学習)
     # print("Training Readout layer...")
@@ -122,9 +122,9 @@ def main():
 
     # 7. 評価と可視化
     # I_in[:] += config.neurons["Layer_Exc"].Ioffset
-    # visualize.PQN_test(results[:,0], I_in[:,0], config)
+    # plotting.PQN_test(results[:,0], I_in[:,0], config)
 
-    # visualize.stdp_window(
+    # plotting.stdp_window(
     #     results,
     #     I_in,
     #     trial_results["times"],
@@ -133,13 +133,13 @@ def main():
     #     id = 0
     # )
 
-    visualize.stdp_window(
+    plotting.stdp_window(
         dw, 
         dt, 
         save_path="test/core/STDPtest"
         )
 
-    visualize.network(
+    plotting.network(
         weights=builder.global_weights, 
         coords=builder.global_coords, 
         config=config, 

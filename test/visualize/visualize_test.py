@@ -5,7 +5,7 @@ from pathlib import Path
 root_path = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(root_path))
 
-from src.utils.visualize import export_spike_csv  # noqa: E402
+from src.utils.analysis.spikes import export_spike_csv  # noqa: E402
 
 
 def test_export_spike_csv_saves_expected_rows(tmp_path):

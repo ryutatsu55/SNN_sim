@@ -2,10 +2,17 @@ constant_prob:
   p: 0.5
   allow_self_connections: false
 
+# 全結合 (p=1.0) では **密生成のほうが軽い**ので、メイン config に
+#   network:
+#     sparse: off
+# を明示すること。疎 (COO) は 1 シナプスあたり 16 バイト (row/col int32 + weight/delay
+# float32) を持つので nnz=N² だと 16N² になり、密の 9N² (mask int8 + weight/delay float32)
+# を上回る。`auto` は「疎対応なら疎」を選ぶだけで結合の密度を見ないため、判断はユーザー側。
 constant_prob_full:
   p: 1.0
   allow_self_connections: false
 
+# 上記 constant_prob_full と同じく、全結合なので network.sparse: off を推奨。
 constant_prob_full_autapse:
   p: 1.0
   allow_self_connections: true

@@ -7,7 +7,13 @@
 を時刻ごとに出し、遷移時刻 = 最初に max w >= 0.99 になった hour とみなす。
 """
 import glob, os, re, sys
+from pathlib import Path
+
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.core.output_manager import data_dir
+from src.utils.experiments.akita_soc.runio import SPIKES, WEIGHTS, discover_records
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "outputs/akita_soc_delay"
 N = 100
@@ -16,10 +22,6 @@ WINDOW_S = 600.0  # record_window_ms=600000 ms = 10 min
 def seed_of(p):
     m = re.search(r"_seed(\d+)", p)
     return int(m.group(1)) if m else -1
-
-def hour_of(p):
-    m = re.search(r"_(\d+)h\.npz$", p)
-    return int(m.group(1)) if m else None
 
 dirs = sorted(glob.glob(os.path.join(BASE, "*_seed*/")), key=seed_of)
 if not dirs:
@@ -30,11 +32,10 @@ print("-" * 80)
 rows = []
 for d in dirs:
     s = seed_of(d)
-    # weights / spikes は run直下 or data/ サブdir のどちらかにある
-    wfiles = glob.glob(os.path.join(d, "weights_*h.npz")) + glob.glob(os.path.join(d, "data", "weights_*h.npz"))
-    sfiles = glob.glob(os.path.join(d, "spikes_*h.npz")) + glob.glob(os.path.join(d, "data", "spikes_*h.npz"))
-    wbyh = {hour_of(f): f for f in wfiles if hour_of(f) is not None}
-    sbyh = {hour_of(f): f for f in sfiles if hour_of(f) is not None}
+    # weights / spikes は run直下 or data/ サブdir のどちらかにある (data_dir が吸収する)
+    records_dir = data_dir(Path(d))
+    wbyh = {r.hour: r.path for r in discover_records(records_dir, WEIGHTS)}
+    sbyh = {r.hour: r.path for r in discover_records(records_dir, SPIKES)}
     hours = sorted(set(wbyh) | set(sbyh))
     if not hours:
         print(f"{s:>4} | {'(none)':>6} |"); continue
@@ -51,12 +52,12 @@ for d in dirs:
                 d_ = np.load(sbyh[h]); ids = d_[d_.files[0]] if "ids" not in d_.files else d_["ids"]
                 rt = ids.size / (N * WINDOW_S)
             except Exception: rt = None
-        rates.append(f"{h}h:{rt:.2f}" if rt is not None else f"{h}h:?")
+        rates.append(f"{h:g}h:{rt:.2f}" if rt is not None else f"{h:g}h:?")
         if trans is None and mx is not None and mx >= 0.99:
             trans = h
     last = hours[-1]
     rows.append((s, trans))
-    print(f"{s:>4} | {last:>6} | {str(trans):>12} | " + " ".join(rates))
+    print(f"{s:>4} | {last:>6g} | {str(trans):>12} | " + " ".join(rates))
 
 done = [t for _, t in rows if t is not None]
 print("-" * 80)

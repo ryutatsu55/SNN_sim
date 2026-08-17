@@ -16,7 +16,7 @@ from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
-import src.utils.visualize as visualize
+import src.utils.plotting as plotting
 
 # --- プラグイン(モデル)の登録トリガー ---
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
@@ -102,7 +102,7 @@ def main():
         
     print("=== Simulation Complete! ===")
     
-    manager.save_resolved(config)
+    manager.save_config(config)
 
     # 6. Readout (学習)
     # print("Training Readout layer...")
@@ -112,9 +112,9 @@ def main():
     # 7. 評価と可視化
     # I_in = data_loader.reconstruct(trial_inputs)
     I_in[:] += config.neurons["Layer_Exc"].Ioffset
-    # visualize.PQN_test(results[:,0], I_in[:,0], config)
+    # plotting.PQN_test(results[:,0], I_in[:,0], config)
 
-    visualize.neuron_test(
+    plotting.neuron_test(
         results,
         I_in,
         trial_results["times"],
@@ -124,19 +124,20 @@ def main():
         save_path="test/core/TransTest"
     )
 
-    visualize.network(
+    plotting.network(
         weights=builder.global_weights, 
         coords=builder.global_coords, 
         config=config,
         save_path="test/core/TransTest"
         )
 
-    # visualize.raster(
-    #     trial_results["times"], 
-    #     trial_results["ids"], 
-    #     tmax=config.task.duration/1000, 
-    #     idmax=builder.total_neurons, 
-    #     save_path="raster.png"
+    # plotting.plot_raster(
+    #     trial_results["times"],
+    #     trial_results["ids"],
+    #     Path("test/core/TransTest/raster.png"),
+    #     "Raster",
+    #     xlim_s=(0.0, config.task.duration / 1000),
+    #     layout=layout,
     #     )
 
 if __name__ == "__main__":

@@ -35,5 +35,6 @@ block_2d:
 
 "C.elegans":
   # C_elegansSpace は ordered_coords.csv から実3D座標と Layer(IN1..IN4) を読む。
-  # 層構造と assignment=random は describe_layout() が供給するためパラメータは不要。
+  # 層(layer 軸)は describe_axes() が Layer 列から宣言するためパラメータは不要。
+  # E/I をランダム散布したい場合はメイン config で layout.assignment: random を指定する。
   source: ordered_coords.csv
