@@ -292,10 +292,11 @@ class AxonGrowthTopology(BaseConnection):
     2. セグメント本数 = floor(L / `segment_length`)。0 本 (= 出力を持たない) も論文どおり許容
     3. 方向は角度のランダムウォーク: theta[k] = theta[k-1] + N(0, `angle_sigma`)。
        theta[0] は一様。sigma が小さい (0.1 rad) ので "pseudo-straight" な軌跡になる
-    4. 伸長先が `network.area` の外なら境界処理 (既定は壁沿いへの偏向) を行い、
-       **軸索は領域外へ出ない**
-    5. セグメントと細胞体の距離が `dendrite_radius` 以下なら、その交差ごとに独立に
-       確率 `connection_prob` で結合を張る
+    4. セグメントが 1 点でも `network.area` の外を通るなら境界処理 (既定は壁沿いへの偏向)
+       を行い、**軸索は領域外へ出ない**。判定は端点ではなく線分全体
+       (`BaseArea.segment_inside`) なので、セグメント長より狭い空隙も飛び越えない
+    5. セグメントと細胞体の距離が `dendrite_radius` 以下で、**かつ接触点から細胞体まで
+       領域内を見通せる**なら、その交差ごとに独立に確率 `connection_prob` で結合を張る
 
     config:
         mean_axon_length, segment_length, angle_sigma, dendrite_radius [um]
@@ -399,9 +400,12 @@ class AxonGrowthTopology(BaseConnection):
             cand = base + p.segment_length * u
 
             # 4. 境界処理。領域外に出た軸索だけを壁沿いへ寄せる。
+            #    判定は端点ではなく**線分全体**で行う。端点だけを見ると、セグメント長
+            #    (100 um) より狭い空隙は「行き先が内部」なので通過してしまい、軸索が
+            #    孤立した部分領域へ飛び移ってしまう (modular_4 の円↔ブリッジ間 40 um)。
             if p.boundary != "stop":
                 for _ in range(p.max_deflect):
-                    out = ~self.area.contains(cand)
+                    out = ~self.area.segment_inside(base, cand)
                     if not out.any():
                         break
                     nv = self.area.normal(cand[out])       # 外向き単位法線
@@ -418,8 +422,8 @@ class AxonGrowthTopology(BaseConnection):
                     cand[out] = base[out] + p.segment_length * u[out]
                 theta[act] = np.arctan2(u[:, 1], u[:, 0])
 
-            # 偏向しても領域内に入れないもの (凹の袋小路) はここで打ち切る。
-            outside = ~self.area.contains(cand)
+            # 偏向しても領域内に収まらないもの (凹の袋小路) はここで打ち切る。
+            outside = ~self.area.segment_inside(base, cand)
             if outside.any():
                 alive[act[outside]] = False
 
@@ -500,6 +504,16 @@ class AxonGrowthTopology(BaseConnection):
             # GaussianDistanceTypeTopology のように対角のドローを消費して捨てる必要がない。
             if not p.allow_self:
                 hit &= own[seg_idx] != flat_j
+            if not hit.any():
+                continue
+
+            # 樹状突起も領域の外へは出られない。ユークリッド距離だけで判定すると、
+            # 半径 (150 um) より狭い空隙の向こう側にある細胞体に届いてしまう
+            # (modular_4 では孤立した円とブリッジの間 40 um)。接触点から細胞体までが
+            # 領域内を通ること = 見通しが立つことを要求する。**抽選より前**に落とすのは、
+            # 「そもそも接触していない」ものに乱数を消費させないため (自己結合と同じ方針)。
+            contact = a[seg_idx] + t[:, None] * ab
+            hit[hit] &= self.area.segment_inside(contact[hit], soma[flat_j[hit]])
             if not hit.any():
                 continue
             seg_idx, flat_j = seg_idx[hit], flat_j[hit]

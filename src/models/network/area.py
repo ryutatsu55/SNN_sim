@@ -88,6 +88,30 @@ class BaseArea(ABC):
         # 境界処理の呼び出し元が「外にいる点」を渡す限り起きないが、0 除算は避ける。
         return np.divide(g, norm, out=np.zeros_like(g), where=norm > 1e-12)
 
+    # 線分の内外判定を何点でサンプルするか。軸索セグメント (100 um) なら分解能 ~6.7 um。
+    # これより細い空隙・くびれは検出できず飛び越えられてしまうので、そういう形状を扱う
+    # ときは派生クラスで上げること。
+    _SEGMENT_SAMPLES = 16
+
+    def segment_inside(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """線分 a→b が**全体として**領域内にあるか。(m, 2), (m, 2) -> (m,) bool。
+
+        `contains()` は点しか見ないので、凹形状や非連結な領域では両端点が内部でも途中が
+        外に出る — つまり空隙を飛び越えられる。軸索の 1 ステップ (100 um) は
+        `modular_4` の円とブリッジの隙間 (40 um) より長いので、端点だけの判定では
+        孤立した部分領域の間を軸索が渡ってしまう。それを塞ぐための判定。
+
+        汎用実装は線分上の等間隔サンプル。**凸領域では端点だけで厳密に決まる**ので、
+        `DiskArea` / `RectArea` はこれを O(1) に上書きしている。
+        """
+        a = np.atleast_2d(np.asarray(a, dtype=np.float64))
+        b = np.atleast_2d(np.asarray(b, dtype=np.float64))
+        if len(a) == 0:
+            return np.zeros(0, dtype=bool)
+        s = np.linspace(0.0, 1.0, self._SEGMENT_SAMPLES)[None, :, None]
+        pts = a[:, None, :] * (1.0 - s) + b[:, None, :] * s
+        return self.contains(pts.reshape(-1, 2)).reshape(len(a), -1).all(axis=1)
+
     # 棄却サンプリングの 1 回あたりの倍率と上限試行回数。
     _REJECT_OVERSAMPLE = 4
     _REJECT_MAX_ROUNDS = 1000
@@ -162,6 +186,10 @@ class NoSpaceArea(BaseArea):
     def contains(self, points: np.ndarray) -> np.ndarray:
         return np.ones(len(np.atleast_2d(points)), dtype=bool)
 
+    def segment_inside(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """平面全体が領域なので常に True。サンプリングを回す意味がない。"""
+        return np.ones(len(np.atleast_2d(np.asarray(a, dtype=np.float64))), dtype=bool)
+
     def sample(self, n: int, rng: np.random.RandomState) -> np.ndarray:
         raise ValueError(
             "network.area='no_space' は無界なので一様サンプリングできません。"
@@ -189,6 +217,10 @@ class DiskArea(BaseArea):
         d = np.asarray(points, dtype=np.float64) - self.center
         norm = np.linalg.norm(d, axis=-1, keepdims=True)
         return np.divide(d, norm, out=np.zeros_like(d), where=norm > 1e-12)
+
+    def segment_inside(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """円板は凸なので、両端点が内部なら線分も内部。サンプリング不要で厳密。"""
+        return self.contains(a) & self.contains(b)
 
     @property
     def bounds(self) -> np.ndarray:
@@ -238,6 +270,10 @@ class RectArea(BaseArea):
         inside = np.minimum(np.max(q, axis=-1), 0.0)
         return outside + inside
 
+    def segment_inside(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """矩形は凸なので、両端点が内部なら線分も内部。サンプリング不要で厳密。"""
+        return self.contains(a) & self.contains(b)
+
     @property
     def bounds(self) -> np.ndarray:
         return np.array([self.lo, self.hi])
@@ -267,6 +303,9 @@ class CompositeArea(BaseArea):
 
     `parts` は入れ子にできる (part 自体を `type: composite` にする) ので、いくらでも
     複雑な形にできる。例: 4 つの円 + 十字のブリッジ = モジュール構造。
+
+    合成結果は凹にも非連結にもなりうる (parts が重なっていなければ部分領域は孤立する) ので、
+    `segment_inside()` は凸形状のような端点だけの近道が使えず、基底のサンプリング実装を使う。
 
     ※ `parts` の各要素は素の dict のまま渡ってくる (`ComponentConfig` は extra='allow'
       なので入れ子は pydantic モデル化されない)。子クラスが CLAUDE.md どおり属性アクセス

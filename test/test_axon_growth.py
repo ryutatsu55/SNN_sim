@@ -1,9 +1,11 @@
 """エリア (area.py) と軸索伸長コネクタ (AxonGrowthTopology) の回帰テスト。
 
-守りたい不変条件は 3 つ:
-  1. 軸索はエリアの外へ出ない (どんな複雑形状でも)
-  2. エリアは RandomState を消費しない (消費すると既存ネットワークの実現が全部変わる)
-  3. DiskArea のドロー順は RandomCircle2DSpace と一致する (エリアベースへの移行が無コスト)
+守りたい不変条件は 4 つ:
+  1. 軸索はエリアの外へ出ない (どんな複雑形状でも)。**端点だけでなく線分全体が**内部で
+     あること — 端点しか見ないとセグメント長より狭い空隙を飛び越えてしまう
+  2. 互いに接触していない部分領域の間に結合は生まれない (軸索も樹状突起も空隙を越えない)
+  3. エリアは RandomState を消費しない (消費すると既存ネットワークの実現が全部変わる)
+  4. DiskArea のドロー順は RandomCircle2DSpace と一致する (エリアベースへの移行が無コスト)
 """
 
 import sys
@@ -92,6 +94,47 @@ class TestAreaGeometry(unittest.TestCase):
         self.assertEqual(idx[0], 0)
         self.assertEqual(idx[1], 3)
         self.assertIn(idx[2], (4, 5))
+
+    def test_segment_inside_detects_a_gap_between_parts(self):
+        """非連結な複合領域では、両端点が内部でも途中が外に出る線分を弾くこと。
+
+        modular_4 の円 (中心 (-500,-500), r=400) と横棒 (y in [-60,60]) の間には
+        40 um の空隙がある。両端がそれぞれの内部にある線分は `contains` の端点判定を
+        通ってしまうが、`segment_inside` は落とさなければならない。
+        """
+        area = Modular4Area(MODULAR_SPEC)
+        a = np.array([[-500.0, -150.0],    # 円の内部 (境界まで 50 um)
+                      [-500.0, -500.0]])   # 円の中心
+        b = np.array([[-500.0, -30.0],     # 横棒の内部
+                      [-400.0, -500.0]])   # 同じ円の内部
+        np.testing.assert_array_equal(area.contains(a), [True, True])
+        np.testing.assert_array_equal(area.contains(b), [True, True])
+        # 1 本目は空隙をまたぐので False、2 本目は円の中で閉じているので True
+        np.testing.assert_array_equal(area.segment_inside(a, b), [False, True])
+
+    def test_convex_segment_inside_matches_sampling(self):
+        """凸形状の解析的オーバーライドが、基底のサンプリング実装と一致すること。
+
+        `DiskArea` / `RectArea` は「端点が内部なら線分も内部」に短絡している。凸なので
+        厳密なはずだが、取り違えるとサンプリング版とズレる。
+        """
+        rng = np.random.RandomState(0)
+        for area in (DiskArea(_cfg(radius=300.0, center=[10.0, -20.0])),
+                     RectArea(_cfg(x_range=[0.0, 400.0], y_range=[-100.0, 250.0]))):
+            with self.subTest(area=type(area).__name__):
+                lo, hi = area.bounds
+                a = rng.uniform(lo - 50.0, hi + 50.0, size=(500, 2))
+                b = rng.uniform(lo - 50.0, hi + 50.0, size=(500, 2))
+                np.testing.assert_array_equal(
+                    area.segment_inside(a, b),
+                    BaseArea.segment_inside(area, a, b),
+                )
+
+    def test_no_space_segment_inside_is_always_true(self):
+        area = NoSpaceArea(_cfg())
+        a = np.array([[0.0, 0.0], [1e9, 1e9]])
+        b = np.array([[1e9, -1e9], [-1e9, 0.0]])
+        np.testing.assert_array_equal(area.segment_inside(a, b), [True, True])
 
     def test_no_space_is_unbounded_and_refuses_sampling(self):
         area = NoSpaceArea(_cfg())
@@ -187,6 +230,43 @@ class TestAxonGrowth(unittest.TestCase):
                 verts = np.vstack([starts, ends])
                 self.assertTrue(area.contains(verts).all(),
                                 f"{int((~area.contains(verts)).sum())} 頂点がエリア外")
+
+    def test_axon_segments_never_cross_a_void(self):
+        """頂点だけでなく**線分の内部**も領域内であること。
+
+        modular_4 は円とブリッジが 40 um 離れた 5 つの孤立成分なので、セグメント長
+        100 um の軸索は端点判定だけだと空隙を飛び越えられる (修正前は 891 本中 104 本が
+        実際に飛んでいた)。中点が外に出ていないことも併せて見る。
+        """
+        area = Modular4Area(MODULAR_SPEC)
+        conn, _ = self._build(area)
+        starts, ends, owner, _ = conn._grow_axons(conn._params())
+        self.assertGreater(owner.size, 0)
+
+        mid_out = ~area.contains(0.5 * (starts + ends))
+        self.assertFalse(mid_out.any(), f"{int(mid_out.sum())} セグメントの中点がエリア外")
+        inside = area.segment_inside(starts, ends)
+        self.assertTrue(inside.all(), f"{int((~inside).sum())} セグメントが領域外を通過")
+
+    def test_no_synapses_between_isolated_components(self):
+        """接触していない部分領域の間には結合が生まれないこと。
+
+        modular_4 の 6 parts は「4 円 + 十字 (矩形 2 枚は互いに交差)」= 5 連結成分。
+        軸索の空隙ジャンプと、樹状突起半径 (150 um) が空隙 (40 um) を越えて届くことの
+        両方を塞げていれば 0 件になる (修正前は 38404 本中 4240 本 = 11%)。
+        """
+        area = Modular4Area(MODULAR_SPEC)
+        conn, coords = self._build(area)
+        rows, cols = conn.generate_sparse()
+        self.assertGreater(rows.size, 0)
+
+        # part index -> 連結成分 index。part 4, 5 (十字の 2 枚) は交差しているので 1 成分。
+        component = np.minimum(area.part_of(coords[:, :2]), 4)
+        crossing = component[rows] != component[cols]
+        self.assertFalse(
+            crossing.any(),
+            f"孤立成分をまたぐ結合が {int(crossing.sum())} / {rows.size} 本ある",
+        )
 
     def test_boundary_modes_all_stay_inside(self):
         area = DiskArea(_cfg(radius=800.0))

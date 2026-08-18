@@ -21,9 +21,15 @@ rect:
   x_range: [0.0, 1500.0]  # um
   y_range: [0.0, 1500.0]  # um
 
-# 4 モジュール (円) を十字のブリッジ (矩形) で連結したモジュール構造。
-# part の index が AreaUniformSpace によって `module` 軸になるので、
-# 以降 layout.ids_by("module") で M0..M5 を参照できる。
+# 4 モジュール (円) と十字の矩形 2 枚。part の index が AreaUniformSpace によって
+# `module` 軸になるので、以降 layout.ids_by("module") で M0..M5 を参照できる。
+#
+# **注意: ブリッジは円に届いていない。** 円中心 (±500) から矩形の最近点までは 440 um で
+# 半径 400 um を上回るため 40 um の隙間があり、この領域は「4 円 + 十字」の
+# **5 つの独立した連結成分**になる (矩形 2 枚は互いに交差しているので 1 成分)。
+# 結合はこの空隙を越えない (軸索も樹状突起も BaseArea.segment_inside で遮られる) ので、
+# 4 モジュールは完全に独立したサブネットワークになる。連結させたい場合は矩形の半幅を
+# 100 um より大きくすること (150 なら面積 2.460 mm^2、400 neurons/mm^2 で N=984)。
 modular_4:
   op: union
   parts:
@@ -36,6 +42,7 @@ modular_4:
 
 # modular_4 を 2.01 倍に拡大したもの。面積 8.997 mm^2 なので 400 neurons/mm^2 で
 # N = 3599 ~ 3600 になり、criticality_test.yaml が想定する規模と密度に揃う。
+# modular_4 と同じく**ブリッジは円に届いておらず** (隙間 80.4 um)、5 つの独立成分になる。
 modular_4_3mm:
   op: union
   parts:
