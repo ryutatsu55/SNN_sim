@@ -19,52 +19,27 @@ import numpy as np
 # プロジェクトルートにパスを通す
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.utils.analysis.connectivity import (
+    bridge_hop_matrix,
+    format_group_connection_probability,
+    format_hop_connection_probability,
+    group_connection_probability,
+    hop_connection_probability,
+)
 from src.utils.plotting.area import plot_area
-from src.utils.plotting.network import (
-    network,
-    plot_connection_mask_coarse,
+from src.utils.plotting.distributions import (
     plot_delay_distribution,
-    plot_empirical_connection_probability,
+    plot_distance_distribution,
     plot_weight_distributions,
 )
+from src.utils.plotting.matrices import (
+    plot_connection_mask_coarse,
+    plot_empirical_connection_probability,
+)
+from src.utils.plotting.network import axon_network, network
+from src.utils.plotting.ordering import DEFAULT_ORDER_AXES
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _coo_from_builder(builder):
-    """NetworkBuilder の生成結果を COO (row, col, weights, delays[ms]) に正規化する。
-
-    疎経路なら sparse_* をそのまま、密経路ならマスクの非零要素を抜き出す。
-    """
-    if builder.is_sparse:
-        return (
-            np.asarray(builder.sparse_rows, dtype=np.int64),
-            np.asarray(builder.sparse_cols, dtype=np.int64),
-            np.asarray(builder.sparse_weights, dtype=np.float64),
-            np.asarray(builder.sparse_delays, dtype=np.float64),
-        )
-    mask = np.asarray(builder.global_mask)
-    row, col = np.nonzero(mask)
-    return (
-        row.astype(np.int64),
-        col.astype(np.int64),
-        np.asarray(builder.global_weights)[row, col].astype(np.float64),
-        np.asarray(builder.global_delays)[row, col].astype(np.float64),
-    )
-
-
-def _dense_weights(builder):
-    """空間ネットワーク図 (plotting.network.network) 用に密な重み行列 (N, N) を得る。
-
-    密経路なら global_weights をそのまま、疎経路なら COO から復元する。
-    """
-    if builder.global_weights is not None:
-        return np.asarray(builder.global_weights)
-    total = builder.total_neurons
-    W = np.zeros((total, total), dtype=np.float64)
-    W[np.asarray(builder.sparse_rows, dtype=np.int64),
-      np.asarray(builder.sparse_cols, dtype=np.int64)] = builder.sparse_weights
-    return W
 
 
 def _register_plugins():
@@ -95,9 +70,61 @@ def _default_task(active_task: str | None) -> str:
     return next(iter(tasks))
 
 
+def _default_order_axes(layout) -> tuple[str, ...]:
+    """`--order-axes` 未指定時の並べ替え軸。
+
+    `module` 軸がある run (複合エリア + `space: area_uniform`) では**モジュールで
+    ブロック化し、その中で E→I** にする。粗視化図はモジュール間結合の粗密を見るための
+    図なので、E/I だけで切るとブロック構造が見えない。`module` を持たない run では
+    従来どおり `("polarity",)`。
+    """
+    if layout is not None and layout.has_axis("module"):
+        return ("module", "polarity")
+    return DEFAULT_ORDER_AXES
+
+
+def _report_connection_probability(coo, layout, axes: tuple[str, ...], area=None) -> None:
+    """層内 / 層間の結合確率を標準出力へ表で出す。
+
+    軸は粗視化図と同じ最外軸 (`axes[0]`) を使う。並べ替えなし (`--order-axes none`) や
+    軸を持たない run では出しようがないので黙って飛ばす。
+
+    エリアがモジュールとブリッジに分かれている (= `allow_soma: false` の part を持つ)
+    なら、**経由するブリッジの本数**でグループ対をまとめ直した表も続けて出す。
+    K×K の表は同一モジュール (対角) と「それ以外」(非対角) の 2 つにしか割れないが、
+    こちらは非対角を 1 ホップ / 2 ホップ / … へ分解する。
+    """
+    if not axes:
+        return
+    axis = axes[0]
+    result = group_connection_probability(coo.row, coo.col, layout, axis)
+    print()
+    print(format_group_connection_probability(result))
+    print()
+    _report_bridge_hops(result, area)
+
+
+def _report_bridge_hops(result, area) -> None:
+    """ホップ数別の結合確率。エリアがブリッジを持たない構成なら理由を 1 行出して飛ばす。"""
+    if area is None:
+        return
+    try:
+        hops = bridge_hop_matrix(area, result.names)
+    except ValueError as exc:
+        print(f"  ブリッジのホップ数別の集計はスキップしました: {exc}")
+        print()
+        return
+    print(format_hop_connection_probability(hop_connection_probability(result, hops)))
+    print()
+
+
 def build_and_visualize(config_path: str, output_dir: str | Path, active_task: str | None = None,
-                        seed: int = 0) -> None:
-    """YAML からネットワークを構築し、構造図一式を output_dir へ保存する。"""
+                        seed: int = 0, order_axes: tuple[str, ...] | None = None) -> None:
+    """YAML からネットワークを構築し、構造図一式を output_dir へ保存する。
+
+    Args:
+        order_axes: 粗視化図の並べ替え軸。None なら `_default_order_axes()` が run を見て決める。
+    """
     from src.core.config_manager import ConfigManager
     from src.core.NetworkBuilder import NetworkBuilder
 
@@ -125,8 +152,9 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
     layout = builder.layout
     total = builder.total_neurons
     coords = builder.global_coords
-    row, col, weights, delays = _coo_from_builder(builder)
-    print(f"  {total} neurons, {row.size} synapses")
+    # 疎/密の違いは builder が吸収済み。ここから先は COO しか見ない。
+    coo = builder.global_coo()
+    print(f"  {total} neurons, {coo.num_synapses} synapses")
 
     has_space = coords is not None and np.all(np.isfinite(np.asarray(coords, dtype=np.float64)))
 
@@ -141,36 +169,59 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
         print(f"  エリアが無界 ({config.network.area.profile_name}) のため "
               f"area.png はスキップしました。")
 
+    axes = _default_order_axes(layout) if order_axes is None else order_axes
     plot_connection_mask_coarse(
-        row, col, layout, total, output_dir / "connection_mask_coarse.png",
+        coo.row, coo.col, layout, total, output_dir / "connection_mask_coarse.png",
+        order_axes=axes,
     )
-    if row.size:
+    print(f"  Connection mask grouped by {' > '.join(axes) if axes else 'global ID order'}")
+
+    # 粗視化図と**同じ軸**で層内/層間の結合確率を数値でも出す。図で見えている濃淡が
+    # 何倍の差なのかは絵からは読めないので、そこだけ数字で補う。
+    _report_connection_probability(coo, layout, axes, area=area)
+    if coo.num_synapses:
         plot_delay_distribution(
-            delays, row, col, layout, total, output_dir / "delay_distribution.png",
+            coo.delays, coo.row, coo.col, layout, total,
+            output_dir / "delay_distribution.png",
         )
         plot_weight_distributions(
-            [0.0], [weights], output_dir / "weight_distribution.png",
-            row=row, col=col, layout=layout, total_neurons=total,
+            [0.0], [coo.weights], output_dir / "weight_distribution.png",
+            row=coo.row, col=coo.col, layout=layout, total_neurons=total,
         )
 
     if has_space:
         # 空間ネットワーク図は plotting.network.network に一本化 (サンプリング + 矢印/重み太さ)。
-        # 描画自体はニューロン/エッジをサンプリングするため大規模でも軽いが、疎経路では
-        # 密な重み行列 (N×N) を復元する必要があり、そのメモリだけが律速になる。
-        DENSE_MAX_NEURONS = 20000  # N×N float64 復元の上限 (~3.2GB)
-        if builder.global_weights is not None or total <= DENSE_MAX_NEURONS:
-            network(
-                weights=_dense_weights(builder), coords=coords, config=config,
-                layout=layout, title="network_sample", save_path=str(output_dir),
-                seed=seed, area=area,
+        # COO をそのまま渡すので、密行列の復元は要らず N の上限も無い。
+        network(
+            coo.row, coo.col, coo.weights, coords, config=config,
+            layout=layout, title="network_sample", save_path=str(output_dir),
+            seed=seed, area=area,
+        )
+
+        # 軸索の折れ線で結合を描いた図。幾何を残すのは axon_growth だけなので、
+        # 持っていないコネクタ (constant_prob など) は素通りさせる。
+        geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
+        if geometry is not None:
+            axon_network(
+                geometry, coords, config, layout=layout, title="axon_network",
+                save_path=str(output_dir), seed=seed, area=area,
             )
         else:
-            print(f"  ニューロン数 {total} > {DENSE_MAX_NEURONS} のため "
-                  f"空間ネットワーク図 (密行列復元) は省略しました。")
-        if row.size:
+            print(f"  connection ({config.network.connection.profile_name}) が軸索の幾何を"
+                  f"持たないため axon_network.png はスキップしました。")
+
+        if coo.num_synapses:
+            # 「その距離のペアのうち何割が繋がったか」(確率) と
+            # 「実際に張られた結合の長さが何本ずつか」(件数) の 2 枚。分母が違うので
+            # 片方が単調減少でももう片方はピークを持つ。
             plot_empirical_connection_probability(
-                coords, row, col, layout, output_dir / "connection_probability.png",
+                coords, coo.row, coo.col, layout,
+                output_dir / "connection_probability.png",
                 connection_config=config.network.connection, seed=seed,
+            )
+            plot_distance_distribution(
+                coords, coo.row, coo.col, layout, total,
+                output_dir / "distance_distribution.png",
             )
     else:
         print("  座標が無い (no_space) ため空間依存の図はスキップしました。")
@@ -195,13 +246,25 @@ def main(argv=None) -> None:
         "--seed", type=int, default=0,
         help="サンプリング図の乱数シード (デフォルト: 0)",
     )
+    parser.add_argument(
+        "--order-axes", nargs="+", default=None, metavar="AXIS",
+        help="connection_mask_coarse.png を並べ替える軸を外側から順に。"
+             " 省略時は module 軸があれば 'module polarity'、無ければ 'polarity'。"
+             " 例: --order-axes module。'none' でグローバル ID の順のまま",
+    )
     args = parser.parse_args(argv)
+
+    order_axes = args.order_axes
+    if order_axes is not None:
+        # 'none' 1 語で「並べ替えない」。weight_track.py の --order-axes と同じ約束。
+        order_axes = () if [a.lower() for a in order_axes] == ["none"] else tuple(order_axes)
 
     # ConfigManager が configs/ を相対パスで参照するため、プロジェクトルートを基準にする。
     os.chdir(_PROJECT_ROOT)
 
     _register_plugins()
-    build_and_visualize(args.config, args.output, active_task=args.task, seed=args.seed)
+    build_and_visualize(args.config, args.output, active_task=args.task, seed=args.seed,
+                        order_axes=order_axes)
 
 
 if __name__ == "__main__":

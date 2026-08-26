@@ -89,9 +89,10 @@ def main():
     plotting.plot_raster(spike_times, spike_ids, output_dir / raster_title, "Raster",
                          layout=builder.layout)
 
+    coo = builder.global_coo()
     plotting.network(
-        weights=builder.global_weights, 
-        coords=builder.global_coords, 
+        coo.row, coo.col, coo.weights,
+        coords=builder.global_coords,
         config=config,
         save_path=output_dir
     )

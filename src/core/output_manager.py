@@ -11,6 +11,7 @@ run ディレクトリの中身:
     ├── source_config.yaml   … resolve() に渡した入力 YAML の逐語コピー
     ├── layout_axes.npz      … 外部軸 (layer / module …)。config からは再導出できない
     ├── connectivity.npz     … 疎 (COO) 経路での row/col/shape。run につき 1 回
+    ├── axon_geometry.npz    … 軸索の折れ線と接触点。connection: axon_growth 系のときだけ
     └── data/                … organize_output() 後は上記と npz/csv がここへ移る
 """
 import argparse
@@ -27,6 +28,9 @@ CONFIG_NAME = "config.yaml"
 SOURCE_CONFIG_NAME = "source_config.yaml"
 AXES_NAME = "layout_axes.npz"
 CONNECTIVITY_NAME = "connectivity.npz"
+# 軸索の折れ線 (AxonGeometry)。connection が axon_growth 系のときだけ書かれる。
+# 「どの軸索がどのブリッジを通ったか」= 損傷実験で必要になる記録。
+AXONS_NAME = "axon_geometry.npz"
 
 # locate() が探すサブディレクトリ。organize_output() が data/ へ移動するため、run ルートを
 # 渡された場合と data/ を直接渡された場合の両方を受け付ける。

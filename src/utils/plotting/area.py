@@ -12,7 +12,8 @@
 プリミティブがあることで `network()` が自分の Axes に境界線を重ねられる。
 
 エリアは**ダックタイピングで受ける** (型注釈を付けない)。必要なのは `sdf` / `bounds` /
-`is_bounded`、任意で `part_of` / `part_names` / `area_um2` だけなので、
+`is_bounded`、任意で `part_of` / `part_names` / `part_allows_soma` / `soma_area` /
+`area_um2` だけなので、
 `src/models/network/area.py` を import して `src/utils/plotting` -> `src/models` という依存を
 作る必要がない (`network()` が layout と config を注釈無しで受けているのと同じ作法)。
 """
@@ -23,7 +24,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.utils.plotting.network import _save
+from src.utils.plotting.common import save_figure
 
 # 境界箱をどれだけ広げて格子を張るか (span に対する比)。
 # **0 にしてはいけない。** `rect` のように領域が境界箱いっぱいに広がる形状では、
@@ -36,6 +37,11 @@ DEFAULT_GRID = 400
 
 # part ごとに塗り分けるときの色順 (matplotlib の tab10)。
 PART_CMAP = "tab10"
+
+# soma を置けない part (`allow_soma: false`) の描き方。軸索だけが通れる通路であることが
+# 一目で分かるように、塗りを薄くしてハッチを掛ける。
+NO_SOMA_HATCH = "///"
+NO_SOMA_ALPHA_SCALE = 0.4
 
 
 def _padded_bounds(area, pad: float) -> tuple[np.ndarray, np.ndarray]:
@@ -122,6 +128,8 @@ def draw_area(
         # contains (= d <= 0) で必ずマスクする。しないと境界箱全体が塗られる。
         idx = np.asarray(part_of(points)).reshape(X.shape)
         names = list(getattr(area, "part_names", []) or [])
+        # soma を置けない part は薄く + ハッチ。属性が無いエリアでは全 part が soma 可。
+        allows_soma = list(getattr(area, "part_allows_soma", []) or [])
         num_parts = int(idx.max()) + 1 if idx.size else 0
         cmap = plt.get_cmap(PART_CMAP)
         labels: list[tuple[float, float, str, tuple]] = []
@@ -129,11 +137,15 @@ def draw_area(
             mask = inside & (idx == p)
             if not mask.any():
                 continue
+            no_soma = p < len(allows_soma) and not allows_soma[p]
             # 各 part を「その part に属し、かつ領域内」の指示関数として塗る。
             # 0.5 を境にすることで、mask の縁がそのまま part の切れ目になる。
+            # hatches は list でないと contourf.draw() が落ちるので、soma 不可のときだけ渡す。
             ax.contourf(
                 X, Y, mask.astype(np.float64), levels=[0.5, 1.5],
-                colors=[cmap(p % cmap.N)], alpha=part_alpha, zorder=zorder,
+                colors=[cmap(p % cmap.N)], zorder=zorder,
+                alpha=part_alpha * NO_SOMA_ALPHA_SCALE if no_soma else part_alpha,
+                **({"hatches": [NO_SOMA_HATCH]} if no_soma else {}),
             )
             # ラベルは part の重心へ。part は円や矩形なので重心は内部に入る。
             name = names[p] if p < len(names) else f"M{p}"
@@ -182,14 +194,20 @@ def plot_area(area, out_path: Path, *, title: str = "Area", **kwargs) -> bool:
 
     # 面積と実効密度。密度は soma の座標ではなく area.num_neurons から出す
     # (この図は領域だけを見せるので、座標を受け取らずに済ませる)。
+    # soma を置けない part があるエリアでは、密度の分母は soma 配置領域の面積になる
+    # (ニューロンはそこにしか居ない) ので、幾何全体の面積と両方を出す。
     area_um2 = area.area_um2
+    soma_region = getattr(area, "soma_area", area)
+    soma_um2 = soma_region.area_um2 if soma_region is not area else area_um2
     num_neurons = getattr(area, "num_neurons", 0)
     subtitle = f"{area_um2 * 1e-6:.3f} mm$^2$" if area_um2 else "area unknown"
-    if area_um2 and num_neurons:
-        subtitle += f",  {num_neurons / area_um2 * 1e6:.0f} neurons/mm$^2$"
+    if soma_region is not area and soma_um2:
+        subtitle += f"  (soma {soma_um2 * 1e-6:.3f} mm$^2$)"
+    if soma_um2 and num_neurons:
+        subtitle += f",  {num_neurons / soma_um2 * 1e6:.0f} neurons/mm$^2$"
     ax.set_title(f"{title}\n{subtitle}")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
 
-    _save(fig, Path(out_path))
+    save_figure(fig, Path(out_path))
     return True

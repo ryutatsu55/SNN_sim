@@ -1,51 +1,89 @@
-"""ネットワーク構造の可視化。
+"""ネットワークを**空間に置いたグラフ**として描く。
 
-2 つの規模帯をカバーする:
+このモジュールが担うのは「細胞体がどこにあり、どれとどれが繋がっているか」の 2 枚だけ:
 
-- `network` : ニューロンの空間配置を矢印付きのグラフとして描く。ニューロンとエッジを
-  サンプリングするので大規模でも破綻しないが、密な (N, N) 重み行列を必要とする。
-- 残りの関数: COO (row, col) と 1D の重み/遅延配列だけを受け取り、サンプリングと粗視化で
-  「見て意味のある」図に落とす。N が数万・シナプスが数千万でも通る。
+- `network` : 結合を細胞体どうしを結ぶ直線の矢印として描く。ニューロンとエッジを
+  サンプリングするので大規模でも破綻しない。
+- `axon_network` : 同じ配置を、結合を**軸索の折れ線**として描いたもの (`axon_growth` 専用)。
+  `network` と同じ seed から同じ順に乱数を引くので、2 枚は同じニューロン・同じ結合を映す。
 
-いずれも E/I の分類は `layout.ids_by("polarity")` から得る。
+座標を持たない図はここには無い。結合構造そのものの図 (粗視化した結合密度・距離依存の
+結合確率) は `matrices.py`、値の分布 (重み・遅延) は `distributions.py`。
+
+入力は COO (row, col と index 整合の 1D 配列)。密な (N, N) は受け取らない —
+ビルド以降の受け渡しは COO 一本、という全体の規約 (`NetworkBuilder.global_coo()`) に従う。
+E/I の分類は `layout.ids_by("polarity")` から得る。
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.spatial.distance import cdist
+from matplotlib.collections import LineCollection
+from matplotlib.lines import Line2D
 
-from src.utils.analysis.weights import BLOCK_ORDER, block_masks, excitatory_flags
+from src.utils.plotting.area import draw_area
 
-# 送信種別 × 受信種別の描画色 (ブロック名の正準順は analysis.weights.BLOCK_ORDER)
-BLOCK_COLORS = {
-    "EE": "tab:red",
-    "EI": "tab:orange",
-    "IE": "tab:blue",
-    "II": "tab:purple",
-}
+# 送信元の極性で決まるエッジ色 (ノードの tab:red / tab:blue に合わせた半透明版)
+EDGE_COLORS = {True: (0.8, 0.2, 0.2, 0.5), False: (0.2, 0.2, 0.8, 0.5)}
+EDGE_COLOR_NO_LAYOUT = (0.4, 0.4, 0.4, 0.5)
 
 
-def display_rank(layout, total_neurons: int) -> tuple[np.ndarray, int]:
-    """グローバルID -> 表示順位 (興奮性が先頭ブロック) の写像と、興奮性の数を返す。"""
-    rank = layout.rank_by("polarity")
-    return rank, int(layout.ids_by("polarity")["excitatory"].size)
+def _sample_nodes(total: int, n_sample: int, rng) -> np.ndarray:
+    """描画するニューロンを選ぶ。`network` と `axon_network` が**同じ列を消費する**ので、
+    同じ seed なら 2 枚の図に出るニューロンは一致する。"""
+    return np.sort(rng.choice(total, size=min(n_sample, total), replace=False))
 
 
-def _save(fig, out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+def _excitatory_mask(layout, total: int):
+    """グローバル ID -> 興奮性か。layout が無ければ None (色分けしない)。"""
+    if layout is None:
+        return None
+    exc_ids = np.asarray(layout.ids_by("polarity").get("excitatory", []), dtype=np.int64)
+    is_exc = np.zeros(total, dtype=bool)
+    is_exc[exc_ids] = True
+    return is_exc
 
 
-def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_size=10,
+def _draw_nodes(ax, x, y, sample, is_exc, node_size) -> None:
+    """細胞体を描く。E/I が分かるなら赤/青、分からなければ一色。"""
+    if is_exc is None:
+        ax.scatter(x[sample], y[sample], s=node_size, color='darkgray',
+                   edgecolors='black', zorder=3)
+        return
+    exc_sample = sample[is_exc[sample]]
+    inh_sample = sample[~is_exc[sample]]
+    ax.scatter(x[exc_sample], y[exc_sample], s=node_size, color='tab:red',
+               edgecolors='black', zorder=3, label='excitatory')
+    ax.scatter(x[inh_sample], y[inh_sample], s=node_size, color='tab:blue',
+               edgecolors='black', zorder=3, label='inhibitory')
+    ax.legend(fontsize=9, markerscale=1.5)
+
+
+def _apply_axis_limits(ax, config, area_drawn: bool) -> None:
+    """軸範囲の優先順位:
+      1. エリアの境界箱 (draw_area が set_limits で設定済み)。領域が図の外に切れない
+      2. x_range/y_range を持つ矩形空間
+      3. 座標からの自動スケール (random_circle_2d など、どちらも持たない場合)
+    space: area_uniform は x_range を持たないので、エリアを渡さないと 3 に落ちる。
+    """
+    if area_drawn:
+        return
+    space_cfg = config.network.space
+    x_range = getattr(space_cfg, "x_range", None)
+    y_range = getattr(space_cfg, "y_range", None)
+    if x_range is not None and y_range is not None:
+        ax.set_xlim(x_range)
+        ax.set_ylim(y_range)
+    else:
+        ax.margins(0.05)
+
+
+def network(row: np.ndarray, col: np.ndarray, weights: np.ndarray, coords: np.ndarray,
+            config, layout=None, node_size=10,
             title="network", save_path=".", n_sample=500, max_edges=4000, seed=0,
             area=None):
     """
-    ニューロンの空間配置と重み行列からネットワーク構造を可視化する。
+    ニューロンの空間配置と結合 (COO) からネットワーク構造を可視化する。
 
     空間ネットワーク図を担う唯一の関数。大規模ネットワークでも破綻しないよう、
     ニューロンを n_sample 個サンプリングし、両端がサンプルに含まれる結合だけを
@@ -53,7 +91,8 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
     (正=興奮性=赤 / 負=抑制性=青)、絶対値に応じて線の太さを変える。
 
     Parameters:
-        weights (np.ndarray): 結合重み行列。形状は (N, N)。
+        row, col (np.ndarray): 各結合の送信/受信グローバルID (1D, 行優先ソート済み)。
+        weights (np.ndarray): 各結合の重み (1D, row/col と index 整合)。
         coords (np.ndarray): ニューロンの座標配列。形状は (N, 3)。
         config: AppConfig。矩形空間 (x_range/y_range) なら軸範囲に使う。
         layout: NetworkLayout。渡すとノードを E/I で色分けする (省略時は一色)。
@@ -65,79 +104,60 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
         seed (int): サンプリングの乱数シード。
         area: BaseArea。渡すと領域の境界線を背景に敷き、軸範囲もそこから取る。
     """
-    weights = np.asarray(weights)
     coords = np.asarray(coords)
-    N = weights.shape[0]
+    row = np.asarray(row, dtype=np.int64)
+    col = np.asarray(col, dtype=np.int64)
+    weights = np.asarray(weights).reshape(-1)
+    if not (row.size == col.size == weights.size):
+        raise ValueError("row / col / weights の長さが一致しません。")
+    N = coords.shape[0]
     rng = np.random.default_rng(seed)
 
     # Z軸が存在する場合でも、今回は2D平面(X, Y)への投影として扱う
     x = coords[:, 0]
     y = coords[:, 1]
 
-    # --- ニューロンのサンプリング ---
-    sample = np.sort(rng.choice(N, size=min(n_sample, N), replace=False))
+    # --- ニューロンのサンプリングと E/I 判定 ---
+    sample = _sample_nodes(N, n_sample, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
-
-    # --- E/I 判定 (layout があれば興奮性を True に) ---
-    is_exc = None
-    if layout is not None:
-        exc_ids = np.asarray(layout.ids_by("polarity").get("excitatory", []), dtype=np.int64)
-        is_exc = np.zeros(N, dtype=bool)
-        is_exc[exc_ids] = True
+    is_exc = _excitatory_mask(layout, N)
 
     fig, ax = plt.subplots(figsize=(12, 10))
 
     # --- 領域の境界線を背景に敷く (ノードは zorder=3、エッジは 1 なので下に回る) ---
     # 塗りは入れない。この図の主役はグラフで、part ごとの塗り分けはエッジと色が競合して
     # 読みにくくなる。領域そのものを見たいときは plot_area の図を見る。
-    # 循環 import を避けるため関数内 import (area.py が network._save を使っている)。
-    from src.utils.plotting.area import draw_area
     area_drawn = draw_area(ax, area, fill=False, boundary=True, zorder=0)
 
     # --- ノード描画 (layout があれば E/I で色分け) ---
-    if is_exc is not None:
-        exc_sample = sample[is_exc[sample]]
-        inh_sample = sample[~is_exc[sample]]
-        ax.scatter(x[exc_sample], y[exc_sample], s=node_size, color='tab:red',
-                   edgecolors='black', zorder=3, label='excitatory')
-        ax.scatter(x[inh_sample], y[inh_sample], s=node_size, color='tab:blue',
-                   edgecolors='black', zorder=3, label='inhibitory')
-        ax.legend(fontsize=9, markerscale=1.5)
-    else:
-        ax.scatter(x[sample], y[sample], s=node_size, color='darkgray',
-                   edgecolors='black', zorder=3)
+    _draw_nodes(ax, x, y, sample, is_exc, node_size)
 
     # 描画用のスケール計算（太さの正規化用）
     abs_max = np.max(np.abs(weights)) if weights.size else 0.0
     max_weight = abs_max if abs_max > 0 else 1.0
-    # 結合（エッジ）を抽出し、両端がサンプルに含まれるものだけ残す
-    sources, targets = np.where(np.abs(weights) != 0)
-    keep = in_sample[sources] & in_sample[targets]
-    sources, targets = sources[keep], targets[keep]
+    # 結合（エッジ）を抽出し、両端がサンプルに含まれるものだけ残す。
+    # 重み 0 の結合を落とすのは「線幅 0 の矢印を描かない」ため。COO は実結合しか
+    # 持たないが、可塑性で 0 まで落ちた結合はここに含まれる。
+    keep = (np.abs(weights) != 0) & in_sample[row] & in_sample[col]
+    sources, targets, edge_w = row[keep], col[keep], weights[keep]
     # エッジが多すぎる場合はさらに max_edges 本へ間引く (annotate は1本ずつ描くため)
     if sources.size > max_edges:
         pick = rng.choice(sources.size, size=max_edges, replace=False)
-        sources, targets = sources[pick], targets[pick]
+        sources, targets, edge_w = sources[pick], targets[pick], edge_w[pick]
 
     # 矢印がノードの中心に刺さるのを防ぐためのマージン計算
     # (scatterの s は面積なので、半径は平方根に比例)
     node_margin = np.sqrt(node_size) * 0.8
 
-    for s, t in zip(sources, targets):
+    for s, t, w in zip(sources, targets, edge_w):
 
         # 重みの強さに応じて線の太さを変更 (最大2.0)
-        w = weights[s, t]
         lw = (abs(w) / max_weight) * 2.0
 
         # エッジ色は出力元ノード (source) の色に揃える。
         # layout があれば興奮性=赤 / 抑制性=青、無ければノードと同じ灰色。
-        if is_exc is None:
-            color = (0.4, 0.4, 0.4, 0.5)  # darkgray 相当 (alpha=0.5)
-        elif is_exc[s]:
-            color = (0.8, 0.2, 0.2, 0.5)  # Red (excitatory source)
-        else:
-            color = (0.2, 0.2, 0.8, 0.5)  # Blue (inhibitory source)
+        color = EDGE_COLOR_NO_LAYOUT if is_exc is None else EDGE_COLORS[bool(is_exc[s])]
 
         # ax.annotate を用いて矢印を描画
         ax.annotate(
@@ -160,20 +180,7 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
     ax.set_title(f"{title}\n{sample.size} neurons sampled, {sources.size} edges drawn")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
-    # 軸範囲の優先順位:
-    #   1. エリアの境界箱 (draw_area が set_limits で設定済み)。領域が図の外に切れない
-    #   2. x_range/y_range を持つ矩形空間
-    #   3. 座標からの自動スケール (random_circle_2d など、どちらも持たない場合)
-    # space: area_uniform は x_range を持たないので、エリアを渡さないと 3 に落ちる。
-    if not area_drawn:
-        space_cfg = config.network.space
-        x_range = getattr(space_cfg, "x_range", None)
-        y_range = getattr(space_cfg, "y_range", None)
-        if x_range is not None and y_range is not None:
-            ax.set_xlim(x_range)
-            ax.set_ylim(y_range)
-        else:
-            ax.margins(0.05)
+    _apply_axis_limits(ax, config, area_drawn)
 
     plt.tight_layout()
 
@@ -183,227 +190,125 @@ def network(weights: np.ndarray, coords: np.ndarray, config, layout=None, node_s
     plt.close()
 
 
-def plot_delay_distribution(
-    delays_ms: np.ndarray,
-    row: np.ndarray,
-    col: np.ndarray,
-    layout,
-    total_neurons: int,
-    out_path: Path,
-    title: str = "Delay distribution",
-    bins: int = 80,
-) -> None:
-    """実在する結合上の伝播遅延のヒストグラム (全体 + E/I ブロック別)。
+def _axon_polyline(geometry, neuron: int) -> np.ndarray:
+    """ニューロン 1 本の軸索を頂点列 (V, 2) にする。軸索が無ければ空配列。
 
-    結合が無い箇所は行列上 0 で埋まるため、必ず COO (= 実結合のみ) を渡すこと。
+    セグメントは端点を共有して連なっている (`seg_start[k+1] == seg_end[k]`) ので、
+    始点を並べて最後に終端を足せば折れ線になる。
     """
-    delays = np.asarray(delays_ms, dtype=np.float64)
-    is_exc = excitatory_flags(layout, total_neurons)
-    masks = block_masks(row, col, is_exc)
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-
-    axes[0].hist(delays, bins=bins, color="black")
-    axes[0].set_xlabel("Delay [ms]")
-    axes[0].set_ylabel("Number of synapses")
-    axes[0].set_title(f"All synapses (n={delays.size})\n"
-                      f"mean={delays.mean():.2f} ms, max={delays.max():.2f} ms"
-                      if delays.size else "All synapses (empty)")
-
-    edges = np.histogram_bin_edges(delays, bins=bins) if delays.size else np.linspace(0, 1, bins)
-    for name in BLOCK_ORDER:
-        block = delays[masks[name]]
-        if block.size:
-            axes[1].hist(block, bins=edges, histtype="step", lw=1.4,
-                         color=BLOCK_COLORS[name], label=f"{name} (n={block.size})")
-    axes[1].set_xlabel("Delay [ms]")
-    axes[1].set_ylabel("Number of synapses")
-    axes[1].set_title("By connection type")
-    axes[1].legend(fontsize=7)
-
-    fig.suptitle(title)
-    _save(fig, out_path)
+    lo, hi = int(geometry.offsets[neuron]), int(geometry.offsets[neuron + 1])
+    if hi <= lo:
+        return np.zeros((0, 2), dtype=np.float64)
+    return np.vstack([geometry.seg_start[lo:hi], geometry.seg_end[hi - 1]])
 
 
-def plot_connection_mask_coarse(
-    row: np.ndarray,
-    col: np.ndarray,
-    layout,
-    total_neurons: int,
-    out_path: Path,
-    title: str = "Connection mask (coarse-grained)",
-    grid: int = 256,
-) -> None:
-    """結合マスクを K×K に粗視化した密度画像。
+def _contact_polyline(geometry, edge: int) -> tuple[np.ndarray, np.ndarray]:
+    """シナプス 1 本ぶんの「細胞体から接触点まで」の軸索経路と、その接触点。
 
-    (40000, 40000) の imshow は不可能かつ視覚的にも無意味なので、興奮性を先頭に
-    並べ替えた表示順位の軸上で K×K のセルに落とし、セルごとの結合密度
-    (実結合数 / セル内の全ペア数) を描く。E/I ブロック構造はそのまま残る。
+    接触したセグメントの途中で折り返すので、`_axon_polyline` のように軸索全体を
+    使うのではなく、接触セグメントの始点まで並べてから接触点を足す。
     """
-    rank, n_exc = display_rank(layout, total_neurons)
-    grid = int(min(grid, total_neurons))
-    if grid < 1:
-        raise ValueError("grid must be >= 1")
-
-    # 表示順位 -> セル番号
-    cell_of_rank = (rank.astype(np.float64) * grid / total_neurons).astype(np.int64)
-    cell_of_rank = np.clip(cell_of_rank, 0, grid - 1)
-
-    counts = np.zeros((grid, grid), dtype=np.float64)
-    np.add.at(counts, (cell_of_rank[np.asarray(row, dtype=np.int64)],
-                       cell_of_rank[np.asarray(col, dtype=np.int64)]), 1.0)
-
-    # セルごとの「ありうるペア数」で割って密度にする (セルの大きさが均等でない場合に効く)
-    per_cell = np.bincount(cell_of_rank, minlength=grid).astype(np.float64)
-    possible = np.outer(per_cell, per_cell)
-    density = np.divide(counts, possible, out=np.zeros_like(counts), where=possible > 0)
-
-    fig, ax = plt.subplots(figsize=(6.5, 5.5))
-    image = ax.imshow(density, origin="upper", interpolation="nearest", cmap="viridis")
-    boundary = n_exc * grid / total_neurons
-    if 0 < boundary < grid:
-        ax.axhline(boundary - 0.5, color="white", lw=0.8, ls="--")
-        ax.axvline(boundary - 0.5, color="white", lw=0.8, ls="--")
-    ax.set_xlabel(f"Target (excitatory first, {grid} cells)")
-    ax.set_ylabel(f"Source (excitatory first, {grid} cells)")
-    ax.set_title(f"{title}\n{np.asarray(row).size} synapses, {total_neurons} neurons")
-    fig.colorbar(image, ax=ax, label="connection probability")
-    _save(fig, out_path)
+    pre = int(geometry.pre[edge])
+    seg = int(geometry.contact_seg[edge])
+    t = float(geometry.contact_t[edge])
+    a, b = geometry.seg_start[seg], geometry.seg_end[seg]
+    contact = a + t * (b - a)
+    return np.vstack([geometry.seg_start[int(geometry.offsets[pre]):seg + 1], contact]), contact
 
 
-def plot_empirical_connection_probability(
-    coords: np.ndarray,
-    row: np.ndarray,
-    col: np.ndarray,
-    layout,
-    out_path: Path,
-    connection_config=None,
-    title: str = "Empirical connection probability",
-    n_src: int = 2000,
-    num_bins: int = 40,
-    seed: int = 0,
-) -> None:
-    """距離ビンごとの実測結合確率を E/I ブロック別に描き、理論曲線を重ねる。
+def axon_network(geometry, coords, config, layout=None, node_size=10, title="axon_network",
+                 save_path=".", n_sample=500, max_edges=4000, seed=0, area=None,
+                 show_axons=True):
+    """結合を**軸索伸長過程の折れ線**として描く (直線矢印で描く `network` の対になる図)。
 
-    全ペアの距離分布 (分母) は N^2 なので、送信側を `n_src` 個サンプルして
-    そのサンプルに対してのみ `cdist` で分母のヒストグラムを作る。分子は同じサンプルの
-    実結合のみを数えるので、比は不偏な結合確率の推定になる。
+    `axon_growth` では結合は細胞体を結ぶ直線ではなく、伸びた軸索が誰かの樹状突起円を
+    横切った結果として生まれる。この図はその経路をそのまま描くので、
+    「どのブリッジを通ってモジュール間がつながったのか」が読める。
 
-    `connection_config` に sigma_xy / p0_xy があれば理論曲線 p0*exp(-d^2/2σ^2) を重ねる。
+    `network()` と**同じ seed から同じ順に乱数を引く**ので、2 枚の図に出るニューロンと
+    結合は一致する (エッジの順序も、COO の行優先順で揃う)。
+    並べて比較するための性質なので、サンプリングの手順を変えるときは両方同時に変えること。
+
+    重みは受け取らない。この図の主題は経路の形なので線幅は一定。
+    矢印も描かない: 実線 = pre から伸びた軸索、破線 = 接触点から post 細胞体へ届いた
+    樹状突起、という区別がそのまま向きを表すし、annotate を数千回呼ぶと折れ線では重すぎる。
+
+    Parameters:
+        geometry: `seg_start` / `seg_end` / `offsets` / `pre` / `post` / `contact_seg` /
+            `contact_t` を持つオブジェクト (`AxonGrowthTopology.axon_geometry()` の戻り値)。
+            ダックタイピングで受けるので `src/models` には依存しない。
+        coords (np.ndarray): ニューロンの座標配列 (N, 2 以上)。
+        config: AppConfig。矩形空間 (x_range/y_range) なら軸範囲に使う。
+        layout: NetworkLayout。渡すと E/I で色分けする (省略時は一色)。
+        n_sample (int): 描画に用いるニューロンのサンプリング数。
+        max_edges (int): 描画する結合数の上限。
+        seed (int): サンプリングの乱数シード。`network()` と揃えること。
+        area: BaseArea。渡すと領域の境界線を背景に敷き、軸範囲もそこから取る。
+        show_axons (bool): サンプルしたニューロンの軸索**全体**を薄いグレーで下敷きにする。
+            結合を作らなかった軸索もここに出るので、伸長過程そのものが見える。
     """
     coords = np.asarray(coords, dtype=np.float64)
-    total = coords.shape[0]
+    N = coords.shape[0]
     rng = np.random.default_rng(seed)
-    is_exc = excitatory_flags(layout, total)
+    x, y = coords[:, 0], coords[:, 1]
 
-    sources = np.sort(rng.choice(total, size=min(n_src, total), replace=False))
-    selected = np.zeros(total, dtype=bool)
-    selected[sources] = True
+    # --- network() と同一のサンプリング (乱数の消費順まで同じ) ---
+    sample = _sample_nodes(N, n_sample, rng)
+    in_sample = np.zeros(N, dtype=bool)
+    in_sample[sample] = True
+    is_exc = _excitatory_mask(layout, N)
 
-    distances = cdist(coords[sources, :2], coords[:, :2])
-    max_distance = float(distances.max()) if distances.size else 1.0
-    edges = np.linspace(0.0, max_distance, num_bins + 1)
-    centres = 0.5 * (edges[:-1] + edges[1:])
+    pre = np.asarray(geometry.pre, dtype=np.int64)
+    post = np.asarray(geometry.post, dtype=np.int64)
+    edges = np.nonzero(in_sample[pre] & in_sample[post])[0]
+    if edges.size > max_edges:
+        edges = edges[rng.choice(edges.size, size=max_edges, replace=False)]
 
-    src_exc_grid = is_exc[sources][:, None]
-    tgt_exc_grid = is_exc[None, :]
-    denominator_masks = {
-        "EE": src_exc_grid & tgt_exc_grid,
-        "EI": src_exc_grid & ~tgt_exc_grid,
-        "IE": ~src_exc_grid & tgt_exc_grid,
-        "II": ~src_exc_grid & ~tgt_exc_grid,
-    }
+    fig, ax = plt.subplots(figsize=(12, 10))
 
-    row = np.asarray(row, dtype=np.int64)
-    col = np.asarray(col, dtype=np.int64)
-    keep = selected[row]
-    connected_distance = np.linalg.norm(coords[row[keep], :2] - coords[col[keep], :2], axis=1)
-    numerator_masks = block_masks(row[keep], col[keep], is_exc)
+    area_drawn = draw_area(ax, area, fill=False, boundary=True, zorder=0)
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    for name in BLOCK_ORDER:
-        denominator = np.histogram(distances[denominator_masks[name]], bins=edges)[0]
-        numerator = np.histogram(connected_distance[numerator_masks[name]], bins=edges)[0]
-        valid = denominator > 0
-        if not valid.any():
-            continue
-        probability = np.zeros_like(centres)
-        probability[valid] = numerator[valid] / denominator[valid]
-        ax.plot(centres[valid], probability[valid], color=BLOCK_COLORS[name],
-                lw=1.4, marker="o", ms=2.5, label=f"{name} (measured)")
+    # --- 下敷き: サンプルしたニューロンの軸索を丸ごと ---
+    underlay = []
+    if show_axons:
+        underlay = [poly for poly in (_axon_polyline(geometry, int(i)) for i in sample)
+                    if len(poly) > 1]
+        if underlay:
+            ax.add_collection(LineCollection(underlay, colors="0.45", linewidths=0.6,
+                                             alpha=0.25, zorder=0.5))
 
-        if connection_config is not None:
-            sigma = getattr(connection_config, f"sigma_{name.lower()}", None)
-            p0 = getattr(connection_config, f"p0_{name.lower()}", None)
-            if sigma is not None and p0 is not None:
-                theory = p0 * np.exp(-(centres ** 2) / (2.0 * float(sigma) ** 2))
-                ax.plot(centres, theory, color=BLOCK_COLORS[name], lw=1.0, ls="--", alpha=0.7)
+    # --- 結合を作った経路 (実線) と、接触点から細胞体まで (破線) ---
+    paths, stubs, colors = [], [], []
+    for edge in edges:
+        path, contact = _contact_polyline(geometry, int(edge))
+        paths.append(path)
+        stubs.append(np.vstack([contact, coords[post[edge], :2]]))
+        colors.append(EDGE_COLOR_NO_LAYOUT if is_exc is None
+                      else EDGE_COLORS[bool(is_exc[pre[edge]])])
+    if paths:
+        ax.add_collection(LineCollection(paths, colors=colors, linewidths=1.0, zorder=1))
+        ax.add_collection(LineCollection(stubs, colors=colors, linewidths=0.8,
+                                         linestyles=(0, (2, 2)), zorder=1.5))
 
-    ax.plot([], [], color="gray", ls="--", lw=1.0, label="theory p0·exp(-d²/2σ²)")
-    ax.set_xlabel("Distance [um]")
-    ax.set_ylabel("Connection probability")
-    ax.set_title(f"{title}\n{sources.size} source neurons sampled")
-    ax.legend(fontsize=7)
-    _save(fig, out_path)
+    _draw_nodes(ax, x, y, sample, is_exc, node_size)
 
+    # 凡例は _draw_nodes が付けた E/I に線種の説明を足す (色は送信元の極性で決まる)。
+    handles, _ = ax.get_legend_handles_labels()
+    handles.append(Line2D([], [], color="0.4", lw=1.2, label="axon (made a synapse)"))
+    handles.append(Line2D([], [], color="0.4", lw=1.0, ls=(0, (2, 2)),
+                          label="dendrite reach"))
+    if underlay:
+        handles.append(Line2D([], [], color="0.45", lw=0.6, alpha=0.6, label="all axons"))
+    ax.legend(handles=handles, fontsize=9, markerscale=1.5)
 
-def plot_weight_distributions(
-    hours: list[float],
-    weight_arrays: list[np.ndarray],
-    out_path: Path,
-    row: np.ndarray | None = None,
-    col: np.ndarray | None = None,
-    layout=None,
-    total_neurons: int | None = None,
-    title: str = "Weight distribution over time",
-    bins: int = 80,
-) -> None:
-    """各計測時刻の重み分布を 1 枚に重ね描きし、E/I ブロック別のパネルも添える。
+    ax.set_aspect('equal')
+    ax.set_title(f"{title}\n{sample.size} neurons sampled, {len(paths)} synapses "
+                 f"drawn along axons, {len(underlay)} axons")
+    ax.set_xlabel("X Coordinate [um]")
+    ax.set_ylabel("Y Coordinate [um]")
+    _apply_axis_limits(ax, config, area_drawn)
 
-    row/col/layout/total_neurons を渡すとブロック別パネルを描く。省略した場合は
-    全体のヒストグラムのみ。
-    """
-    if len(hours) != len(weight_arrays):
-        raise ValueError("hours と weight_arrays の長さが一致しません。")
-
-    has_blocks = row is not None and col is not None and layout is not None and total_neurons
-    masks = block_masks(row, col, excitatory_flags(layout, total_neurons)) if has_blocks else None
-
-    num_panels = 1 + (len(BLOCK_ORDER) if has_blocks else 0)
-    columns = min(num_panels, 3)
-    rows_needed = int(np.ceil(num_panels / columns))
-    fig, axes = plt.subplots(rows_needed, columns,
-                             figsize=(4.2 * columns, 3.4 * rows_needed), squeeze=False)
-    flat_axes = axes.ravel()
-
-    all_values = np.concatenate([np.asarray(w, dtype=np.float64) for w in weight_arrays]) \
-        if weight_arrays else np.array([0.0, 1.0])
-    edges = np.histogram_bin_edges(all_values, bins=bins)
-    colours = plt.cm.viridis(np.linspace(0, 0.9, max(len(hours), 1)))
-
-    for hour, weights, colour in zip(hours, weight_arrays, colours):
-        values = np.asarray(weights, dtype=np.float64)
-        flat_axes[0].hist(values, bins=edges, histtype="step", lw=1.4,
-                          color=colour, label=f"{hour:g} h")
-    flat_axes[0].set_title("All synapses")
-    flat_axes[0].set_xlabel("Weight")
-    flat_axes[0].set_ylabel("Number of synapses")
-    flat_axes[0].legend(fontsize=7)
-
-    if has_blocks:
-        for panel, name in enumerate(BLOCK_ORDER, start=1):
-            axis = flat_axes[panel]
-            for hour, weights, colour in zip(hours, weight_arrays, colours):
-                values = np.asarray(weights, dtype=np.float64)[masks[name]]
-                if values.size:
-                    axis.hist(values, bins=edges, histtype="step", lw=1.3,
-                              color=colour, label=f"{hour:g} h")
-            axis.set_title(f"{name} synapses")
-            axis.set_xlabel("Weight")
-            axis.set_ylabel("Number of synapses")
-
-    for unused in range(num_panels, flat_axes.size):
-        flat_axes[unused].axis("off")
-
-    fig.suptitle(title)
-    _save(fig, out_path)
+    plt.tight_layout()
+    plt.savefig(f"{save_path}/{title}.png", dpi=300, bbox_inches='tight')
+    print(f"Axon network visualization saved to {save_path}/{title}.png")
+    plt.close()

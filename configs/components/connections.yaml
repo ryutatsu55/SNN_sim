@@ -65,7 +65,36 @@ axon_growth:
   segment_length: 100.0      # um  1 セグメントの長さ
   angle_sigma: 0.1           # rad 1 ステップあたりの方向の揺らぎ (= 5.73 deg)
   dendrite_radius: 150.0     # um  樹状突起円の半径 (結合の受容範囲)
-  connection_prob: 0.2       #     交差 1 回あたりの結合確率
-  boundary: deflect          #     境界処理: deflect | reflect | stop
-  max_deflect: 4             #     偏向の再試行回数。超えたらその軸索は打ち切り
+  connection_prob: 0.2       #     樹状突起円への**侵入 1 回**あたりの結合確率 (論文の規則。
+                             #     セグメント単位ではないので segment_length に依存しない)
+  boundary: deflect          #     境界処理: deflect (壁沿いに滑る) | reflect | stop
+  allow_self_connections: false
+
+# axon_growth の segment_length を 1/10 に細かくした版。狭い通路 (ブリッジ) を軸索に
+# 通させたいときに使う。100 um ステップだと、1 本の弦が幅 20 um の通路に収まる角度が
+# +-11 度 (幅 4.5 um なら +-2.6 度) しかなく、通路が幾何として存在しないのと同じになる。
+#
+# ============================================================================
+# **segment_length を変えるときは angle_sigma を必ず再計算すること。**
+#
+#     angle_sigma = 0.1 * sqrt(segment_length / 100)
+#
+# 持続長 Lp = 2 * segment_length / angle_sigma^2 = 20 mm を保つための式。Lp は
+# 「軸索がどれだけ進むと元の向きを忘れるか」で、Orlandi et al. (2013) の言う
+# "quasi-straight" な軌跡の実体。sigma を据え置いて Δs だけ下げると Lp が比例して
+# 落ち (Δs=10 なら 2 mm = 軸索長と同程度)、別のモデルになる。
+# 早見: Δs=50 -> 0.0707107,  25 -> 0.05,  10 -> 0.0316228,  5 -> 0.0223607
+#
+# mean_axon_length / dendrite_radius / connection_prob は**写すだけ**(Δs 非依存)。
+# 導出・検証手順・他に何が動くか (弧長の切り捨て、通路の通過率、コスト) は
+#   docs/technical/axon_growth_segment_length.md
+# にまとめてある。新しい Δs のプロファイルを足すときはそちらを読むこと。
+# ============================================================================
+axon_growth_fine:
+  mean_axon_length: 1100.0   # um  軸索全長 (Rayleigh 分布) の平均
+  segment_length: 10.0       # um  1 セグメントの長さ
+  angle_sigma: 0.0316227766  # rad = 0.1 / sqrt(10)。Lp = 2*10/sigma^2 = 20 mm
+  dendrite_radius: 150.0     # um  樹状突起円の半径 (結合の受容範囲)
+  connection_prob: 0.2       #     樹状突起円への侵入 1 回あたりの結合確率
+  boundary: deflect          #     境界処理: deflect (壁沿いに滑る) | reflect | stop
   allow_self_connections: false

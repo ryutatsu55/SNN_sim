@@ -14,7 +14,13 @@ if _project_root not in sys.path:
 from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
 from src.core.output_manager import AXES_NAME, CONFIG_NAME, data_dir, locate, require
-from src.utils.experiments.akita_soc.runio import WEIGHTS, discover_records, load_weight_matrix
+from src.utils.analysis.weights import BLOCK_ORDER, block_masks, excitatory_flags
+from src.utils.experiments.akita_soc.runio import (
+    WEIGHTS,
+    discover_records,
+    load_connectivity,
+    load_weight_values,
+)
 
 
 def load_weight_trajectories(folder_path, layout):
@@ -23,41 +29,40 @@ def load_weight_trajectories(folder_path, layout):
     グローバル ID ベースで興奮性・抑制性を区別して処理する。
     戻り値: (時間配列, トラジェクトリ辞書)
     トラジェクトリ辞書の各要素は (時間の数, シナプスの数) の2次元配列。
+
+    描くのは**実在するシナプス**の軌跡だけ (COO は実結合しか持たない)。結合の無い
+    ペアが 0 のまま平らな線として束に混ざることはない。
     """
-    records = discover_records(Path(folder_path), WEIGHTS)
+    folder_path = Path(folder_path)
+    records = discover_records(folder_path, WEIGHTS)
 
     if not records:
         print("警告: フォルダ内に weights_*h.npz が見つかりません。")
         return None, None
 
-    ids = layout.ids_by("polarity")
-    exc_ids = ids["excitatory"]
-    inh_ids = ids["inhibitory"]
+    # 結合構造は run を通して不変。ブロックの振り分けも 1 回で済む。
+    connectivity = load_connectivity(folder_path)
+    is_exc = excitatory_flags(layout, layout.total_neurons)
+    masks = block_masks(connectivity.row, connectivity.col, is_exc)
 
     times = []
-    traj_EE, traj_EI, traj_IE, traj_II = [], [], [], []
+    traj = {name: [] for name in BLOCK_ORDER}
 
     for record in records:
+        values = load_weight_values(record.path)
+        if values.size != connectivity.row.size:
+            raise ValueError(
+                f"{record.path} の重み数 {values.size} が connectivity の "
+                f"{connectivity.row.size} と一致しません。"
+            )
         times.append(record.hour)
-        # 密形式 (キー "weights") と COO 形式 (キー "data" + connectivity.npz) の両方を
-        # 扱えるローダを使う。npz のキーを直接見て 2 次元前提で添字すると、疎経路で
-        # 記録した run で落ちる。
-        W = load_weight_matrix(record.path)
+        for name in BLOCK_ORDER:
+            traj[name].append(values[masks[name]])
 
-        # グローバル ID を使ってブロックを抽出
-        traj_EE.append(W[np.ix_(exc_ids, exc_ids)].flatten())
-        traj_EI.append(W[np.ix_(exc_ids, inh_ids)].flatten())
-        traj_IE.append(W[np.ix_(inh_ids, exc_ids)].flatten())
-        traj_II.append(W[np.ix_(inh_ids, inh_ids)].flatten())
-
-    trajectories = {
-        'W_EE': np.array(traj_EE),
-        'W_EI': np.array(traj_EI),
-        'W_IE': np.array(traj_IE),
-        'W_II': np.array(traj_II)
-    }
+    trajectories = {f"W_{name}": np.array(traj[name]) for name in BLOCK_ORDER}
 
     return np.array(times), trajectories
+
 
 def plot_figure2c(folder, layout, output_dir=None):
     if output_dir is None:

@@ -1,0 +1,64 @@
+# 軸索伸長アルゴリズムを「格子状に連結したモジュール構造」の上で走らせる版。
+# エリアは areas.yaml の modular_grid = 一辺 / ブリッジ幅 / 中心間距離 / モジュール数から
+# 正方形とブリッジの配置を自動生成する格子 (既定は 2x2)。
+# ブリッジは正方形に食い込んでいるので**全体が 1 つの連結成分**になり、モジュール間の結合は
+# ブリッジを通り抜けた軸索だけが作る。対角のモジュール同士は直接つながっていないので、
+# 必ず 2 ホップかかる。part の index が module 軸になる。
+#
+# ブリッジに細胞体を置きたくない (軸索の通り道としてだけ使う) 場合は、areas.yaml の
+# modular_grid に soma_in_bridge: false を入れる。
+simulation:
+  N: 256  # 面積より算出 (0.64 mm^2 x 400 neurons/mm^2 = 256)
+  dt: 0.1
+  # seed: 1
+  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
+
+inputs:
+  # akita_escape_lif の escape 発火が自発活動を供給するため外部ノイズは不要。
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  # N = 256 を E/I = 80/20 で分ける
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    polarity: excitatory
+    num: 205
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    polarity: inhibitory
+    num: 51
+
+synapses:
+  from_Exc:
+    source: [Layer_Exc]
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: [Layer_Inh]
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  area: hierarchical_modular_grid
+  space: area_uniform       # エリア内に一様ランダム配置
+  connection: axon_growth_fine  # 軸索伸長アルゴリズム (Δs=10um 版)。
+                            # 既定の axon_growth (Δs=100um) だと 1 ステップが
+                            # モジュール一辺と同程度で、幅 20um のブリッジに弦が収まらず
+                            # モジュール間結合がほとんど生成されない。
+  weight: lognormal_broad   # 対数正規初期重み
+  delay: distance_based     # 距離依存遅延 delay(d)=d/500 + 1.0ms

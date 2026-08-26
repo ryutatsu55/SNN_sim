@@ -157,23 +157,38 @@ class AreaUniformSpace(BaseSpace):
                 " できません)。"
             )
 
-        xy = self.area.sample(self.num_neurons, self.rng)
+        # soma を置ける部分領域。既定は area そのもの(**同一オブジェクト**なので乱数の
+        # 消費数も従来と変わらない)。`allow_soma: false` の part がある複合領域では
+        # それを除いた union が返る。軸索側は NetworkBuilder が渡した area をそのまま
+        # 使い続けるので、「soma はモジュール内、軸索はブリッジも通る」が実現する。
+        # ダックタイピングで受けるのは他のエリア参照(part_of など)と同じ作法。
+        region = getattr(self.area, "soma_area", self.area)
+
+        xy = region.sample(self.num_neurons, self.rng)
 
         coords = np.zeros((self.num_neurons, 3), dtype=np.float32)
         coords[:, :2] = xy
 
         # 実効密度の報告。Sumi et al. (2025) の培養は 400 neurons/mm^2 = 4e-4 /um^2 なので、
         # ニューロン数とエリアの大きさが噛み合っていない config に早く気づけるようにする。
-        area_um2 = self.area.area_um2
+        # 分母は **soma 配置領域**の面積 — N はそこにしか居ないので、これが実効密度になる。
+        area_um2 = region.area_um2
         if area_um2:
             density = self.num_neurons / area_um2
+            total_um2 = self.area.area_um2 if region is not self.area else None
+            extent = (f"soma area={area_um2 * 1e-6:.3f} mm^2 / total {total_um2 * 1e-6:.3f} mm^2"
+                      if total_um2 else f"area={area_um2 * 1e-6:.3f} mm^2")
             print(f"    Density: {density * 1e6:.1f} neurons/mm^2 "
-                  f"(N={self.num_neurons}, area={area_um2 * 1e-6:.3f} mm^2)")
+                  f"(N={self.num_neurons}, {extent})")
 
-        # module 軸(エリアが複合領域なら、どの part に落ちたか)
-        part_of = getattr(self.area, "part_of", None)
+        # module 軸(エリアが複合領域なら、どの part に落ちたか)。
+        # **soma 配置領域の上で採る。** ブリッジがモジュールへ食い込む帯では、モジュール内の
+        # 点でも全体領域の part_of は「より深い」ブリッジ part を返しうるので、全体領域で
+        # 採ると soma が B0-1 とラベルされてしまう。region の part_names は親から
+        # 引き継いだ名前なので、除外前と同じ M0, M1, ... が出る。
+        part_of = getattr(region, "part_of", None)
         if callable(part_of):
-            names = getattr(self.area, "part_names", None)
+            names = getattr(region, "part_names", None)
             idx = part_of(xy)
             self._module_labels = (
                 np.asarray(names, dtype=object)[idx].astype(str) if names is not None

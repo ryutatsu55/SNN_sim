@@ -4,6 +4,7 @@ SDF を格子上で評価して描くやり方には、実装時に踏んだ罠�
 その 3 つと、描画が乱数に触らないこと。
 """
 
+import importlib
 import sys
 import unittest
 from pathlib import Path
@@ -147,6 +148,124 @@ class TestPlotArea(unittest.TestCase):
             self.assertTrue(plot_area(area, out, title="Area: disk"))
             self.assertTrue(out.exists(), "親ディレクトリごと作られていない")
             self.assertGreater(out.stat().st_size, 0)
+
+
+class TestAxonNetwork(unittest.TestCase):
+    """`axon_network()` — 結合を軸索の折れ線で描く図。
+
+    見た目は検証できないので、**何本の折れ線をどの頂点で描いたか**を LineCollection への
+    引数として捕まえて確かめる。特に大事なのは、`network()` と同じ seed なら同じ
+    ニューロンが描かれること (2 枚を並べて比較する前提が崩れないこと)。
+    """
+
+    N = 200
+    SEED = 3
+
+    def tearDown(self):
+        plt.close("all")
+
+    @classmethod
+    def _build(cls, n=None):
+        from src.models.network.connectors import AxonGrowthTopology
+
+        n = n or cls.N
+        area = DiskArea(_cfg(radius=700.0))
+        rng = np.random.RandomState(cls.SEED)
+        coords = np.zeros((n, 3), dtype=np.float64)
+        coords[:, :2] = area.sample(n, rng)
+        cfg = _cfg(mean_axon_length=1100.0, segment_length=100.0, angle_sigma=0.1,
+                   dendrite_radius=150.0, connection_prob=0.2, boundary="deflect",
+                   allow_self_connections=False)
+        conn = AxonGrowthTopology(cfg, n, coords, rng, area=area)
+        conn.generate_sparse()
+        return area, conn.axon_geometry(), coords
+
+    @staticmethod
+    def _config():
+        """`axon_network` が触るのは config.network.space だけ (エリアを渡せば見もしない)。"""
+        return _cfg(network=_cfg(space=_cfg()))
+
+    def _draw(self, tmp, **kwargs):
+        """描画して、LineCollection に渡された折れ線と、描かれたニューロンを回収する。"""
+        from unittest import mock
+
+        # `import src.utils.plotting.network` ではモジュールを掴めない。パッケージの
+        # __init__ が同名の関数 network を re-export しているので、属性参照が関数に
+        # 解決されてしまう。sys.modules を引く import_module なら確実にモジュール。
+        netmod = importlib.import_module("src.utils.plotting.network")
+
+        area, geometry, coords = self._build()
+        collections, sampled = [], []
+        real_lc, real_nodes = netmod.LineCollection, netmod._draw_nodes
+
+        def spy_lc(segments, **kw):
+            collections.append([np.asarray(v) for v in segments])
+            return real_lc(segments, **kw)
+
+        def spy_nodes(ax, x, y, sample, is_exc, node_size):
+            sampled.append(np.asarray(sample))
+            return real_nodes(ax, x, y, sample, is_exc, node_size)
+
+        with mock.patch.object(netmod, "LineCollection", spy_lc), \
+                mock.patch.object(netmod, "_draw_nodes", spy_nodes):
+            netmod.axon_network(geometry, coords, self._config(), area=area,
+                                save_path=str(tmp), seed=self.SEED, **kwargs)
+        return area, geometry, coords, collections, sampled[0]
+
+    def test_writes_a_png_and_draws_three_layers(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, _, collections, _ = self._draw(Path(tmp), title="axon_network")
+            self.assertTrue((Path(tmp) / "axon_network.png").exists())
+            # 下敷き (全軸索) / 結合経路 / 樹状突起の破線 の 3 枚
+            self.assertEqual(len(collections), 3)
+
+    def test_paths_run_from_the_presynaptic_soma_to_the_contact_point(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, g, coords, collections, sample = self._draw(Path(tmp))
+        _, paths, stubs = collections
+
+        in_sample = np.zeros(len(coords), dtype=bool)
+        in_sample[sample] = True
+        expected = np.nonzero(in_sample[g.pre] & in_sample[g.post])[0]
+        self.assertEqual(len(paths), expected.size, "描いた結合数が選んだ結合数と違う")
+        self.assertEqual(len(stubs), expected.size)
+
+        for edge, path, stub in zip(expected, paths, stubs):
+            pre, post = int(g.pre[edge]), int(g.post[edge])
+            seg = int(g.contact_seg[edge])
+            # 始点は pre の細胞体、終点は接触点、頂点数は経路長 + 接触点の 1 つ
+            np.testing.assert_allclose(path[0], coords[pre, :2], atol=1e-6)
+            self.assertEqual(len(path), seg - int(g.offsets[pre]) + 2)
+            np.testing.assert_allclose(stub[0], path[-1], atol=1e-9)
+            np.testing.assert_allclose(stub[1], coords[post, :2], atol=1e-6)
+
+    def test_samples_the_same_neurons_as_network(self):
+        """2 枚を並べて比較できることの担保。同じ seed なら同じニューロンが出る。"""
+        import tempfile
+
+        from unittest import mock
+
+        netmod = importlib.import_module("src.utils.plotting.network")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, g, coords, _, axon_sample = self._draw(Path(tmp))
+
+            weights = np.ones(len(g.pre))
+            with mock.patch.object(netmod, "_draw_nodes") as spy:
+                netmod.network(g.pre, g.post, weights, coords, config=self._config(),
+                               title="network_sample", save_path=str(tmp), seed=self.SEED)
+        np.testing.assert_array_equal(spy.call_args[0][3], axon_sample)
+
+    def test_underlay_can_be_turned_off(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, _, collections, _ = self._draw(Path(tmp), show_axons=False)
+        self.assertEqual(len(collections), 2, "下敷きが消えていない")
 
 
 if __name__ == "__main__":

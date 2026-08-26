@@ -115,9 +115,10 @@ def main():
         save_path=output_dir
     )
 
+    coo = builder.global_coo()
     plotting.network(
-        weights=builder.global_weights, 
-        coords=builder.global_coords, 
+        coo.row, coo.col, coo.weights,
+        coords=builder.global_coords,
         config=config,
         save_path=output_dir
     )

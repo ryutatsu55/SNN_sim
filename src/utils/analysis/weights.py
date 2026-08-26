@@ -1,13 +1,17 @@
-"""E/I ブロック分解と、重みのブロック別統計。
+"""COO 上の per-synapse 量の E/I ブロック分解と、重みのブロック別統計。
 
-送信側 × 受信側の極性で結合を EE / EI / IE / II の 4 ブロックに分ける操作は、密な (N, N)
-行列を持つ場合と COO (row, col) を持つ場合の 2 通りある。**分解と統計は分離**してあり、
-どちらの持ち方でも分解の結果は同じ `{ブロック名: 1D の値配列}` になるので、下流の統計は
-形式を意識しない。極性は常に `layout.ids_by("polarity")` から取る。
+分解の対象は重みに限らない。各シナプスに 1 つずつ値が付いた 1D 配列であれば何でもよく
+(遅延・距離・重み)、`block_masks()` はそれらすべてに使われる。統計 (`weight_block_metrics`
+など) だけが重み固有。
 
-    密: block_values(weights, layout, connection_mask) ─┐
-                                                        ├─▶ weight_block_metrics(blocks, wmax)
-    疎: block_values_coo(weights, row, col, layout) ────┘   summarize_values(blocks[name])
+送信側 × 受信側の極性で結合を EE / EI / IE / II の 4 ブロックへ分ける。入力は常に
+**COO (row, col, 値の 1D 配列)** で、密な (N, N) は受け取らない — ビルド以降の受け渡しは
+COO 一本、という全体の規約に従う (`NetworkBuilder.global_coo()`)。COO は実結合しか
+持たないので、「結合の無い箇所の 0 が統計に混ざる」問題は構造的に起きず、
+かつての `connection_mask` 引数も要らない。極性は常に `layout.ids_by("polarity")` から取る。
+
+    block_values(weights, row, col, layout) ─┬─▶ weight_block_metrics(blocks, wmax)
+                                             └─▶ summarize_values(blocks[name])
 
 統計の語彙が 2 つあるのは意図的で、それぞれ別の CSV の列に直結している:
 
@@ -49,61 +53,28 @@ def block_masks(row: np.ndarray, col: np.ndarray, is_exc: np.ndarray) -> dict[st
     }
 
 
-def block_id_pairs(layout) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """{ブロック名: (送信側グローバルID, 受信側グローバルID)} を返す (密行列用)。"""
-    ids = layout.ids_by("polarity")
-    exc = np.asarray(ids.get("excitatory", []), dtype=np.int32)
-    inh = np.asarray(ids.get("inhibitory", []), dtype=np.int32)
-    everything = np.arange(layout.total_neurons, dtype=np.int32)
-    return {
-        ALL_BLOCK: (everything, everything),
-        "EE": (exc, exc),
-        "EI": (exc, inh),
-        "IE": (inh, exc),
-        "II": (inh, inh),
-    }
+def synapse_distances(coords: np.ndarray, row: np.ndarray, col: np.ndarray) -> np.ndarray:
+    """各シナプスの「細胞体から細胞体までの直線距離」[um] を返す (COO と index 整合)。
+
+    XY 平面への投影で測る。空間モデルが 3 列返す場合でも、結合確率も遅延もこの図も
+    2D 平面上の距離で定義されているため。軸索の実際の経路長ではないことに注意
+    (`axon_growth` の経路長は `AxonGrowthTopology` の `axon_length` 軸が持つ)。
+    """
+    coords = np.asarray(coords, dtype=np.float64)
+    src = coords[np.asarray(row, dtype=np.int64), :2]
+    tgt = coords[np.asarray(col, dtype=np.int64), :2]
+    return np.linalg.norm(src - tgt, axis=1)
 
 
 def block_values(
-    weights: np.ndarray,
-    layout,
-    connection_mask: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
-    """密な重み行列を {ブロック名: 1D の値配列} へ分解する。
-
-    `connection_mask` を渡すと、結合が存在する要素だけを残す (全結合でない構成では、
-    結合の無い箇所の 0 が統計に混ざるのを防ぐ)。
-
-    dtype は変換しない。float32 の行列を渡せば float32 のまま返るので、平均の累積精度は
-    呼び出し側の統計関数の責任になる (`weight_block_metrics` は float64 へ上げる)。
-    """
-    matrix = np.asarray(weights)
-    mask = None if connection_mask is None else np.asarray(connection_mask) != 0
-
-    blocks: dict[str, np.ndarray] = {}
-    for name, (src_ids, tgt_ids) in block_id_pairs(layout).items():
-        if name == ALL_BLOCK:
-            # 全体は np.ix_ で取り直さずに行列そのものを使う (N×N のコピーを避ける)。
-            block = matrix
-            block_mask = mask
-        else:
-            block = matrix[np.ix_(src_ids, tgt_ids)]
-            block_mask = None if mask is None else mask[np.ix_(src_ids, tgt_ids)]
-        blocks[name] = block.reshape(-1) if block_mask is None else block[block_mask]
-    return blocks
-
-
-def block_values_coo(
     weights: np.ndarray,
     row: np.ndarray,
     col: np.ndarray,
     layout,
 ) -> dict[str, np.ndarray]:
-    """COO 形式の重みを {ブロック名: 1D の値配列} へ分解する。
+    """COO 形式の重みを {ブロック名: 1D の値配列} へ分解する。計算量は O(nnz)。
 
-    `block_values` の疎版で、計算量は O(nnz)。COO は実結合のみを持つため、密版に
-    `connection_mask` を渡したのと等価な結果になる (結合が無い箇所の 0 は最初から
-    含まれない)。密な (N,N) を確保できない大規模ネットワーク用。
+    返るのは `ALL` + BLOCK_ORDER の 5 キー。`ALL` は全結合をまとめた擬似ブロック。
 
     Args:
         weights: 各シナプスの重み (1D)
@@ -174,8 +145,7 @@ def weight_block_metrics(
 ) -> dict[str, float]:
     """分解済みのブロックから metrics.csv 用の `weight_*` 列を作る。
 
-    `blocks` は `block_values` または `block_values_coo` の返り値。どちらを渡しても
-    返すキーは同じなので、疎/密で列が変わることはない。
+    `blocks` は `block_values` の返り値。
     """
     all_stats = _weight_block_stats(blocks[ALL_BLOCK], wmax=wmax, at_max_tolerance=at_max_tolerance)
     metrics = {
@@ -194,25 +164,30 @@ def weight_block_metrics(
 def compute_block_metrics(
     hour: float,
     weights: np.ndarray,
+    row: np.ndarray,
+    col: np.ndarray,
     layout,
-    connection_mask: np.ndarray | None = None,
     previous_weights: np.ndarray | None = None,
 ) -> list[dict[str, float | str]]:
-    """weight_block_metrics.csv 用の行 (1 記録時刻 × 5 ブロック) を作る。"""
-    blocks = block_values(weights, layout, connection_mask=connection_mask)
+    """weight_block_metrics.csv 用の行 (1 記録時刻 × 5 ブロック) を作る。
+
+    `weights` / `previous_weights` は同じ (row, col) 上の値ベクトル。結合構造は
+    シミュレーション中に変わらないので、記録間で row/col を取り直す必要はない。
+    """
+    blocks = block_values(weights, row, col, layout)
     if previous_weights is None:
         deltas = None
     else:
         # 「ブロックを取ってから差を取る」と「差を取ってからブロックを取る」は同値。
         deltas = block_values(np.asarray(weights) - np.asarray(previous_weights),
-                              layout, connection_mask=connection_mask)
+                              row, col, layout)
 
     rows: list[dict[str, float | str]] = []
     for name, values in blocks.items():
-        row: dict[str, float | str] = {"hour": hour, "block": name.lower()}
-        row.update(summarize_values(values))
-        row["mean_delta_from_previous"] = (
+        entry: dict[str, float | str] = {"hour": hour, "block": name.lower()}
+        entry.update(summarize_values(values))
+        entry["mean_delta_from_previous"] = (
             np.nan if deltas is None else float(np.mean(deltas[name]))
         )
-        rows.append(row)
+        rows.append(entry)
     return rows

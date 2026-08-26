@@ -24,7 +24,16 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.core.config_manager import ConfigManager  # noqa: E402
 from src.core.layout import NetworkLayout  # noqa: E402
 from src.core.output_manager import CONFIG_NAME  # noqa: E402
-from src.utils.plotting.matrices import plot_single_weight_matrix  # noqa: E402
+from src.utils.analysis.weights import synapse_distances  # noqa: E402
+from src.utils.plotting.distributions import (  # noqa: E402
+    plot_delay_distribution,
+    plot_distance_distribution,
+    plot_synapse_value_distribution,
+)
+from src.utils.plotting.matrices import (  # noqa: E402
+    plot_connection_mask_coarse,
+    plot_single_weight_matrix,
+)
 from src.utils.plotting.ordering import block_ticks, resolve_ordering  # noqa: E402
 from src.utils.plotting.raster import plot_raster  # noqa: E402
 
@@ -114,10 +123,13 @@ def test_nested_axes_block_by_outer_then_sort_inner():
 def test_plots_accept_nested_axes(tmp_path):
     layout = make_layout(6, 4, assignment="random")
     layout.add_axis("layer", np.array(["L1", "L1", "L2", "L2", "L3"] * 2))
-    weights = np.random.default_rng(0).random((10, 10))
+    # 入力は COO (全ペア)。密化は matrices.py が描画直前に自分で行う。
+    row, col = np.meshgrid(np.arange(10), np.arange(10), indexing="ij")
+    row, col = row.reshape(-1), col.reshape(-1)
+    weights = np.random.default_rng(0).random(row.size)
 
     matrix_path = tmp_path / "matrix.png"
-    plot_single_weight_matrix(weights, layout, matrix_path, "W",
+    plot_single_weight_matrix(row, col, weights, layout, matrix_path, "W",
                               order_axes=("layer", "polarity"))
     assert matrix_path.stat().st_size > 0
 
@@ -127,7 +139,86 @@ def test_plots_accept_nested_axes(tmp_path):
     assert raster_path.stat().st_size > 0
 
 
+def test_coarse_mask_groups_by_the_given_axis(tmp_path):
+    """粗視化図が `order_axes` に従ってブロック化すること (E/I 固定ではない)。
+
+    絵そのものは比べようがないので、**同じ結合を別の軸で並べたら別の画像になる**ことと、
+    指定した軸のブロックが実際に連続した表示位置を占めることを見る。前者だけだと
+    order_axes を無視していても偶然通りうるので、両方要る。
+    """
+    layout = make_layout(6, 4, assignment="random")
+    layout.add_axis("module", np.array(["M0", "M0", "M1", "M1", "M2"] * 2))
+    row, col = np.meshgrid(np.arange(10), np.arange(10), indexing="ij")
+    row, col = row.reshape(-1), col.reshape(-1)
+
+    paths = {}
+    for name, axes in (("polarity", ("polarity",)),
+                       ("module", ("module",)),
+                       ("nested", ("module", "polarity")),
+                       ("none", None)):
+        paths[name] = tmp_path / f"coarse_{name}.png"
+        plot_connection_mask_coarse(row, col, layout, 10, paths[name], order_axes=axes)
+        assert paths[name].stat().st_size > 0
+
+    # 軸が違えば並びが違うので、画像も違う
+    blobs = {name: path.read_bytes() for name, path in paths.items()}
+    assert len({blobs["polarity"], blobs["module"], blobs["none"]}) == 3
+
+    # module 指定時、同じモジュールのニューロンは連続した表示位置に固まる
+    ordering = resolve_ordering(layout, ("module",))
+    modules = layout.labels("module")[ordering.order]
+    assert list(modules) == sorted(modules)
+
+
+def test_coarse_mask_survives_more_blocks_than_ticks(tmp_path):
+    """ブロック数が MAX_BLOCK_TICKS を超えても目盛りを諦めるだけで落ちないこと。"""
+    from src.utils.plotting.matrices import MAX_BLOCK_TICKS
+
+    n = 2 * (MAX_BLOCK_TICKS + 4)
+    layout = make_layout(n // 2, n // 2, assignment="sequential")
+    layout.add_axis("module", np.array([f"M{i}" for i in range(n)]))
+    row = col = np.arange(n)
+
+    out = tmp_path / "many_blocks.png"
+    plot_connection_mask_coarse(row, col, layout, n, out, order_axes=("module",))
+    assert out.stat().st_size > 0
+
+
 def test_missing_axis_is_reported():
     layout = make_layout(3, 2)
     with pytest.raises(Exception):
         resolve_ordering(layout, ("layer",))
+
+
+def test_delay_and_distance_share_one_histogram(tmp_path):
+    """遅延版と距離版は `plot_synapse_value_distribution` の薄い包み。
+
+    骨格が 1 つであることの担保。距離は座標から導けるので、遅延に「距離/速度」を渡せば
+    2 枚は軸ラベル以外同じ図になるはず。
+    """
+    layout = make_layout(6, 4, assignment="sequential")
+    coords = np.random.default_rng(0).random((10, 3)) * 100.0
+    row = np.array([0, 1, 2, 6, 7])
+    col = np.array([1, 2, 7, 0, 8])
+
+    distance_path = tmp_path / "distance.png"
+    plot_distance_distribution(coords, row, col, layout, 10, distance_path)
+    assert distance_path.stat().st_size > 0
+
+    # 同じ値を「遅延」として渡しても図は描ける (共通実装を通っている)
+    delay_path = tmp_path / "delay.png"
+    plot_delay_distribution(synapse_distances(coords, row, col), row, col, layout, 10,
+                            delay_path)
+    assert delay_path.stat().st_size > 0
+
+
+def test_synapse_value_distribution_handles_no_synapses(tmp_path):
+    """結合ゼロでも落ちないこと (mean/max を空配列に対して呼ばない)。"""
+    layout = make_layout(6, 4, assignment="sequential")
+    empty = np.array([], dtype=np.int64)
+    out_path = tmp_path / "empty.png"
+
+    plot_synapse_value_distribution(np.array([]), empty, empty, layout, 10, out_path,
+                                    xlabel="Distance [um]", title="empty")
+
+    assert out_path.stat().st_size > 0

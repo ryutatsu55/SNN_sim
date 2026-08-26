@@ -33,7 +33,6 @@ from src.utils.analysis.powerlaw import discrete_distribution, fit_distribution_
 from src.utils.analysis.spikes import diagnose_activity, spike_group_metrics
 from src.utils.analysis.weights import (
     block_values,
-    block_values_coo,
     compute_block_metrics,
     weight_block_metrics,
 )
@@ -42,7 +41,7 @@ from src.utils.plotting.raster import plot_raster
 from scripts.akita_soc_fig2 import replot_existing_output
 from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
-from src.core.output_manager import AXES_NAME, CONFIG_NAME, locate, require
+from src.core.output_manager import AXES_NAME, CONFIG_NAME, CONNECTIVITY_NAME, locate, require
 from src.utils.experiments.akita_soc.runio import (
     SPIKES,
     WEIGHTS,
@@ -229,6 +228,8 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["inh_rate_hz"], 1.0)
 
     def test_weight_block_metrics_reports_block_saturation(self):
+        # 全結合 (4x4 の全ペア) を COO で渡す。結合が無いペアは存在しない構成なので、
+        # かつて密行列を丸ごと渡していたケースと同じ統計になる。
         weights = np.zeros((4, 4), dtype=np.float32)
         weights[0, 0] = 1.0
         weights[0, 1] = 0.5
@@ -236,8 +237,11 @@ class AkitaSocMetricsTest(unittest.TestCase):
         weights[2, 0] = 0.25
         weights[2, 3] = 1.0
         weights[3, 2] = 0.75
+        row, col = np.meshgrid(np.arange(4), np.arange(4), indexing="ij")
+        row, col = row.reshape(-1), col.reshape(-1)
 
-        blocks = block_values(weights, minimal_layout(num_exc=2, num_inh=2))
+        blocks = block_values(weights.reshape(-1), row, col,
+                              minimal_layout(num_exc=2, num_inh=2))
         metrics = weight_block_metrics(blocks, wmax=1.0)
 
         self.assertAlmostEqual(metrics["weight_mean"], float(np.mean(weights)))
@@ -247,41 +251,18 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["weight_ie_mean"], 0.0625)
         self.assertAlmostEqual(metrics["weight_ii_at_max_fraction"], 0.25)
 
-    def test_weight_block_metrics_can_use_connection_mask(self):
-        weights = np.zeros((3, 3), dtype=np.float32)
-        weights[0, 1] = 1.0
-        weights[1, 2] = 0.5
-        mask = np.zeros((3, 3), dtype=np.int32)
-        mask[0, 1] = 1
-        mask[1, 2] = 1
+    def test_weight_block_metrics_counts_only_existing_synapses(self):
+        """COO は実結合しか持たないので、結合の無いペアの 0 は統計に混ざらない。"""
+        row = np.array([0, 1])
+        col = np.array([1, 2])
+        weights = np.array([1.0, 0.5], dtype=np.float32)
 
-        blocks = block_values(weights, minimal_layout(num_exc=2, num_inh=1), connection_mask=mask)
+        blocks = block_values(weights, row, col, minimal_layout(num_exc=2, num_inh=1))
         metrics = weight_block_metrics(blocks, wmax=1.0)
 
         self.assertAlmostEqual(metrics["weight_mean"], 0.75)
         self.assertAlmostEqual(metrics["weight_at_max_fraction"], 0.5)
         self.assertAlmostEqual(metrics["weight_ei_mean"], 0.5)
-
-    def test_dense_and_coo_block_decomposition_agree(self):
-        rng = np.random.default_rng(0)
-        layout = minimal_layout(num_exc=3, num_inh=2)
-        total = layout.total_neurons
-        weights = rng.random((total, total))
-        mask = rng.random((total, total)) < 0.6
-        np.fill_diagonal(mask, False)
-        weights[~mask] = 0.0
-
-        row, col = np.nonzero(mask)
-        dense = block_values(weights, layout, connection_mask=mask)
-        coo = block_values_coo(weights[row, col], row, col, layout)
-
-        self.assertEqual(set(dense), set(coo))
-        for name in dense:
-            # COO は行優先、密は np.ix_ の順なので、集合として一致すればよい。
-            np.testing.assert_allclose(np.sort(dense[name]), np.sort(coo[name]))
-        self.assertEqual(
-            weight_block_metrics(dense, wmax=1.0), weight_block_metrics(coo, wmax=1.0)
-        )
 
     def test_diagnose_activity_combines_overactivity_and_saturation(self):
         diagnosis = diagnose_activity(mean_rate_hz=101.0, weight_at_max_fraction=0.88)
@@ -386,14 +367,15 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
             for name in ("weights_72h.npz", "weights_0h.npz", "weights_6h.npz"):
-                np.savez_compressed(run_dir / name, weights=np.zeros((4, 4), dtype=np.float32))
+                np.savez_compressed(run_dir / name, data=np.zeros(4, dtype=np.float32))
 
             discovered = discover_records(run_dir, WEIGHTS)
 
             self.assertEqual([item.hour for item in discovered], [0.0, 6.0, 72.0])
 
     def test_compute_block_metrics_reports_all_blocks(self):
-        weights = np.array(
+        # 対角 (自己結合) が無い 4 ニューロンの全結合を COO で表す。
+        matrix = np.array(
             [
                 [0.0, 1.0, 0.5, 0.0],
                 [0.2, 0.0, 0.7, 0.0],
@@ -402,6 +384,8 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
             ],
             dtype=np.float32,
         )
+        row, col = np.nonzero(~np.eye(4, dtype=bool))
+        weights = matrix[row, col]
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
             write_minimal_run_config(run_dir)
@@ -411,21 +395,28 @@ class AkitaWeightMatrixVisualizationTest(unittest.TestCase):
         self.assertEqual(ids["excitatory"].tolist(), [0, 1])
         self.assertEqual(ids["inhibitory"].tolist(), [2, 3])
 
-        rows = compute_block_metrics(hour=6.0, weights=weights, layout=layout)
+        rows = compute_block_metrics(hour=6.0, weights=weights, row=row, col=col,
+                                     layout=layout)
         by_block = {row["block"]: row for row in rows}
 
         self.assertEqual(set(by_block), {"all", "ee", "ei", "ie", "ii"})
-        self.assertAlmostEqual(by_block["ee"]["mean"], 0.3)
+        # EE / II は対角ブロックなので、存在しない自己結合の 0 が平均に混ざらない
+        # (密行列を丸ごと渡していた頃は ee=0.3 / ii=0.4 だった)。
+        self.assertAlmostEqual(by_block["ee"]["mean"], 0.6)
         self.assertAlmostEqual(by_block["ei"]["mean"], 0.3)
         self.assertAlmostEqual(by_block["ie"]["mean"], 0.2)
-        self.assertAlmostEqual(by_block["ii"]["mean"], 0.4)
+        self.assertAlmostEqual(by_block["ii"]["mean"], 0.8)
 
     def test_visualize_run_generates_weight_matrix_outputs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
             write_minimal_run_config(run_dir)
-            np.savez_compressed(run_dir / "weights_0h.npz", weights=np.zeros((4, 4), dtype=np.float32))
-            np.savez_compressed(run_dir / "weights_6h.npz", weights=np.ones((4, 4), dtype=np.float32))
+            # COO 形式: 結合構造は connectivity.npz に 1 回、各記録は値ベクトルだけ。
+            r, c = np.nonzero(~np.eye(4, dtype=bool))
+            np.savez_compressed(run_dir / CONNECTIVITY_NAME, row=r, col=c,
+                                shape=np.array([4, 4], dtype=np.int64))
+            np.savez_compressed(run_dir / "weights_0h.npz", data=np.zeros(r.size, dtype=np.float32))
+            np.savez_compressed(run_dir / "weights_6h.npz", data=np.ones(r.size, dtype=np.float32))
 
             out_dir = visualize_weight_tracks(run_dir, load_run_layout(run_dir))
 
