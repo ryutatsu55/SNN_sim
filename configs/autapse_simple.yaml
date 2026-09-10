@@ -1,0 +1,36 @@
+simulation:
+  N: 1
+  dt: 0.1
+  seed: 1
+  backend: cpu
+
+inputs:
+  GaussianNoise:
+    enable: false
+
+neurons:
+  AutapseNeuron:
+    type: LIF
+    mode: excitatory
+    polarity: excitatory
+    num: 1
+
+synapses:
+  autapse:
+    source: [AutapseNeuron]
+    synapse:
+      type: ExpCurr
+      mode: excitatory
+    plasticity:
+      type: StaticPulse
+      mode: default
+
+network:
+  space: no_space
+  connection: constant_prob_full_autapse
+  weight: constant
+  delay: constant
+  sparse: "off"
+
+layout:
+  assignment: sequential
