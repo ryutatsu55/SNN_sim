@@ -22,6 +22,7 @@ import src.models.neurons.pqn_int
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
 import src.models.neurons.lif
+import src.models.network.area
 import src.models.network.space
 import src.models.network.connectors
 import src.models.network.weights
@@ -114,9 +115,10 @@ def main():
         save_path=output_dir
     )
 
+    coo = builder.global_coo()
     plotting.network(
-        weights=builder.global_weights, 
-        coords=builder.global_coords, 
+        coo.row, coo.col, coo.weights,
+        coords=builder.global_coords,
         config=config,
         save_path=output_dir
     )

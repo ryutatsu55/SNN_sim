@@ -49,9 +49,12 @@ synapses:
       mode: inhibitory
 
 network:
-  space: module_2d          # 2×2モジュール結合 × 4 (該当クラスなし。作ってください)
-  connection: axon          # 軸索伸長アルゴリズム(該当クラスなし。下記の文献参考に作ってください)
+  area: modular_4_3mm       # 2×2 モジュール(円)を十字ブリッジで連結。面積 8.997 mm^2
+  space: area_uniform       # エリア内に一様ランダム配置。module 軸が自動で立つ
+  connection: axon_growth   # 軸索伸長アルゴリズム
   weight: lognormal_broad   # 対数正規初期重み (all zeroでもいい)
   delay: distance_based     # 距離依存遅延 delay(d)=d/500 + 1.0ms
 
-# 軸索 参考文献：https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2025.1570783/full)
+# 軸索 参考文献：https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2025.1570783/full
+# モジュール構造は space クラスではなく **エリアの形** が決める (configs/components/areas.yaml)。
+# 軸索はエリアの外へ出ないので、モジュール間の結合はブリッジを通ったものだけになる。

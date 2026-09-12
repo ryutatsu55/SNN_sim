@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 import pygenn
 from dataclasses import dataclass
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, NamedTuple, Tuple
 from pathlib import Path
 import sys
 
@@ -27,7 +27,31 @@ if project_root not in sys.path:
 # Pydanticの設定モデルと、コンポーネントを動的ロードするレジストリをインポート
 from src.core.config_manager import AppConfig
 from src.core.layout import NetworkLayout
-from src.core.registry import SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
+from src.core.registry import AREA_MODELS, SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
+
+class GlobalCOO(NamedTuple):
+    """グローバルID空間での結合を COO で表したもの。**ビルド以降の唯一の受け渡し形式**。
+
+    疎生成経路と密生成経路の違いを吸収する場所はここ 1 箇所だけで、
+    `NetworkBuilder.global_coo()` を通った後のコード (utils / scripts / test) は
+    もう `is_sparse` を見ない。密な (N, N) が本当に要るのは行列画像を描くときだけなので、
+    その復元は描画関数が自分の中でやる (`src/utils/plotting/matrices.py`)。
+
+    **不変条件: 行優先ソート済み** (row 昇順、同一 row 内で col 昇順)。
+    密経路は `np.nonzero(mask)` が、疎経路は各コネクタの `generate_sparse()` が保証する。
+    GeNN はシナプスを送信元ニューロン順に格納するので、`_pair_coo()` の集団ローカル COO も
+    この順序に乗っている。
+    """
+    row: np.ndarray      # int32, グローバル pre ID
+    col: np.ndarray      # int32, グローバル post ID
+    weights: np.ndarray  # float64
+    delays: np.ndarray   # float64 [ms]
+    shape: Tuple[int, int]
+
+    @property
+    def num_synapses(self) -> int:
+        return int(self.row.size)
+
 
 @dataclass(frozen=True)
 class SynapseIndex:
@@ -105,23 +129,59 @@ class NetworkBuilder:
 
         self._component_lifeline = []
         self.global_coords = None
-        self.global_mask = None
-        self.global_weights = None
-        self.global_delays = None
+        # 密生成経路の作業領域。**生成経路の内部都合なので private**。
+        # ビルド以降にグローバルな結合が要るコードは `global_coo()` を使うこと
+        # (疎/密の分岐がそこ 1 箇所に閉じる)。
+        self._global_mask = None
+        self._global_weights = None
+        self._global_delays = None
+        # ニューロンを配置し軸索を閉じ込める 2D 領域 (_generate_global_matrices で構築)
+        self.area = None
+        # 結合コンポーネントの実体。生成後も残すのは、行列に落ちない副産物 (axon_growth の
+        # 軸索折れ線など) を可視化・解析から読めるようにするため。area と同じ扱い。
+        self.connection = None
         # 疎生成経路で使う COO (すべて index 整合の 1D 配列)。密経路では None のまま。
-        self.sparse_rows = None
-        self.sparse_cols = None
-        self.sparse_weights = None
-        self.sparse_delays = None
+        # これも生成経路の内部都合。外へ出すのは `global_coo()` に正規化した後だけ。
+        self._sparse_rows = None
+        self._sparse_cols = None
+        self._sparse_weights = None
+        self._sparse_delays = None
+        # 疎/密どちらで生成しても同じ形になる正規化済み COO (`global_coo()` のキャッシュ)
+        self._global_coo: GlobalCOO | None = None
         # 疎経路での グローバルID -> (集団コード, ローカルindex) 索引表 (遅延構築)
         self._index_table = None
         # "src_to_tgt" -> SynapseIndex。_build_synapses が GeNN へ登録した接続順を記録する。
         self.synapse_index: Dict[str, SynapseIndex] = {}
+        # "src_to_tgt" -> fan-in 正規化に使うシナプス数。None なら実際の本数を使う (通常)。
+        # 損傷実験で「切断してもゲインは変えない」を実現するために使う。
+        self._fan_in_reference: Dict[str, int] | None = None
 
-    def build(self, rec_spike: bool = True) -> Tuple[pygenn.GeNNModel, NetworkLayout]:
+    def build(self, rec_spike: bool = True,
+              transform_coo=None,
+              preserve_fan_in_scale: bool = False) -> Tuple[pygenn.GeNNModel, NetworkLayout]:
+        """GeNN モデルを構築する。
+
+        Args:
+            transform_coo: 生成直後のグローバル COO を差し替えるフック
+                (`GlobalCOO -> GlobalCOO`)。**乱数の消費が終わった後、GeNN へ登録する前**に
+                1 度だけ呼ばれる。損傷実験 (シナプスの構造的除去) と重み復元の入口。
+                None なら従来と完全に同一の経路 (分岐も乱数の消費も一切変わらない)。
+                詳細は `replace_global_coo()` の docstring。
+            preserve_fan_in_scale: `transform_coo` でシナプスを削っても、可塑性モデルの
+                fan-in 正規化 (`normalize_gmax_by_fan_in`) の分母を**変換前の本数**に
+                固定する。損傷が実効ゲインを動かす交絡を止めるためのもの。
+        """
         print("=== ネットワーク構築 (Network Building) ===")
         # 1. 全ニューロン一括での座標・グローバル行列生成 (レイアウトは __init__ で確定済み)
         self._generate_global_matrices()
+        if transform_coo is not None:
+            self.replace_global_coo(transform_coo(self.global_coo()),
+                                    preserve_fan_in_scale=preserve_fan_in_scale)
+        elif preserve_fan_in_scale:
+            raise ValueError(
+                "preserve_fan_in_scale は transform_coo と一緒にしか意味がありません"
+                " (変換しなければ fan-in は元から変わらない)。"
+            )
         # 2. GeNNへのニューロン・シナプスの登録
         self._build_neuron_populations()
         self._build_synapses()
@@ -134,6 +194,7 @@ class NetworkBuilder:
     def _component_classes(self):
         network = self.config.network
         return (
+            AREA_MODELS.get(network.area.profile_name),
             SPATIAL_MODELS.get(network.space.profile_name),
             CONNECTION_MODELS.get(network.connection.profile_name),
             WEIGHT_MODELS.get(network.weight.profile_name),
@@ -164,7 +225,8 @@ class NetworkBuilder:
         if mode == "on":
             mode = "force"
 
-        _, connect_cls, weight_cls, delay_cls = self._component_classes()
+        # area と space は行列を作らないので疎/密の判定対象外。
+        _, _, connect_cls, weight_cls, delay_cls = self._component_classes()
         unsupported = [
             cls.__name__
             for cls in (connect_cls, weight_cls, delay_cls)
@@ -198,7 +260,7 @@ class NetworkBuilder:
         """疎生成経路で構築されたか。真実の在り処は `config.network.sparse`。
 
         `_generate_global_matrices()` が決定結果を config へ焼き込むので、ビルド後は
-        ここを見れば分岐が分かる。`sparse_rows is not None` のような副作用からの推測は
+        ここを見れば分岐が分かる。`_sparse_rows is not None` のような副作用からの推測は
         しないこと (真実が 2 箇所になる)。
         """
         return self.config.network.sparse == "on"
@@ -210,13 +272,180 @@ class NetworkBuilder:
 
         # 決定結果を config へ焼き込む。以後この分岐を見たい人は config.network.sparse を
         # 読む (seed / backend / layout.assignment と同じく、実際にどちらで走ったかを
-        # 記録に残すため)。`sparse_rows is not None` のような副作用からの推測はしない。
+        # 記録に残すため)。`_sparse_rows is not None` のような副作用からの推測はしない。
         self.config.network.sparse = "on" if use_sparse else "off"
 
         if use_sparse:
             self._generate_global_sparse()
         else:
             self._generate_global_dense()
+
+        # ここで疎/密を 1 つの COO に正規化する。以降 (GeNN 登録・可視化・解析) は
+        # この形しか見ないので、生成経路の違いはこの行より先へは漏れない。
+        self._global_coo = self._normalize_to_coo()
+
+    def _normalize_to_coo(self) -> GlobalCOO:
+        """生成直後のグローバル結合を `GlobalCOO` へ正規化する (`global_coo()` の実装)。
+
+        密経路は「マスクが非零のところ」を実結合とする (重みが 0 でも結合はある)。
+        `np.nonzero` の返す順序が行優先なので、`GlobalCOO` の不変条件はそのまま満たされる。
+        """
+        shape = (self.total_neurons, self.total_neurons)
+        if self.is_sparse:
+            return GlobalCOO(
+                row=np.asarray(self._sparse_rows, dtype=np.int32),
+                col=np.asarray(self._sparse_cols, dtype=np.int32),
+                weights=np.asarray(self._sparse_weights, dtype=np.float64),
+                delays=np.asarray(self._sparse_delays, dtype=np.float64),
+                shape=shape,
+            )
+        row, col = np.nonzero(np.asarray(self._global_mask))
+        return GlobalCOO(
+            row=row.astype(np.int32),
+            col=col.astype(np.int32),
+            weights=np.asarray(self._global_weights)[row, col].astype(np.float64),
+            delays=np.asarray(self._global_delays)[row, col].astype(np.float64),
+            shape=shape,
+        )
+
+    def global_coo(self) -> GlobalCOO:
+        """グローバルな結合を COO で返す。**ビルド以降はこれが唯一の入口**。
+
+        疎経路で生成されたか密経路で生成されたかに関わらず同じ形・同じ順序で返るので、
+        呼び出し側が `is_sparse` を見る必要はない。行列生成前に呼ぶとエラー。
+        """
+        if self._global_coo is None:
+            raise RuntimeError(
+                "global_coo() は結合の生成後にしか呼べません。"
+                " build() か _generate_global_matrices() を先に実行してください。"
+            )
+        return self._global_coo
+
+    def _pair_synapse_counts(self, coo: GlobalCOO) -> Dict[str, int]:
+        """COO をシナプス集団ごとに数える (`_pair_coo()` と同じ切り分け)。"""
+        if self._index_table is None:
+            self._index_table = self._local_index_table()
+        pop_code, _local_of, code_of_name = self._index_table
+        counts: Dict[str, int] = {}
+        for syn_cfg in self.config.synapses.values():
+            for src_name, tgt_name in itertools.product(syn_cfg.source, self.config.neurons):
+                sel = (
+                    (pop_code[coo.row] == code_of_name[src_name])
+                    & (pop_code[coo.col] == code_of_name[tgt_name])
+                )
+                counts[f"{src_name}_to_{tgt_name}"] = int(np.count_nonzero(sel))
+        return counts
+
+    def replace_global_coo(self, coo: GlobalCOO, preserve_fan_in_scale: bool = False) -> None:
+        """生成済みのグローバル COO を差し替える。**GeNN へ登録する前にだけ**呼べる。
+
+        ここが唯一の差し替え地点である理由は 2 つ:
+
+        - **乱数ストリームより後**。座標・結合・初期重み・遅延の生成 (`self.rng` の消費) は
+          `_generate_global_matrices()` で完了しているので、ここで何をしても同一 seed の
+          ネットワーク実現は変わらない。「シナプスを削ったせいで別のネットワークになった」
+          が原理的に起きない。
+        - **GeNN 登録より前**。`_build_synapses()` は `global_coo()` しか読まず、重みを
+          `init_weight_update(vars={"w": ...})` へ渡す。よって構造的除去 (行の削除) と
+          重み復元 (weights の差し替え) の両方が「GeNN 登録時の初期値」として一度に入り、
+          setup 後の重み注入 (pygenn の SPARSE 行ごとの Python ループ、`setup()` の
+          `backup_initial_states` が注入前の値を覚えてしまう罠) を避けられる。
+
+        検証する不変条件。1 つでも破れば `ValueError` を投げる —— 黙って通すと、GeNN が
+        期待する「集団ローカルの (pre, post) 行優先ソート順」が崩れたまま学習が走り、
+        別のシナプスに重みが乗ったことに誰も気付けない:
+
+        1. row / col / weights / delays の長さが等しい
+        2. shape が `(total_neurons, total_neurons)` のまま
+        3. `0 <= row, col < total_neurons`
+        4. `row * N + col` が**狭義単調増加** (= 行優先ソート済み、かつ重複ペアなし)
+        5. weights / delays が有限
+        6. シナプスが 1 本以上ある (0 本の GeNN モデルは下流が NaN だらけになるだけで、
+           原因が追えない)
+
+        Note:
+            `self.connection.axon_geometry()` は差し替えの影響を受けない。幾何の `pre`/`post`
+            は**差し替え前の COO** と位置一致しているので、差し替え後にそのまま
+            `axon_network()` へ渡すと切断したシナプスまで描かれる。部分集合を取った
+            コピーを渡すこと。
+        """
+        if self.synapse_index:
+            raise RuntimeError(
+                "replace_global_coo() は GeNN へシナプスを登録する前にしか呼べません"
+                f" (すでに {len(self.synapse_index)} 集団が登録済み)。"
+                " build(transform_coo=...) を使ってください。"
+            )
+        if self._global_coo is None:
+            raise RuntimeError(
+                "replace_global_coo() は結合の生成後にしか呼べません。"
+                " _generate_global_matrices() を先に実行してください。"
+            )
+
+        row = np.asarray(coo.row, dtype=np.int64)
+        col = np.asarray(coo.col, dtype=np.int64)
+        weights = np.asarray(coo.weights, dtype=np.float64)
+        delays = np.asarray(coo.delays, dtype=np.float64)
+
+        n = int(self.total_neurons)
+        if tuple(coo.shape) != (n, n):
+            raise ValueError(
+                f"差し替え後の shape {tuple(coo.shape)} が (total_neurons, total_neurons)"
+                f" = ({n}, {n}) と一致しません。"
+            )
+        sizes = {row.size, col.size, weights.size, delays.size}
+        if len(sizes) != 1:
+            raise ValueError(
+                "row / col / weights / delays の長さが一致しません: "
+                f"row={row.size}, col={col.size}, weights={weights.size}, delays={delays.size}"
+            )
+        if row.size == 0:
+            raise ValueError(
+                "差し替え後のシナプスが 0 本です。シナプスの無い GeNN モデルは下流の解析が"
+                " すべて NaN になるだけで原因が追えないので、ここで止めます。"
+            )
+        if row.min() < 0 or row.max() >= n or col.min() < 0 or col.max() >= n:
+            raise ValueError(
+                f"グローバルIDが範囲外です (row: {row.min()}..{row.max()},"
+                f" col: {col.min()}..{col.max()}, N={n})。"
+            )
+        # int64 で計算すること。int32 のままだと N が大きいときに row*N+col が折り返り、
+        # 別のペアが同じキーになって「ソート済み」の判定をすり抜ける。
+        keys = row * n + col
+        if row.size > 1:
+            steps = np.diff(keys)
+            if np.any(steps <= 0):
+                bad = int(np.count_nonzero(steps <= 0))
+                raise ValueError(
+                    f"差し替え後の COO が行優先ソート済みではありません ({bad} 箇所で"
+                    " 昇順が崩れているか、同じ (pre, post) が重複しています)。"
+                    " GeNN は送信元ニューロン順にシナプスを格納するので、この順序は"
+                    " `_pair_coo()` の前提です。"
+                )
+        if not np.all(np.isfinite(weights)) or not np.all(np.isfinite(delays)):
+            raise ValueError("差し替え後の weights / delays に非有限値が含まれています。")
+
+        if preserve_fan_in_scale:
+            # **差し替える前の** COO で数える。可塑性モデルの g_scale = num_post/num_synapses
+            # をここに固定することで、シナプスを削っても実効ゲインが動かなくなる。
+            self._fan_in_reference = self._pair_synapse_counts(self._global_coo)
+
+        self._global_coo = GlobalCOO(
+            row=row.astype(np.int32),
+            col=col.astype(np.int32),
+            weights=weights,
+            delays=delays,
+            shape=(n, n),
+        )
+        # 生成経路の作業領域は差し替え後の結合を指していない。読めてしまうより落ちるほうが
+        # 安全なので落とす (どのみち `_pair_coo()` は global_coo() しか見ない)。
+        self._global_mask = None
+        self._global_weights = None
+        self._global_delays = None
+        self._sparse_rows = None
+        self._sparse_cols = None
+        self._sparse_weights = None
+        self._sparse_delays = None
+        self._index_table = None
 
     def _inject_axes(self, component):
         """コンポーネントが宣言するカテゴリ/ソート軸を NetworkLayout に注入する。
@@ -238,31 +467,39 @@ class NetworkBuilder:
         network = self.config.network
 
         # Pydanticモデルから辞書を取得
+        area_cfg = network.area
         space_cfg = network.space
         conn_cfg = network.connection
         weight_cfg = network.weight
         delay_cfg = network.delay
 
-        spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
 
-        # 1. 空間座標の生成
-        space = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout)
+        # 1. 領域の構築 (soma の配置範囲と軸索の伸長範囲)。
+        #    RandomState を渡さないのは、area が rng を消費すると空間→結合→重み→遅延の
+        #    単一ストリームが全部ずれ、同じ seed の既存ネットワークが別物になるから。
+        #    乱数は area.sample(n, rng) の引数としてのみ空間モデルから渡る。
+        self.area = areaClass(area_cfg, self.total_neurons, layout=self.layout)
+
+        # 2. 空間座標の生成
+        space = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout, area=self.area)
         self.global_coords = space.generate()
         self._inject_axes(space)
 
-        # 2. 結合マスクの生成
-        connection = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout)
-        self.global_mask = connection.generate()
+        # 3. 結合マスクの生成
+        connection = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout, area=self.area)
+        self.connection = connection
+        self._global_mask = connection.generate()
         self._inject_axes(connection)
 
-        # 3. 重み行列の生成
-        weight = weightClass(weight_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout)
-        self.global_weights = weight.generate()
+        # 4. 重み行列の生成
+        weight = weightClass(weight_cfg, self.total_neurons, self.global_coords, self._global_mask, self.rng, layout=self.layout)
+        self._global_weights = weight.generate()
         self._inject_axes(weight)
 
-        # 4. 遅延行列の生成
-        delay = delayClass(delay_cfg, self.total_neurons, self.global_coords, self.global_mask, self.rng, layout=self.layout)
-        self.global_delays = delay.generate()
+        # 5. 遅延行列の生成
+        delay = delayClass(delay_cfg, self.total_neurons, self.global_coords, self._global_mask, self.rng, layout=self.layout)
+        self._global_delays = delay.generate()
         self._inject_axes(delay)
 
     def _generate_global_sparse(self):
@@ -273,38 +510,43 @@ class NetworkBuilder:
         (connectors.GaussianDistanceTypeTopology.generate_sparse の docstring 参照)。
         """
         network = self.config.network
-        spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+
+        # 密経路と同じく area は rng を受け取らない (_generate_global_dense のコメント参照)。
+        self.area = areaClass(network.area, self.total_neurons, layout=self.layout)
 
         space = spaceClass(
-            network.space, self.total_neurons, self.rng, layout=self.layout
+            network.space, self.total_neurons, self.rng, layout=self.layout, area=self.area
         )
         self.global_coords = space.generate()
         self._inject_axes(space)
 
         connection = connectClass(
-            network.connection, self.total_neurons, self.global_coords, self.rng, layout=self.layout
+            network.connection, self.total_neurons, self.global_coords, self.rng,
+            layout=self.layout, area=self.area,
         )
+        self.connection = connection
         rows, cols = connection.generate_sparse()
         self._inject_axes(connection)
-        self.sparse_rows = np.asarray(rows, dtype=np.int32)
-        self.sparse_cols = np.asarray(cols, dtype=np.int32)
+        self._sparse_rows = np.asarray(rows, dtype=np.int32)
+        self._sparse_cols = np.asarray(cols, dtype=np.int32)
 
         weight = weightClass(
             network.weight, self.total_neurons, self.global_coords,
             mask=None, rng=self.rng, layout=self.layout,
         )
-        self.sparse_weights = weight.generate_sparse(self.sparse_rows, self.sparse_cols)
+        self._sparse_weights = weight.generate_sparse(self._sparse_rows, self._sparse_cols)
         self._inject_axes(weight)
 
         delay = delayClass(
             network.delay, self.total_neurons, self.global_coords,
             mask=None, rng=self.rng, layout=self.layout,
         )
-        self.sparse_delays = delay.generate_sparse(self.sparse_rows, self.sparse_cols)
+        self._sparse_delays = delay.generate_sparse(self._sparse_rows, self._sparse_cols)
         self._inject_axes(delay)
 
-        print(f"    Sparse connectivity: {self.sparse_rows.size} synapses "
-              f"({self.sparse_rows.size / max(self.total_neurons, 1):.1f} per neuron)")
+        print(f"    Sparse connectivity: {self._sparse_rows.size} synapses "
+              f"({self._sparse_rows.size / max(self.total_neurons, 1):.1f} per neuron)")
 
     def _build_neuron_populations(self):
         """GeNN上にニューロンポピュレーションを定義
@@ -365,44 +607,32 @@ class NetworkBuilder:
     def _pair_coo(self, src_name: str, tgt_name: str):
         """(src_pop -> tgt_pop) の接続を集団ローカルの COO として取り出す。
 
+        入力はグローバル COO 1 本 (`global_coo()`)。疎で生成したか密で生成したかで
+        分岐しないのは、正規化の時点で違いが消えているから。
+
+        `layout.global_indices` は昇順なので `local_of` は各集団上で単調増加であり、
+        行優先ソート済みキーへの単調写像はソート順を保つ。よってここで得られる並びは、
+        密行列を `np.where(sub_mask)` で走査したのと同一 = GeNN が期待する
+        「集団ローカルの (pre, post) 行優先ソート順」になる。
+
         Returns:
             (local_src, local_tgt, weights_flat, delays_ms) いずれも行優先ソート済みで
             index が整合した 1D 配列。接続が無ければすべて空配列。
         """
-        if not self.is_sparse:
-            # 密経路: 従来どおりグローバル行列から np.ix_ で切り出す。
-            src_indices = self.layout.global_indices(src_name)
-            tgt_indices = self.layout.global_indices(tgt_name)
-            sub_mask = self.global_mask[np.ix_(src_indices, tgt_indices)]
-            local_src, local_tgt = np.where(sub_mask != 0)
-            sub_weights = self.global_weights[np.ix_(src_indices, tgt_indices)]
-            sub_delays = self.global_delays[np.ix_(src_indices, tgt_indices)]
-            return (
-                local_src,
-                local_tgt,
-                sub_weights[local_src, local_tgt],
-                sub_delays[local_src, local_tgt].astype(np.float64),
-            )
-
-        # 疎経路: グローバル COO をブールフィルタする。
-        # layout.global_indices は昇順なので local_of は各集団上で単調増加であり、
-        # 行優先ソート済みキーへの単調写像はソート順を保つ。よって密経路の
-        # np.where(sub_mask) と同一の順序が得られる。
+        coo = self.global_coo()
         if self._index_table is None:
             self._index_table = self._local_index_table()
         pop_code, local_of, code_of_name = self._index_table
 
         sel = (
-            (pop_code[self.sparse_rows] == code_of_name[src_name])
-            & (pop_code[self.sparse_cols] == code_of_name[tgt_name])
+            (pop_code[coo.row] == code_of_name[src_name])
+            & (pop_code[coo.col] == code_of_name[tgt_name])
         )
-        rows = self.sparse_rows[sel]
-        cols = self.sparse_cols[sel]
         return (
-            local_of[rows],
-            local_of[cols],
-            self.sparse_weights[sel],
-            self.sparse_delays[sel].astype(np.float64),
+            local_of[coo.row[sel]],
+            local_of[coo.col[sel]],
+            coo.weights[sel],
+            coo.delays[sel],
         )
 
     def _build_synapses(self):
@@ -467,6 +697,12 @@ class NetworkBuilder:
                 )
                 if use_axonal:
                     plas_kwargs["axonal_delay_steps"] = axonal_steps
+                # fan-in 正規化の分母の固定も axonal と同じ opt-in 方式。受け取れない可塑性
+                # モデルには渡さない (標準モデルはそもそも fan-in 正規化を持たない)。
+                if self._fan_in_reference is not None:
+                    pair_name = f"{src_name}_to_{tgt_name}"
+                    if "fan_in_num_synapses" in inspect.signature(PlasClass.__init__).parameters:
+                        plas_kwargs["fan_in_num_synapses"] = self._fan_in_reference[pair_name]
                 plas_instance = PlasClass(**plas_kwargs)
                 self._component_lifeline.append(plas_instance)
                 weight_init = pygenn.genn_model.init_weight_update(

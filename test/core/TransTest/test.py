@@ -124,9 +124,10 @@ def main():
         save_path="test/core/TransTest"
     )
 
+    coo = builder.global_coo()
     plotting.network(
-        weights=builder.global_weights, 
-        coords=builder.global_coords, 
+        coo.row, coo.col, coo.weights,
+        coords=builder.global_coords,
         config=config,
         save_path="test/core/TransTest"
         )

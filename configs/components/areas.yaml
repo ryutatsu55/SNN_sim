@@ -1,0 +1,186 @@
+# ニューロンを配置し、軸索を閉じ込める 2D 領域。
+# space (soma 配置) より先に構築され、space と connection (軸索の境界処理) に渡される。
+# 他の 4 コンポーネントと同じく **メイン config で必須**。領域の制約を置かない場合も
+# `area: no_space` と明示的に書く。
+#
+# 領域は符号付き距離関数 (SDF) で表す。composite で min/max 合成すれば、円や矩形の
+# 組み合わせで任意の複雑形状 (モジュール構造、トラック、穴あき) が作れる。
+#
+# **領域は 2 つある。** 軸索が動ける領域 (プロファイルが定義する形そのもの) と、soma を
+# 置いてよい部分領域。既定では同一だが、composite の part に `allow_soma: false` と書くと
+# その part は soma 配置の対象から外れ、**軸索だけが通れる通路**になる (軸索の閉じ込め・
+# 樹状突起の見通し判定はどちらでも一切変わらない)。`modular_grid` はこれを
+# `soma_in_bridge: false` という 1 つのスイッチにまとめている。
+# 注意: `allow_soma: false` は `op: union` の composite でのみ意味を持つ。また soma 配置
+# 領域が変わると棄却サンプリングのドロー数が変わるので、**同じ seed でも座標・重み・遅延が
+# すべて別の実現になる** (エリアの形を変えたときと同じ理由)。
+
+# 領域の制約を置かない = 無界。確率ベースの結合モデル (constant_prob, beggs_plenz など) は
+# 領域を参照しないので、それらを使う config はこれを指定する。
+no_space: {}
+# ↑ 空マッピングであること。`no_space:` とだけ書くと値が None になり、
+#   ConfigManager.resolve() の data[profile].copy() が AttributeError で落ちる
+#   (space.yaml の `no_space: {hoge: null}` が置かれているのと同じ事情)。
+
+disk:
+  radius: 1500.0    # um。Sumi et al. (2025) Front. Neurosci. 19:1570783 §2.8 の直径 3 mm
+  center: [0.0, 0.0]
+
+rect:
+  x_range: [0.0, 1500.0]  # um
+  y_range: [0.0, 1500.0]  # um
+
+# 菱形 (45 度回した矩形 = L1 ボール)。radius は中心から頂点まで (半対角線)。
+# 単体で使うより、矩形との intersection で **45 度の面取り**を作るのが主用途
+# (modular_grid の chamfer がこれ)。矩形を回転させる仕組みを足す代わりに、
+# 合成できる SDF を 1 つ増やすだけで済ませている。
+diamond:
+  radius: 1000.0    # um。[rx, ry] と書けば異方な菱形になる
+  center: [0.0, 0.0]
+
+# 4 モジュール (円) と十字の矩形 2 枚。part の index が AreaUniformSpace によって
+# `module` 軸になるので、以降 layout.ids_by("module") で M0..M5 を参照できる。
+#
+# **注意: ブリッジは円に届いていない。** 円中心 (±500) から矩形の最近点までは 440 um で
+# 半径 400 um を上回るため 40 um の隙間があり、この領域は「4 円 + 十字」の
+# **5 つの独立した連結成分**になる (矩形 2 枚は互いに交差しているので 1 成分)。
+# 結合はこの空隙を越えない (軸索も樹状突起も BaseArea.segment_inside で遮られる) ので、
+# 4 モジュールは完全に独立したサブネットワークになる。連結させたい場合は矩形の半幅を
+# 100 um より大きくすること (150 なら面積 2.460 mm^2、400 neurons/mm^2 で N=984)。
+modular_4:
+  op: union
+  parts:
+    - {type: disk, center: [-500.0, -500.0], radius: 400.0}
+    - {type: disk, center: [ 500.0, -500.0], radius: 400.0}
+    - {type: disk, center: [-500.0,  500.0], radius: 400.0}
+    - {type: disk, center: [ 500.0,  500.0], radius: 400.0}
+    - {type: rect, x_range: [-500.0, 500.0], y_range: [ -60.0,  60.0]}
+    - {type: rect, x_range: [ -60.0,  60.0], y_range: [-500.0, 500.0]}
+
+# 四隅の正方形を長方形のブリッジで**格子状に連結**したモジュール構造 (形を直書きする版)。
+# modular_4 と違い、ブリッジは正方形に食い込んで確実に重なっているので、全体が 1 つの
+# 連結成分になる。軸索はブリッジを通ってのみ隣のモジュールへ到達できるので、
+# 「モジュール内は密、モジュール間はブリッジ経由の細い経路だけ」という構造になる。
+#
+# 結線は 4-サイクル (BL-BR-TR-TL-BL)。対角同士は直接つながっていないので、
+# 対角モジュールへは必ず 2 ホップかかる。
+#
+# 一辺・ブリッジ幅・正方形間距離・モジュール数を与えるだけで同種の形を生成したいなら、
+# 下の `modular_grid` (ModularGridArea) を使う。こちらは任意の形を parts で直接書ける
+# ことの見本として残してある。**食い込みを 0 にすると連結にならない**点だけ注意。
+#
+#   M2 ┌───┐   M5   ┌───┐ M3      M0..M3 = 正方形 (BL, BR, TL, TR)
+#      │   ├───────┤   │          M4, M5 = 横ブリッジ (下, 上)
+#      └─┬─┘       └─┬─┘          M6, M7 = 縦ブリッジ (左, 右)
+#     M6 │           │ M7
+#      ┌─┴─┐       ┌─┴─┐
+#      │   ├───────┤   │
+#   M0 └───┘   M4  └───┘ M1
+modular_4_grid:
+  op: union
+  parts:
+    # 四隅の正方形。
+    - {type: rect, x_range: [-300.0, -100.0], y_range: [-300.0, -100.0]}
+    - {type: rect, x_range: [ 100.0,  300.0], y_range: [-300.0, -100.0]}
+    - {type: rect, x_range: [-300.0, -100.0], y_range: [ 100.0,  300.0]}
+    - {type: rect, x_range: [ 100.0,  300.0], y_range: [ 100.0,  300.0]}
+    # ブリッジ。正方形に食い込むところまで伸ばすこと (接するだけでは連結にならない)。
+    # ブリッジを「軸索だけが通れる通路」にしたいなら、各 part に allow_soma: false を足す
+    # (例: {type: rect, allow_soma: false, x_range: ..., y_range: ...})。
+    - {type: rect, x_range: [-200.0, 200.0], y_range: [-210.0, -190.0]}
+    - {type: rect, x_range: [-200.0, 200.0], y_range: [ 190.0,  210.0]}
+    - {type: rect, x_range: [-210.0, -190.0], y_range: [-200.0, 150.0]}
+    - {type: rect, x_range: [ 190.0,  210.0], y_range: [-200.0, 150.0]}
+
+# パラメータからモジュール構造を自動生成する格子エリア (ModularGridArea)。
+# 上の modular_4_grid が形を直書きするのに対し、こちらは数値を与えると正方形とブリッジの
+# 配置をクラス側が組み立てる。中身は結局 union の CompositeArea なので、SDF 合成・part_of・
+# module 軸の仕組みはそのまま使われる。
+#
+# 格子の形は num_modules から自動で決まる (rows*cols == num_modules で最も正方形に近い組)。
+#   4 -> 2x2、6 -> 2x3、9 -> 3x3、5 -> 1x5 (素数は一列)
+# 意図と違うときだけ rows / cols を明示する。ブリッジは上下左右の隣接モジュール間にだけ
+# 張られるので、対角へは必ず 2 ホップ。
+#
+# 角は 45 度に面取りされる (chamfer)。実装は「正方形 ∩ 菱形」= 八角形で、
+# 上の diamond プロファイルと同じ DiamondArea を入れ子の part として使っている。
+modular_grid:
+  side: 200.0           # 正方形モジュールの一辺 [um]
+  bridge_width: 20.0   # ブリッジの線幅 [um]
+  spacing: 400.0       # 隣接モジュールの**中心間距離** [um] (辺と辺の隙間は spacing - side)
+  num_modules: 4        # モジュール数
+  chamfer: 10.0        # 角を 45 度に落とす長さ [um] (辺に沿って測る)。既定 side/4
+  soma_in_bridge: false  # 省略可。既定 true (= 従来どおりブリッジにも soma を置く)。
+  #                        # false にするとブリッジ part に allow_soma: false が立ち、
+  #                        # **soma はモジュール内だけ・軸索はブリッジを通る**構成になる。
+  #                        # module 軸から B* ラベルが消え、密度の分母もモジュール面積に
+  #                        # なる。同じ seed でも別の実現になる点に注意 (冒頭の注意を参照)。
+  # bridge_overlap: 120.0  # 省略可。ブリッジを正方形へ食い込ませる深さ [um]
+  #                        # 既定 min(bridge_width, side/2)。0 にすると連結にならない
+  # rows: 2                # 省略可。格子の行数・列数を明示する
+  # cols: 2
+
+# **2 階層**のモジュール格子 (HierarchicalModularGridArea)。上の modular_grid が作る
+# 2x2 クラスタを 4 つ格子状に並べ、各クラスタの**内側 1 モジュール** (全体の中心に最も
+# 近いもの) 同士を同種のブリッジで格子状に繋ぐ。16 モジュール / 20 ブリッジ / 連結成分 1。
+#
+#   □ = モジュール         ── = クラスタ内ブリッジ (16 本)
+#   ■ = 内側 4 モジュール   ══ = クラスタ間ブリッジ ( 4 本)
+#
+#      □──□     □──□        クラスタ内は密、クラスタ間は内側モジュールを経由する
+#      │  │     │  │        1 本の細い経路だけ = **階層的なモジュール性**。
+#      □──■═════■──□        4x4 格子の全直交辺 24 本から境界の外側 4 辺を抜いた形。
+#         ║     ║
+#      □──■═════■──□        modular_grid を num_modules: 16 で使うとどのモジュールも
+#      │  │     │  │        対等に繋がってしまい、この 2 段構造にはならない。
+#      □──□     □──□
+#
+# **4x4 固定**なので num_modules / rows / cols は受け付けない (書くとエラー)。
+# 「内側のモジュール」が素直に定まるのは 2x2 のクラスタを 2x2 に並べたときだけ。
+#
+# part 名は C{c}-M{m} / BC{c}-{m1}-{m2} / BX{c1}-{c2} で、そのまま module 軸になる。
+# **C0-M0 形式は文字列ソートでクラスタごとのブロックになる**ので、
+# order_by("module") や group_connection_probability が追加の軸なしで階層を見せられる
+# (soma_in_bridge: true だと BC*/BX* が C* より前に来て粗視化図の先頭に固まる)。
+hierarchical_modular_grid:
+  side: 200.0            # 正方形モジュールの一辺 [um]
+  bridge_width: 20     # ブリッジの線幅 [um]
+  spacing: 400.0         # **クラスタ内**モジュールの中心間距離 [um]
+  block_spacing: 800.0   # 省略可。**クラスタ中心間**距離 [um]。既定 2*spacing
+  #                      # 既定 (= 2*spacing) は「均一な 4x4 格子」で、クラスタ間の隙間が
+  #                      # クラスタ内と同じになる。階層をはっきりさせたいならこれを上げる
+  #                      # — 内側モジュールの中心間距離が block_spacing - spacing なので、
+  #                      # クラスタ間ブリッジだけが長く伸びる。
+  #                      # 条件: block_spacing > spacing + side
+  chamfer: 10.0          # 省略可。角を 45 度に落とす長さ [um]。既定 side/4
+  soma_in_bridge: false  # 省略可。既定 true。modular_grid と同じ意味
+  # bridge_overlap: 20.0 # 省略可。既定 min(bridge_width, side/2)
+
+hierarchical_modular_grid2:
+  side: 100.0            # 正方形モジュールの一辺 [um]
+  bridge_width: 4.5     # ブリッジの線幅 [um]
+  spacing: 200.0         # **クラスタ内**モジュールの中心間距離 [um]
+  block_spacing: 400.0   # 省略可。**クラスタ中心間**距離 [um]。既定 2*spacing
+  chamfer: 10.0          # 省略可。角を 45 度に落とす長さ [um]。既定 side/4
+  soma_in_bridge: false  # 省略可。既定 true。modular_grid と同じ意味
+#
+# 面積の内訳 (密度を合わせるとき用。**値を直書きしない** — ここはよく調整されるので):
+#   soma 領域 = 16 x (side^2 - 2*chamfer^2)                 <- N/密度 の分母はこちら
+#   ブリッジ  = 16 x (spacing - side) x bridge_width
+#             +  4 x (block_spacing - spacing - side) x bridge_width
+#   全体の広がり = (block_spacing + spacing + side) 角
+# 実際の値は毎回 AreaUniformSpace が
+#   "Density: ... (N=..., soma area=... / total ...)" として出すので、そちらが正。
+
+# modular_4 を 2.01 倍に拡大したもの。面積 8.997 mm^2 なので 400 neurons/mm^2 で
+# N = 3599 ~ 3600 になり、criticality_test.yaml が想定する規模と密度に揃う。
+# modular_4 と同じく**ブリッジは円に届いておらず** (隙間 80.4 um)、5 つの独立成分になる。
+modular_4_3mm:
+  op: union
+  parts:
+    - {type: disk, center: [-1005.0, -1005.0], radius: 804.0}
+    - {type: disk, center: [ 1005.0, -1005.0], radius: 804.0}
+    - {type: disk, center: [-1005.0,  1005.0], radius: 804.0}
+    - {type: disk, center: [ 1005.0,  1005.0], radius: 804.0}
+    - {type: rect, x_range: [-1005.0, 1005.0], y_range: [ -120.6,  120.6]}
+    - {type: rect, x_range: [ -120.6,  120.6], y_range: [-1005.0, 1005.0]}

@@ -1,0 +1,57 @@
+simulation:
+  N: 100
+  dt: 0.1             # 時間ステップ (ms)
+  seed: null         # 乱数シード
+  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
+
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 10.0      # [nA] 
+    sd: 1.0        # [nA]
+
+# mode は動特性 (どの components/neurons.yaml ブロックを引くか)、polarity は E/I。
+# 興奮性を動特性ごとに 2 つの population へ分けても、シナプス種別は from_Exc 1 つで済む。
+neurons:
+  Layer_Exc1:
+    type: LIF
+    mode: test1
+    polarity: excitatory
+    num: 40
+  Layer_Exc2:
+    type: LIF
+    mode: test2
+    polarity: excitatory
+    num: 40
+  Layer_Inh:
+    type: LIF
+    mode: test3
+    polarity: inhibitory
+    num: 20
+
+synapses:
+  from_Exc:
+    source: [Layer_Exc1, Layer_Exc2]
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: [Layer_Inh]
+    plasticity: 
+      type: custom_Akita
+      mode: i-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  area: no_space            # 領域の制約なし (確率ベースの結合なので領域を参照しない)
+  space: block_2d
+  connection: distance_based
+  weight: lognormal_broad
+  delay: distance_based 

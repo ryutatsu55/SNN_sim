@@ -51,6 +51,8 @@ synapses:
     # delay_by_target:
     #   Layer_Inh: 0.8
 network:
+  area:
+    profile_name: no_space
   space:
     profile_name: block_2d
     x_range:

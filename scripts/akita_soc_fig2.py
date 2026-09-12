@@ -17,10 +17,12 @@ from src.core.layout import NetworkLayout
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.output_manager import (
     AXES_NAME,
+    AXONS_NAME,
     CONFIG_NAME,
     CONNECTIVITY_NAME,
     create_run_output_dir,
     create_timestamped_output_dir,
+    data_dir,
     locate,
     organize_output,
     require,
@@ -34,7 +36,7 @@ from src.utils.analysis.criticality import (
 )
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
-from src.utils.analysis.weights import block_values, block_values_coo, weight_block_metrics
+from src.utils.analysis.weights import block_values, weight_block_metrics
 from src.utils.experiments.akita_soc.fig2c import plot_figure2c
 from src.utils.experiments.akita_soc.runio import (
     SPIKES,
@@ -60,6 +62,7 @@ import src.models.synapses.custom
 
 
 TASK_NAME = "akita_soc_fig2"
+REPLOT_METRICS_NAME = "metrics_replot.csv"
 TRACE_WINDOW_S = 10.0
 TRACE_NEURON_ID = 0
 PAPER_RASTER_XLIM_S = (0.0, 30.0)
@@ -270,7 +273,10 @@ def replot_existing_output(run_dir: Path) -> None:
             ylim=PAPER_AVALANCHE_YLIM,
         )
 
-    with open(run_dir / "metrics_replot.csv", "w", newline="", encoding="utf-8") as f:
+    # 再計算した指標は data/ (= fig2c が読む場所) に別名で置く。metrics.csv を上書きしないのは
+    # そちらが重みブロック等スパイクからは再計算できない列を持つため。
+    replot_metrics = data_dir(run_dir) / REPLOT_METRICS_NAME
+    with open(replot_metrics, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))
         writer.writeheader()
         writer.writerows(metrics_rows)
@@ -281,7 +287,7 @@ def replot_existing_output(run_dir: Path) -> None:
     print(f"\nGenerating visualizations...")
     try:
         print(f"  Figure 2c...")
-        plot_figure2c(str(run_dir), layout)
+        plot_figure2c(str(run_dir), layout, metrics_name=REPLOT_METRICS_NAME)
     except Exception as e:
         print(f"  Warning: Figure 2c generation failed: {e}")
 
@@ -323,19 +329,27 @@ def main():
     # 解析側は config.yaml から自動軸を再構築し、これを load_axes_file() で読み戻す。
     layout.save_axes(out_dir / AXES_NAME)
 
+    # 軸索の折れ線は「どの軸索がどのブリッジを通ったか」= 将来の損傷実験に要る記録。
+    # 幾何を残すのは axon_growth 系のコネクタだけなので、持たないものは素通りさせる
+    # (area: no_space + constant_prob の既存 config はここで何もしない)。
+    geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
+    if geometry is not None:
+        geometry.save(out_dir / AXONS_NAME)
+        print(f"  Saved axon geometry: {geometry.seg_owner.size} segments -> {AXONS_NAME}")
+
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
 
-    # 疎経路では重み記録を COO の値だけに絞る (密行列は確保できない)。結合構造は
-    # シミュレーション中に変わらないので run につき 1 回だけ書く。row/col は
-    # pull_synapse_coo と同じ走査から得るので、値との並びが必ず一致する。
-    if builder.is_sparse:
-        connectivity = sim.synapse_connectivity_coo()
-        np.savez_compressed(
-            out_dir / CONNECTIVITY_NAME,
-            row=connectivity["row"], col=connectivity["col"], shape=connectivity["shape"],
-        )
-        print(f"  Saved connectivity: {connectivity['row'].size} synapses -> {CONNECTIVITY_NAME}")
+    # 重み記録は常に COO の値だけ。結合構造はシミュレーション中に変わらないので
+    # run につき 1 回だけ書く。row/col は pull_synapse_coo と同じ走査から得るので、
+    # 値との並びが必ず一致する。
+    connectivity = sim.synapse_connectivity_coo()
+    weights_row, weights_col = connectivity["row"], connectivity["col"]
+    np.savez_compressed(
+        out_dir / CONNECTIVITY_NAME,
+        row=weights_row, col=weights_col, shape=connectivity["shape"],
+    )
+    print(f"  Saved connectivity: {weights_row.size} synapses -> {CONNECTIVITY_NAME}")
 
     group_ids = layout.ids_by("polarity")
     wmax = max_plasticity_weight(config)
@@ -362,21 +376,12 @@ def main():
         if not out_dir.exists():
             out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 疎経路では値だけを COO で保存する (row/col は connectivity.npz に 1 回だけ)。
-        # 密経路は従来どおり (N,N) 行列をキー "weights" で保存する。読み出し側は
-        # npz のキーで形式を判別するので、config を見る必要はない。
+        # 値だけを COO で保存する (row/col は connectivity.npz に 1 回だけ)。
+        # pull_synapse_coo は connectivity と同じ走査を使うので並びが必ず一致する。
         weights_path = out_dir / record_filename(WEIGHTS, hour)
-        if builder.is_sparse:
-            coo = sim.pull_synapse_coo("w")
-            weights = coo["data"]
-            weights_row, weights_col = coo["row"], coo["col"]
-            payload = {"data": weights}
-        else:
-            weights = sim.pull_synapse("w")
-            weights_row = weights_col = None
-            payload = {"weights": weights}
+        weights = sim.pull_synapse_coo("w")["data"]
         try:
-            np.savez_compressed(weights_path, **payload)
+            np.savez_compressed(weights_path, data=weights)
         except FileNotFoundError as e:
             print(f"Error saving {weights_path}: {e}")
             print(f"Output dir exists: {out_dir.exists()}, is_dir: {out_dir.is_dir()}")
@@ -430,12 +435,8 @@ def main():
                 record_window_ms,
             )
         )
-        # 疎版は O(nnz)。COO は実結合のみを持つので、密版に connection_mask を渡したのと
-        # 等価な分解になる (以降の統計は分解結果しか見ないので、列も完全に同じ)。
-        if builder.is_sparse:
-            blocks = block_values_coo(weights, weights_row, weights_col, layout)
-        else:
-            blocks = block_values(weights, layout, connection_mask=builder.global_mask)
+        # O(nnz)。COO は実結合のみを持つので、結合の無い箇所の 0 は最初から混ざらない。
+        blocks = block_values(weights, weights_row, weights_col, layout)
         row.update(weight_block_metrics(blocks, wmax=wmax))
         row.update(
             diagnose_activity(

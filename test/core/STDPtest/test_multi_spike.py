@@ -125,18 +125,13 @@ def read_weight_native(sim, src_ID, tgt_ID):
 
     GeNNSimulator.pull_synapse() は戻り値を np.float32 行列に詰めるため、重みが単精度に
     丸められ ~3e-8 (float32 ULP) の読み出し誤差が乗る。モデルは double で計算しているので、
-    ここでは pull_synapse のグローバル→ローカル対応をたどって該当接続の flat index を求め、
-    syn_pop.vars["w"].values (double) を直接返すことで読み出し由来の丸めを排除する。
+    ここでは NetworkBuilder が登録時に記録した接続順 (SynapseIndex) から該当接続の
+    flat index を引き、syn_pop.vars["w"].values (double) を直接返すことで読み出し由来の
+    丸めを排除する。
     """
     for syn_pop_name, syn_pop in sim.model.synapse_populations.items():
-        src_name, _, tgt_name = syn_pop_name.partition("_to_")
-        src_indices = sim.layout.global_indices(src_name)
-        tgt_indices = sim.layout.global_indices(tgt_name)
-        sub_mask = sim.builder.global_mask[np.ix_(src_indices, tgt_indices)]
-        local_src_idx, local_tgt_idx = np.where(sub_mask != 0)
-        global_src = src_indices[local_src_idx]
-        global_tgt = tgt_indices[local_tgt_idx]
-        match = np.where((global_src == src_ID) & (global_tgt == tgt_ID))[0]
+        index = sim.builder.synapse_index[syn_pop_name]
+        match = np.where((index.global_src == src_ID) & (index.global_tgt == tgt_ID))[0]
         if len(match) > 0:
             syn_pop.vars["w"].pull_from_device()
             return float(syn_pop.vars["w"].values[match[0]])

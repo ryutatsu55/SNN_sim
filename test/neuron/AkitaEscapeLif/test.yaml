@@ -31,6 +31,8 @@ synapses:
       type: StaticPulse
       mode: default
 network:
+  area:
+    profile_name: no_space
   space:
     profile_name: block_2d
     x_range:

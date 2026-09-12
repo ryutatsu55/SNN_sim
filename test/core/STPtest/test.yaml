@@ -40,6 +40,8 @@ synapses:
       Wmin: 0.0
       Wmax: 1.0
 network:
+  area:
+    profile_name: no_space
   space:
     profile_name: block_2d
     x_range:

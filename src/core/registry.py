@@ -26,6 +26,7 @@ class Registry:
 # システム全体のレジストリインスタンス
 DATA_LOADERS = Registry("DataLoaders")
 NEURON_MODELS = Registry("NeuronModels")
+AREA_MODELS = Registry("AreaModels")         # ニューロンを配置し軸索を閉じ込める2D領域
 SPATIAL_MODELS = Registry("SpatialModels")
 CONNECTION_MODELS = Registry("ConnectionModels") # 結合行列(マスク)の生成
 WEIGHT_MODELS = Registry("WeightModels")     # 重みの生成
