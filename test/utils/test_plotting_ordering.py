@@ -13,9 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig")
-import matplotlib
-matplotlib.use("Agg")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -139,6 +136,41 @@ def test_plots_accept_nested_axes(tmp_path):
     assert raster_path.stat().st_size > 0
 
 
+def test_polarity_boundary_is_not_drawn():
+    """E/I の切り替わりは境界としては残るが、描画対象からは外れること。
+
+    赤/青の色分けが既にその位置を示しているので線は冗長。境界自体を消してしまうと
+    `block_ticks` など位置を使う側が壊れるので、落とすのは描画側だけ。
+    """
+    layout = make_layout(6, 4, assignment="random")
+    ordering = resolve_ordering(layout, ("polarity",))
+
+    assert ordering.boundaries == [(6, 0)]
+    assert ordering.visible_boundaries() == []
+    # skip を空にすれば元の境界がそのまま出る
+    assert ordering.visible_boundaries(skip=()) == [(6, 0)]
+
+
+def test_module_boundaries_survive_the_polarity_filter(tmp_path):
+    """`("module", "polarity")` ではモジュール境界だけが線になること。"""
+    layout = make_layout(6, 4, assignment="random")
+    layout.add_axis("module", np.array(["M0", "M0", "M1", "M1", "M2"] * 2))
+    ordering = resolve_ordering(layout, ("module", "polarity"))
+
+    # 元の境界にはモジュール(level 0)とモジュール内 E/I(level 1)の両方が居る
+    assert {level for _, level in ordering.boundaries} == {0, 1}
+
+    visible = ordering.visible_boundaries()
+    assert [level for _, level in visible] == [0, 0]
+    assert [pos for pos, _ in visible] == ordering.positions(level=0)
+
+    # 描画も通ること (モジュールでブロック化したラスター)
+    raster_path = tmp_path / "raster_module.png"
+    plot_raster(np.array([0.0, 100.0, 200.0]), np.array([0, 5, 9]), raster_path, "R",
+                layout=layout, order_axes=("module", "polarity"))
+    assert raster_path.stat().st_size > 0
+
+
 def test_coarse_mask_groups_by_the_given_axis(tmp_path):
     """粗視化図が `order_axes` に従ってブロック化すること (E/I 固定ではない)。
 
@@ -168,6 +200,35 @@ def test_coarse_mask_groups_by_the_given_axis(tmp_path):
     ordering = resolve_ordering(layout, ("module",))
     modules = layout.labels("module")[ordering.order]
     assert list(modules) == sorted(modules)
+
+
+def test_coarse_mask_colors_cells_by_ei_block():
+    """粗視化図の色が E/I ブロックを表し、濃さが密度になっていること。
+
+    E/I を色で示すからこそ E/I の境界線を省ける、という図の前提そのもの。
+    """
+    from src.utils.plotting.common import BLOCK_COLORS
+    from src.utils.plotting.matrices import _block_colored_density
+    from matplotlib.colors import to_rgb
+
+    # セル 0 = 興奮性、セル 1 = 抑制性 の 2x2。
+    cell_of_rank = np.array([0, 0, 1, 1])
+    per_cell = np.array([2.0, 2.0])
+    is_exc = np.array([True, True, False, False])
+    density = np.array([[0.5, 1.0], [0.0, 0.25]])
+
+    rgb, max_density = _block_colored_density(density, cell_of_rank, per_cell, is_exc)
+
+    assert max_density == 1.0
+    # 密度最大のセル (0, 1) は pre=E, post=I なので EI の色そのもの。
+    np.testing.assert_allclose(rgb[0, 1], to_rgb(BLOCK_COLORS["EI"]), atol=1e-6)
+    # 密度 0 のセル (1, 0) は白。
+    np.testing.assert_allclose(rgb[1, 0], (1.0, 1.0, 1.0), atol=1e-6)
+    # 中間のセルは白とブロック色の間 (EE / II の色相を保ったまま薄い)。
+    for cell, name in (((0, 0), "EE"), ((1, 1), "II")):
+        colour = np.asarray(to_rgb(BLOCK_COLORS[name]))
+        alpha = density[cell]
+        np.testing.assert_allclose(rgb[cell], 1.0 - alpha * (1.0 - colour), atol=1e-6)
 
 
 def test_coarse_mask_survives_more_blocks_than_ticks(tmp_path):

@@ -16,10 +16,14 @@ N が `DENSE_RENDER_LIMIT` を超えるとメモリに乗らないので、そ�
 粗視化図 (`plot_connection_mask_coarse`) へ誘導する。
 
 並べ替えは **3 枚とも同じ `order_axes`** で指定する (`src.utils.plotting.ordering` を参照)。
-既定の `("polarity",)` は興奮性を先頭ブロックに置き、E/I の境界に線を 1 本引く。
-`("module",)` ならモジュールごとのブロックに、`("module", "polarity")` ならモジュールで
-切ったうえで各モジュール内が E→I になる。粗視化図もこの仕組みに乗っているので、
-E/I 専用だった頃の `display_rank()` は無くなった。
+既定の `("polarity",)` は興奮性を先頭ブロックに置く。`("module",)` ならモジュールごとの
+ブロックに、`("module", "polarity")` ならモジュールで切ったうえで各モジュール内が E→I に
+なる。粗視化図もこの仕組みに乗っているので、E/I 専用だった頃の `display_rank()` は無くなった。
+
+**E/I の示し方は 2 枚で違う。** 重み行列は色を重みの値に使っているので E/I は線で示す。
+粗視化図は色そのものが空いているので E/I を **色** (EE/EI/IE/II) に割り当て、線は
+モジュール等のブロック境界だけに限る。どちらも「線の種類は 1 つ、色の意味も 1 つ」に
+なるようにしている — 太さの違う線が 2 種類入ると格子が読めなくなるため。
 """
 from __future__ import annotations
 
@@ -27,6 +31,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import to_rgb
+from matplotlib.patches import Patch
 from scipy.spatial.distance import cdist
 
 from src.utils.analysis.weights import (
@@ -70,13 +76,18 @@ def densify(row: np.ndarray, col: np.ndarray, values: np.ndarray, size: int) -> 
     return matrix
 
 
-def _draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1.0) -> None:
+def _draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1.0,
+                           skip: tuple[str, ...] = ()) -> None:
     """ブロック境界に縦横の線を引く。外側の軸ほど太く描く。
 
     `scale` は「表示位置 (ニューロン単位) → 画像の画素」の倍率。1 ニューロン 1 画素の
     重み行列では 1.0、粗視化図では `grid / total_neurons` になる。
+
+    `skip` に軸名を挙げるとその軸の切り替わりには線を引かない。E/I を**色**で示す図
+    (粗視化図) は `skip=("polarity",)` を渡し、線の種類を 1 つに保つ。値そのものを色に
+    使っている図 (重み行列) は既定の `()` のままで、E/I 境界も線で示す。
     """
-    for position, level in ordering.boundaries:
+    for position, level in ordering.visible_boundaries(skip):
         position = position * scale
         if not 0 < position < size:
             continue
@@ -232,8 +243,12 @@ def plot_connection_mask_coarse(
     `src.utils.plotting.ordering` の仕組みに乗っているので、`("polarity",)` (既定、E/I
     ブロック) でも `("module",)` (モジュールごとのブロック) でも
     `("module", "polarity")` (モジュールで切って各モジュール内で E→I) でも同じ形で効く。
-    ブロック境界の線は入れ子の階層に応じて太さが変わり、最外ブロックには軸の値
-    (`M0`, `M1`, … / `excitatory`, `inhibitory`) が目盛りとして入る。
+    最外ブロックには軸の値 (`M0`, `M1`, …) が目盛りとして入る。
+
+    **色 = E/I ブロック (EE/EI/IE/II)、濃さ = 結合確率、線 = 最外ブロックの境界**。
+    E/I の切り替わりには線を引かない (色が既にそれを示しているので、線が 2 種類あると
+    格子が読めなくなる)。カラーバーは E/I と密度の 2 つを同時に表せないので出さず、
+    代わりに E/I ブロックの凡例を出して濃さのスケールをその見出しに書く。
 
     Args:
         row, col: 各結合の送信/受信グローバルID (1D)。
@@ -264,9 +279,16 @@ def plot_connection_mask_coarse(
     possible = np.outer(per_cell, per_cell)
     density = np.divide(counts, possible, out=np.zeros_like(counts), where=possible > 0)
 
+    # 色 = E/I ブロック、濃さ = 結合確率。カラーバー 1 本では E/I を表せないので、
+    # スカラーの cmap ではなく RGB 画像を自分で組んで凡例で説明する。
+    rgb, max_density = _block_colored_density(density, cell_of_rank, per_cell,
+                                              excitatory_flags(layout, total_neurons))
+
     fig, ax = plt.subplots(figsize=(6.5, 5.5))
-    image = ax.imshow(density, origin="upper", interpolation="nearest", cmap="viridis")
-    _draw_block_boundaries(ax, ordering, grid, scale=scale)
+    ax.imshow(rgb, origin="upper", interpolation="nearest")
+    # 線は**モジュール等のブロック境界だけ**。E/I の切り替わりは色が示しているので、
+    # 線の種類を増やさない (2 種類の線が混ざると格子が読めなくなる)。
+    _draw_block_boundaries(ax, ordering, grid, scale=scale, skip=("polarity",))
 
     # 最外ブロックの名前を目盛りに。多すぎると潰れるのでセル番号のままにする。
     blocks = _outer_block_labels(layout, ordering, total_neurons)
@@ -282,8 +304,41 @@ def plot_connection_mask_coarse(
     ax.set_xlabel(f"Target (grouped by {grouped}, {grid} cells)")
     ax.set_ylabel(f"Source (grouped by {grouped}, {grid} cells)")
     ax.set_title(f"{title}\n{np.asarray(row).size} synapses, {total_neurons} neurons")
-    fig.colorbar(image, ax=ax, label="connection probability")
+    # カラーバーの代わりに凡例。連続量は「濃さ」1 次元しかないので、凡例のタイトルに
+    # そのスケール (白 = 0、最も濃い色 = max) を書いておけば読み取れる。
+    ax.legend(
+        handles=[Patch(facecolor=BLOCK_COLORS[name], edgecolor="none", label=name)
+                 for name in BLOCK_ORDER],
+        title=f"pre→post block\nsaturation: 0 – {max_density:.3f}",
+        loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8, title_fontsize=8,
+        frameon=False,
+    )
     save_figure(fig, out_path)
+
+
+def _block_colored_density(density: np.ndarray, cell_of_rank: np.ndarray,
+                           per_cell: np.ndarray, is_exc: np.ndarray) -> tuple[np.ndarray, float]:
+    """粗視化密度を「色 = E/I ブロック、濃さ = 密度」の RGB 画像にする。
+
+    セルは表示順の連続した塊なので、`("module", "polarity")` で並べていれば
+    ほぼ純粋に E か I のどちらかになる。境目をまたぐセルだけは多数決で決める。
+    白 (密度 0) から そのセルのブロック色 (密度が最大) への線形補間なので、
+    「どのブロックか」と「どれくらい繋がっているか」が 1 枚で両立する。
+
+    Returns:
+        (RGB 画像 (K, K, 3), 濃さの上限として使った密度)
+    """
+    exc_per_cell = np.bincount(cell_of_rank[is_exc], minlength=per_cell.size).astype(np.float64)
+    cell_is_exc = exc_per_cell >= (per_cell - exc_per_cell)   # 同数なら興奮性側へ
+
+    src, tgt = cell_is_exc[:, None], cell_is_exc[None, :]
+    # BLOCK_ORDER = ("EE", "EI", "IE", "II") の添字へ落とす。
+    block_index = np.where(src, np.where(tgt, 0, 1), np.where(tgt, 2, 3))
+    palette = np.array([to_rgb(BLOCK_COLORS[name]) for name in BLOCK_ORDER])
+
+    max_density = float(density.max()) if density.size else 0.0
+    alpha = (density / max_density) if max_density > 0 else np.zeros_like(density)
+    return 1.0 - alpha[..., None] * (1.0 - palette[block_index]), max_density
 
 
 def plot_empirical_connection_probability(
