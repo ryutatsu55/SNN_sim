@@ -20,7 +20,7 @@ GeNNについては最新版の5.4を使用している。環境構築のマニ�
 ```text
 SNN_sim/
 ├── configs/            # YAML設定ファイル群
-│   ├── components/     # コンポーネント別の設定 (neurons, connections, tasks など)
+│   ├── components/     # コンポーネント別の設定（neurons, connections, tasks など）
 │   └── test.yaml       # メイン設定ファイル
 ├── scripts/            # 実験・シミュレーション実行スクリプト
 │   └── test.py         # メインシミュレーション実行パイプライン
@@ -33,7 +33,7 @@ SNN_sim/
 │   │   ├── readouts/   # リードアウト層 (Ridge回帰など)
 │   │   └── synapses/   # シナプス力学 (Tsodyks-Markram等)
 │   └── utils/          # 評価、可視化ツール
-└── test/               # 単体テスト、アルゴリズム検証スクリプト
+└── test/               # 単体テスト、アルゴリズム検証スクリプト（詳細は test/README.md）
 
 ```
 <!-- ## 基本的な使い方
