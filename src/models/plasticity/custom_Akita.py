@@ -103,8 +103,20 @@ class CustomAkitaModel(BasePlasticityModel):
     # PyGeNNにおける「同じクラス名の二重登録エラー」を防ぐための管理辞書(同一クラスのインスタンス間をまたぐ変数)
     _snippet_cache = {}
 
-    def __init__(self, config, dt, weight, delay, num_pre, num_post, axonal_delay_steps=None):
+    def __init__(self, config, dt, weight, delay, num_pre, num_post, axonal_delay_steps=None,
+                 fan_in_num_synapses=None):
+        """
+        Args:
+            fan_in_num_synapses: `normalize_gmax_by_fan_in` の分母に使うシナプス数。
+                None なら実際のシナプス数 (`len(weight)`) を使う = 従来の挙動。
+
+                損傷実験のためにある引数。`g_scale = num_post / num_synapses` なので、
+                シナプスを構造的に除去すると分母が減り、**生き残った全シナプスの実効
+                ゲインが一斉に上がる**。これは「回復」を再編成ではなく全体ゲイン上昇に
+                見せてしまう交絡なので、切断前のシナプス数を渡してゲインを固定する。
+        """
         super().__init__(config, dt, weight, delay, num_pre, num_post, axonal_delay_steps)
+        self.fan_in_num_synapses = fan_in_num_synapses
         # 極性: mode プレフィックスで判定 (従来どおり)。mode は極性 + param ブロックキーを兼ねる。
         self.mode = self.config.mode
         if not (self.mode.startswith("e-stdp") or self.mode.startswith("i-stdp")):
@@ -127,7 +139,8 @@ class CustomAkitaModel(BasePlasticityModel):
         # d を ms に換算する (d * dt_ms)。※ addToPostDelay の遅延引数はタイムステップ単位のため d のまま使う。
         self._dt_ms = float(self.dt)
         self._gmax_scale = calculate_gmax_scale(
-            num_synapses=len(self.weight),
+            num_synapses=(len(self.weight) if self.fan_in_num_synapses is None
+                          else int(self.fan_in_num_synapses)),
             num_post=self.num_post,
             normalize_by_fan_in=bool(getattr(self.config, "normalize_gmax_by_fan_in", False)),
         )
