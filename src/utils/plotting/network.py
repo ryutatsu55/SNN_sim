@@ -216,6 +216,23 @@ def _contact_polyline(geometry, edge: int) -> tuple[np.ndarray, np.ndarray]:
     return np.vstack([geometry.seg_start[int(geometry.offsets[pre]):seg + 1], contact]), contact
 
 
+def _save_legend_figure(handles, out_path: str) -> None:
+    """凡例**だけ**を別ファイルに保存する。
+
+    軸索の図は領域いっぱいに広がるので、凡例を図の中に置くとどこに置いても
+    経路の一部を隠す。図の外に出すには余白を作るしかなく、今度は絵が小さくなる。
+    そこで凡例は独立した png にして、本体からは外している。
+    """
+    fig = plt.figure(figsize=(3.0, 0.32 * len(handles) + 0.3))
+    legend = fig.legend(handles=handles, loc="center", fontsize=9, markerscale=1.5)
+    # bbox_inches='tight' は「軸のある図」を前提にするため、凡例だけの図では
+    # 余白が残る。凡例そのものの外接矩形を測って、そこで切り取る。
+    fig.canvas.draw()
+    bbox = legend.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+    fig.savefig(out_path, dpi=300, bbox_inches=bbox.expanded(1.05, 1.05))
+    plt.close(fig)
+
+
 def axon_network(geometry, coords, config, layout=None, node_size=10, title="axon_network",
                  save_path=".", n_sample=500, max_edges=4000, seed=0, area=None,
                  show_axons=True):
@@ -228,6 +245,9 @@ def axon_network(geometry, coords, config, layout=None, node_size=10, title="axo
     `network()` と**同じ seed から同じ順に乱数を引く**ので、2 枚の図に出るニューロンと
     結合は一致する (エッジの順序も、COO の行優先順で揃う)。
     並べて比較するための性質なので、サンプリングの手順を変えるときは両方同時に変えること。
+
+    凡例は図の中には描かず `{title}_legend.png` として別に保存する。軸索は領域全体に
+    広がるので、凡例をどこに置いても経路を隠してしまうため。
 
     重みは受け取らない。この図の主題は経路の形なので線幅は一定。
     矢印も描かない: 実線 = pre から伸びた軸索、破線 = 接触点から post 細胞体へ届いた
@@ -293,13 +313,16 @@ def axon_network(geometry, coords, config, layout=None, node_size=10, title="axo
     _draw_nodes(ax, x, y, sample, is_exc, node_size)
 
     # 凡例は _draw_nodes が付けた E/I に線種の説明を足す (色は送信元の極性で決まる)。
+    # ただしこの図には載せず、`{title}_legend.png` として別に出す (_save_legend_figure)。
     handles, _ = ax.get_legend_handles_labels()
     handles.append(Line2D([], [], color="0.4", lw=1.2, label="axon (made a synapse)"))
     handles.append(Line2D([], [], color="0.4", lw=1.0, ls=(0, (2, 2)),
                           label="dendrite reach"))
     if underlay:
         handles.append(Line2D([], [], color="0.45", lw=0.6, alpha=0.6, label="all axons"))
-    ax.legend(handles=handles, fontsize=9, markerscale=1.5)
+    # _draw_nodes が ax.legend() を呼んでいるので、本体からは取り除く。
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
 
     ax.set_aspect('equal')
     ax.set_title(f"{title}\n{sample.size} neurons sampled, {len(paths)} synapses "
@@ -312,3 +335,6 @@ def axon_network(geometry, coords, config, layout=None, node_size=10, title="axo
     plt.savefig(f"{save_path}/{title}.png", dpi=300, bbox_inches='tight')
     print(f"Axon network visualization saved to {save_path}/{title}.png")
     plt.close()
+
+    _save_legend_figure(handles, f"{save_path}/{title}_legend.png")
+    print(f"Axon network legend saved to {save_path}/{title}_legend.png")

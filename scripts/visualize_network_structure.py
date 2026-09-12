@@ -128,9 +128,6 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
     from src.core.config_manager import ConfigManager
     from src.core.NetworkBuilder import NetworkBuilder
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     print(f"Loading config from {config_path} ...")
     manager = ConfigManager()
     config = manager.resolve(config_path, _default_task(active_task))
@@ -148,6 +145,31 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
     print("Building global network matrices (no GeNN compilation) ...")
     builder = NetworkBuilder(config)
     builder._generate_global_matrices()
+
+    visualize_structure(builder, config, output_dir, seed=seed, order_axes=order_axes)
+
+
+def visualize_structure(builder, config, output_dir: str | Path, seed: int = 0,
+                        order_axes: tuple[str, ...] | None = None,
+                        geometry=None) -> None:
+    """**ビルド済みの** NetworkBuilder から構造図一式を output_dir へ保存する。
+
+    呼び出し経路は 2 つある。`build_and_visualize()` が config からビルドして呼ぶ経路と、
+    シミュレーションを回すスクリプトが自分の builder を渡して呼ぶ経路。後者では
+    **ここで作り直してはならない** — config の seed が未指定なら `resolve()` のたびに
+    別の seed が引かれ、図が「実際に走らせたネットワーク」と別物になる。
+
+    Args:
+        builder: `build()` か `_generate_global_matrices()` を通した後の NetworkBuilder
+        config: その builder が使った解決済み config
+        order_axes: 粗視化図の並べ替え軸。None なら `_default_order_axes()` が run を見て決める。
+        geometry: axon_network.png に使う軸索幾何。None なら builder のコネクタから取る。
+            **損傷実験では必ず渡すこと** — コネクタが持つ幾何は `replace_global_coo()` の
+            影響を受けないので、既定のままだと切断したはずの結合まで描かれる
+            (`analysis/axons.subset_geometry()` で絞ったものを渡す)。
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     layout = builder.layout
     total = builder.total_neurons
@@ -200,7 +222,8 @@ def build_and_visualize(config_path: str, output_dir: str | Path, active_task: s
 
         # 軸索の折れ線で結合を描いた図。幾何を残すのは axon_growth だけなので、
         # 持っていないコネクタ (constant_prob など) は素通りさせる。
-        geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
+        if geometry is None:
+            geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
         if geometry is not None:
             axon_network(
                 geometry, coords, config, layout=layout, title="axon_network",

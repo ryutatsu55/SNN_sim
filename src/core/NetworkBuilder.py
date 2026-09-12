@@ -152,11 +152,36 @@ class NetworkBuilder:
         self._index_table = None
         # "src_to_tgt" -> SynapseIndex。_build_synapses が GeNN へ登録した接続順を記録する。
         self.synapse_index: Dict[str, SynapseIndex] = {}
+        # "src_to_tgt" -> fan-in 正規化に使うシナプス数。None なら実際の本数を使う (通常)。
+        # 損傷実験で「切断してもゲインは変えない」を実現するために使う。
+        self._fan_in_reference: Dict[str, int] | None = None
 
-    def build(self, rec_spike: bool = True) -> Tuple[pygenn.GeNNModel, NetworkLayout]:
+    def build(self, rec_spike: bool = True,
+              transform_coo=None,
+              preserve_fan_in_scale: bool = False) -> Tuple[pygenn.GeNNModel, NetworkLayout]:
+        """GeNN モデルを構築する。
+
+        Args:
+            transform_coo: 生成直後のグローバル COO を差し替えるフック
+                (`GlobalCOO -> GlobalCOO`)。**乱数の消費が終わった後、GeNN へ登録する前**に
+                1 度だけ呼ばれる。損傷実験 (シナプスの構造的除去) と重み復元の入口。
+                None なら従来と完全に同一の経路 (分岐も乱数の消費も一切変わらない)。
+                詳細は `replace_global_coo()` の docstring。
+            preserve_fan_in_scale: `transform_coo` でシナプスを削っても、可塑性モデルの
+                fan-in 正規化 (`normalize_gmax_by_fan_in`) の分母を**変換前の本数**に
+                固定する。損傷が実効ゲインを動かす交絡を止めるためのもの。
+        """
         print("=== ネットワーク構築 (Network Building) ===")
         # 1. 全ニューロン一括での座標・グローバル行列生成 (レイアウトは __init__ で確定済み)
         self._generate_global_matrices()
+        if transform_coo is not None:
+            self.replace_global_coo(transform_coo(self.global_coo()),
+                                    preserve_fan_in_scale=preserve_fan_in_scale)
+        elif preserve_fan_in_scale:
+            raise ValueError(
+                "preserve_fan_in_scale は transform_coo と一緒にしか意味がありません"
+                " (変換しなければ fan-in は元から変わらない)。"
+            )
         # 2. GeNNへのニューロン・シナプスの登録
         self._build_neuron_populations()
         self._build_synapses()
@@ -295,6 +320,132 @@ class NetworkBuilder:
                 " build() か _generate_global_matrices() を先に実行してください。"
             )
         return self._global_coo
+
+    def _pair_synapse_counts(self, coo: GlobalCOO) -> Dict[str, int]:
+        """COO をシナプス集団ごとに数える (`_pair_coo()` と同じ切り分け)。"""
+        if self._index_table is None:
+            self._index_table = self._local_index_table()
+        pop_code, _local_of, code_of_name = self._index_table
+        counts: Dict[str, int] = {}
+        for syn_cfg in self.config.synapses.values():
+            for src_name, tgt_name in itertools.product(syn_cfg.source, self.config.neurons):
+                sel = (
+                    (pop_code[coo.row] == code_of_name[src_name])
+                    & (pop_code[coo.col] == code_of_name[tgt_name])
+                )
+                counts[f"{src_name}_to_{tgt_name}"] = int(np.count_nonzero(sel))
+        return counts
+
+    def replace_global_coo(self, coo: GlobalCOO, preserve_fan_in_scale: bool = False) -> None:
+        """生成済みのグローバル COO を差し替える。**GeNN へ登録する前にだけ**呼べる。
+
+        ここが唯一の差し替え地点である理由は 2 つ:
+
+        - **乱数ストリームより後**。座標・結合・初期重み・遅延の生成 (`self.rng` の消費) は
+          `_generate_global_matrices()` で完了しているので、ここで何をしても同一 seed の
+          ネットワーク実現は変わらない。「シナプスを削ったせいで別のネットワークになった」
+          が原理的に起きない。
+        - **GeNN 登録より前**。`_build_synapses()` は `global_coo()` しか読まず、重みを
+          `init_weight_update(vars={"w": ...})` へ渡す。よって構造的除去 (行の削除) と
+          重み復元 (weights の差し替え) の両方が「GeNN 登録時の初期値」として一度に入り、
+          setup 後の重み注入 (pygenn の SPARSE 行ごとの Python ループ、`setup()` の
+          `backup_initial_states` が注入前の値を覚えてしまう罠) を避けられる。
+
+        検証する不変条件。1 つでも破れば `ValueError` を投げる —— 黙って通すと、GeNN が
+        期待する「集団ローカルの (pre, post) 行優先ソート順」が崩れたまま学習が走り、
+        別のシナプスに重みが乗ったことに誰も気付けない:
+
+        1. row / col / weights / delays の長さが等しい
+        2. shape が `(total_neurons, total_neurons)` のまま
+        3. `0 <= row, col < total_neurons`
+        4. `row * N + col` が**狭義単調増加** (= 行優先ソート済み、かつ重複ペアなし)
+        5. weights / delays が有限
+        6. シナプスが 1 本以上ある (0 本の GeNN モデルは下流が NaN だらけになるだけで、
+           原因が追えない)
+
+        Note:
+            `self.connection.axon_geometry()` は差し替えの影響を受けない。幾何の `pre`/`post`
+            は**差し替え前の COO** と位置一致しているので、差し替え後にそのまま
+            `axon_network()` へ渡すと切断したシナプスまで描かれる。部分集合を取った
+            コピーを渡すこと。
+        """
+        if self.synapse_index:
+            raise RuntimeError(
+                "replace_global_coo() は GeNN へシナプスを登録する前にしか呼べません"
+                f" (すでに {len(self.synapse_index)} 集団が登録済み)。"
+                " build(transform_coo=...) を使ってください。"
+            )
+        if self._global_coo is None:
+            raise RuntimeError(
+                "replace_global_coo() は結合の生成後にしか呼べません。"
+                " _generate_global_matrices() を先に実行してください。"
+            )
+
+        row = np.asarray(coo.row, dtype=np.int64)
+        col = np.asarray(coo.col, dtype=np.int64)
+        weights = np.asarray(coo.weights, dtype=np.float64)
+        delays = np.asarray(coo.delays, dtype=np.float64)
+
+        n = int(self.total_neurons)
+        if tuple(coo.shape) != (n, n):
+            raise ValueError(
+                f"差し替え後の shape {tuple(coo.shape)} が (total_neurons, total_neurons)"
+                f" = ({n}, {n}) と一致しません。"
+            )
+        sizes = {row.size, col.size, weights.size, delays.size}
+        if len(sizes) != 1:
+            raise ValueError(
+                "row / col / weights / delays の長さが一致しません: "
+                f"row={row.size}, col={col.size}, weights={weights.size}, delays={delays.size}"
+            )
+        if row.size == 0:
+            raise ValueError(
+                "差し替え後のシナプスが 0 本です。シナプスの無い GeNN モデルは下流の解析が"
+                " すべて NaN になるだけで原因が追えないので、ここで止めます。"
+            )
+        if row.min() < 0 or row.max() >= n or col.min() < 0 or col.max() >= n:
+            raise ValueError(
+                f"グローバルIDが範囲外です (row: {row.min()}..{row.max()},"
+                f" col: {col.min()}..{col.max()}, N={n})。"
+            )
+        # int64 で計算すること。int32 のままだと N が大きいときに row*N+col が折り返り、
+        # 別のペアが同じキーになって「ソート済み」の判定をすり抜ける。
+        keys = row * n + col
+        if row.size > 1:
+            steps = np.diff(keys)
+            if np.any(steps <= 0):
+                bad = int(np.count_nonzero(steps <= 0))
+                raise ValueError(
+                    f"差し替え後の COO が行優先ソート済みではありません ({bad} 箇所で"
+                    " 昇順が崩れているか、同じ (pre, post) が重複しています)。"
+                    " GeNN は送信元ニューロン順にシナプスを格納するので、この順序は"
+                    " `_pair_coo()` の前提です。"
+                )
+        if not np.all(np.isfinite(weights)) or not np.all(np.isfinite(delays)):
+            raise ValueError("差し替え後の weights / delays に非有限値が含まれています。")
+
+        if preserve_fan_in_scale:
+            # **差し替える前の** COO で数える。可塑性モデルの g_scale = num_post/num_synapses
+            # をここに固定することで、シナプスを削っても実効ゲインが動かなくなる。
+            self._fan_in_reference = self._pair_synapse_counts(self._global_coo)
+
+        self._global_coo = GlobalCOO(
+            row=row.astype(np.int32),
+            col=col.astype(np.int32),
+            weights=weights,
+            delays=delays,
+            shape=(n, n),
+        )
+        # 生成経路の作業領域は差し替え後の結合を指していない。読めてしまうより落ちるほうが
+        # 安全なので落とす (どのみち `_pair_coo()` は global_coo() しか見ない)。
+        self._global_mask = None
+        self._global_weights = None
+        self._global_delays = None
+        self._sparse_rows = None
+        self._sparse_cols = None
+        self._sparse_weights = None
+        self._sparse_delays = None
+        self._index_table = None
 
     def _inject_axes(self, component):
         """コンポーネントが宣言するカテゴリ/ソート軸を NetworkLayout に注入する。
@@ -546,6 +697,12 @@ class NetworkBuilder:
                 )
                 if use_axonal:
                     plas_kwargs["axonal_delay_steps"] = axonal_steps
+                # fan-in 正規化の分母の固定も axonal と同じ opt-in 方式。受け取れない可塑性
+                # モデルには渡さない (標準モデルはそもそも fan-in 正規化を持たない)。
+                if self._fan_in_reference is not None:
+                    pair_name = f"{src_name}_to_{tgt_name}"
+                    if "fan_in_num_synapses" in inspect.signature(PlasClass.__init__).parameters:
+                        plas_kwargs["fan_in_num_synapses"] = self._fan_in_reference[pair_name]
                 plas_instance = PlasClass(**plas_kwargs)
                 self._component_lifeline.append(plas_instance)
                 weight_init = pygenn.genn_model.init_weight_update(

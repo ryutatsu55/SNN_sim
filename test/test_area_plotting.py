@@ -10,8 +10,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import matplotlib
-matplotlib.use("Agg")          # 表示のない環境で走らせる (import より前に設定)
 import matplotlib.pyplot as plt
 import numpy as np
 

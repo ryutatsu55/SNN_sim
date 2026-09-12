@@ -225,6 +225,34 @@ class HopConnectivity:
     probability: np.ndarray
 
 
+def bridge_part_indices(area) -> np.ndarray:
+    """area の part のうち **ブリッジ** であるものの index を返す。
+
+    ブリッジの定義はこのリポジトリでは 1 つだけ —— **`allow_soma: false` の part**。
+    part 名の接頭辞 (`B` / `BC` / `BX`) は `modular_grid` 系に固有の命名なので、
+    汎用の判定に使ってはいけない。この関数が定義の唯一の置き場所で、
+    `bridge_hop_matrix()` と `src/utils/analysis/axons.py` の両方がここを見る。
+
+    Raises:
+        ValueError: area が part を持たない、または `allow_soma: false` の part が
+            1 つも無い場合 (= モジュールとブリッジを区別できない)。
+    """
+    part_names = list(getattr(area, "part_names", []))
+    if not part_names:
+        raise ValueError(
+            "ブリッジは composite area (parts を持つ領域) でしか区別できません。"
+        )
+    allows = list(getattr(area, "part_allows_soma", [True] * len(part_names)))
+    indices = np.array([i for i, ok in enumerate(allows) if not ok], dtype=np.int64)
+    if indices.size == 0:
+        raise ValueError(
+            "soma を置けない part (allow_soma: false) が 1 つもないので、モジュールと"
+            " ブリッジを区別できません。modular_grid 系なら soma_in_bridge: false に"
+            " してください。"
+        )
+    return indices
+
+
 def part_overlap_graph(area, *, samples: int = 33) -> np.ndarray:
     """composite area の part 同士が**重なっているか**の (P, P) bool 行列。
 
@@ -272,18 +300,8 @@ def bridge_hop_matrix(area, names, *, samples: int = 33) -> np.ndarray:
             または `names` に part 名でないものが混ざっている場合。
     """
     part_names = list(getattr(area, "part_names", []))
-    if not part_names:
-        raise ValueError(
-            "ブリッジのホップ数は composite area (parts を持つ領域) でしか数えられません。"
-        )
-    allows = list(getattr(area, "part_allows_soma", [True] * len(part_names)))
-    is_bridge = np.array([not ok for ok in allows], dtype=bool)
-    if not is_bridge.any():
-        raise ValueError(
-            "soma を置けない part (allow_soma: false) が 1 つもないので、モジュールと"
-            " ブリッジを区別できません。modular_grid 系なら soma_in_bridge: false に"
-            " してください。"
-        )
+    is_bridge = np.zeros(len(part_names), dtype=bool)
+    is_bridge[bridge_part_indices(area)] = True
 
     index_of = {name: i for i, name in enumerate(part_names)}
     unknown = [n for n in names if n not in index_of]

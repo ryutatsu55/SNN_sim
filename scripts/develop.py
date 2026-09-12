@@ -20,6 +20,7 @@ from src.core.output_manager import (
     AXONS_NAME,
     CONFIG_NAME,
     CONNECTIVITY_NAME,
+    DATA_SUBDIR,
     create_run_output_dir,
     create_timestamped_output_dir,
     data_dir,
@@ -49,6 +50,9 @@ from src.utils.experiments.akita_soc.weight_track import visualize_weight_tracks
 from src.utils.plotting.distributions import plot_avalanche_distribution
 from src.utils.plotting.raster import plot_raster
 from src.utils.plotting.traces import neuron_trace
+# 構造図一式は visualize_network_structure と共有する。**ビルド済みの builder** を渡す
+# 版を呼ぶこと (config から作り直すと seed 未指定時に別の実現の図になってしまう)。
+from scripts.visualize_network_structure import visualize_structure
 
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
@@ -62,13 +66,22 @@ import src.models.synapses.custom
 
 
 TASK_NAME = "akita_soc_fig2"
+# 再解析 (--replot-from) が書く指標 CSV。metrics.csv を上書きしないのは、そちらが
+# 重みブロックなどスパイクからは再計算できない列を持つため。**fig2c にはこの名前を
+# 明示的に渡すこと** — fig2c は既定で metrics.csv を読み、自動で新しい方を選ばない。
 REPLOT_METRICS_NAME = "metrics_replot.csv"
 TRACE_WINDOW_S = 10.0
 TRACE_NEURON_ID = 0
 PAPER_RASTER_XLIM_S = (0.0, 30.0)
-PAPER_RASTER_YLIM_NEURON = (0.0, 100.0)
 PAPER_AVALANCHE_XLIM = (1.0, 1000.0)
 PAPER_AVALANCHE_YLIM = (1e-5, 1.0)
+# ラスターの並べ替え: モジュールでブロック化し、各モジュール内で興奮性→抑制性。
+# ブロック境界にだけ破線が入り (E/I の境目は色で分かるので線なし)、モジュール構造が読める。
+# module 軸は space: area_uniform が複合エリアの part から供給するので、
+# axon_growth_grid2 のようなモジュラーエリアの config でのみ有効。
+RASTER_ORDER_AXES = ("module", "polarity")
+# 並べ替え軸が 1 つも使えないときの最後の拠り所。polarity は自動軸なので必ず存在する。
+FALLBACK_ORDER_AXES = ("polarity",)
 
 
 def parse_args():
@@ -87,6 +100,13 @@ def parse_args():
     )
     parser.add_argument("--record-window-ms", type=float, default=None)
     parser.add_argument("--record-buffer-ms", type=float, default=None)
+    parser.add_argument(
+        "--avalanche-smax",
+        type=int,
+        default=None,
+        help="べき乗フィットと ΔCr の上限アバランシェサイズ。既定は simulation.N "
+             "(論文の 100 は N=100 のこと)",
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--out-dir", default=None, help="日時付き実行ディレクトリを作るベースディレクトリ")
     parser.add_argument(
@@ -96,6 +116,48 @@ def parse_args():
     )
     parser.add_argument("--task-name", default=TASK_NAME)
     return parser.parse_args()
+
+
+def resolve_avalanche_smax(config, override: int | None = None) -> int:
+    """べき乗フィット / ΔCr の上限サイズを決める。既定は **システムサイズ N**。
+
+    論文 (Ikeda-Akita-Takahashi 2023) の [1, 100] は N=100 のネットワークの話で、100 は
+    定数ではなく **系のサイズそのもの**。Beggs-Plenz 系の慣例どおり、べき乗スケーリング領域の
+    カットオフは電極数 / ニューロン数で決まる。よって既定を N にすれば akita_soc.yaml
+    (N=100) の結果は一切変わらないまま、他の N へそのまま外挿できる。
+
+    smax は「データの切り取り」ではなく **モデルの正規化台** であることに注意
+    (p(s) = s^-α / Σ_{k=1}^{smax} k^-α)。観測サイズが smax を超えなくても、smax を変えれば
+    α は動く。「どうせ 100 を超えないから 100 のままで安全」ではない。
+    """
+    if override is not None:
+        if override < 2:
+            raise ValueError(f"--avalanche-smax は 2 以上である必要があります (got {override})。")
+        return int(override)
+    return int(config.simulation.N)
+
+
+def resolve_order_axes(layout, axes=RASTER_ORDER_AXES):
+    """layout が実際に持っている軸だけに絞った並べ替え軸を返す。
+
+    `RASTER_ORDER_AXES` の module 軸は `space: area_uniform` + 複合エリアの run にしか無い。
+    無い軸を `plot_raster` に渡すと `NetworkLayout` が KeyError を送出し、**記録時刻に
+    到達した瞬間に長い run が落ちる**ので、ここで落としておく。
+    """
+    if layout is None or not axes:
+        return None
+    available = tuple(axis for axis in axes if layout.has_axis(axis))
+    if available != tuple(axes):
+        dropped = [axis for axis in axes if axis not in available]
+        print(f"  Note: layout に無い並べ替え軸を除外しました: {dropped}")
+    if not available:
+        available = FALLBACK_ORDER_AXES
+    return available
+
+
+def raster_ylim(total_neurons: int) -> tuple[float, float]:
+    """並べ替えを行わない場合のラスター y 範囲。論文の (0, 100) は N=100 のこと。"""
+    return (0.0, float(total_neurons))
 
 
 def apply_overrides(config, args):
@@ -207,15 +269,27 @@ def max_plasticity_weight(config) -> float:
     return max(wmax_values) if wmax_values else 1.0
 
 
-def replot_existing_output(run_dir: Path) -> None:
+def replot_existing_output(run_dir: Path, smax_override: int | None = None) -> None:
+    # run ルートと <run>/data のどちらを渡されても run ルートに正規化する。図は run ルートへ、
+    # データは data_dir() の指す場所へ、という本番実行 (organize_output 後) と同じ配置になる。
+    run_dir = Path(run_dir)
+    if run_dir.name == DATA_SUBDIR and (run_dir / CONFIG_NAME).exists():
+        run_dir = run_dir.parent
+
     config_path = require(run_dir, CONFIG_NAME)
     manager = ConfigManager()
     config = manager.load_resolved(config_path)
     record_window_ms = float(config.task.record_window_ms)
     total_neurons = int(config.simulation.N)
-    spike_files = discover_records(run_dir, SPIKES)
+    smax = resolve_avalanche_smax(config, smax_override)
+    print(f"Replot from: {run_dir} (N={total_neurons}, avalanche smax={smax})")
+
+    # 記録 npz は organize_output() 後 data/ に移っている。run ルートを直接 glob すると
+    # 整理済みの run で 1 件も見つからないので、必ず data_dir() を通す。
+    source_dir = data_dir(run_dir)
+    spike_files = discover_records(source_dir, SPIKES)
     if not spike_files:
-        raise FileNotFoundError(f"No spikes_*h.npz files found in: {run_dir}")
+        raise FileNotFoundError(f"No spikes_*h.npz files found in: {source_dir}")
 
     # ラスターをニューロングループ順に並べ替えるためのグループ割り当てを再構築する。
     # NetworkLayout.from_config は config.layout.assignment (と seed) から割当を決定論的に
@@ -230,6 +304,8 @@ def replot_existing_output(run_dir: Path) -> None:
             layout.load_axes_file(axes_path)
     except Exception as e:
         print(f"  Warning: could not reconstruct layout for grouped raster: {e}")
+
+    order_axes = resolve_order_axes(layout)
 
     metrics_rows = []
     for record in spike_files:
@@ -249,8 +325,9 @@ def replot_existing_output(run_dir: Path) -> None:
                 "mean_rate_hz": float(np.mean(rates)),
                 "avalanche_threshold_ms": avalanche.threshold_ms,
                 "num_avalanches": int(avalanche.sizes.size),
+                "avalanche_smax": smax,
                 "llr": log_likelihood_ratio_power_vs_exponential(avalanche.sizes),
-                "delta_cr": criticality_index_delta_cr(avalanche.sizes),
+                "delta_cr": criticality_index_delta_cr(avalanche.sizes, smax=smax),
                 "burstiness_index": burstiness_index(local_times, record_window_ms),
                 "bimodality_d": bimodality_d(avalanche.sizes),
             }
@@ -262,8 +339,9 @@ def replot_existing_output(run_dir: Path) -> None:
             run_dir / f"raster_{hour:g}h.png",
             f"Raster {hour:g} h",
             xlim_s=PAPER_RASTER_XLIM_S,
-            ylim_neuron=PAPER_RASTER_YLIM_NEURON,
+            ylim_neuron=raster_ylim(total_neurons),
             layout=layout,
+            order_axes=order_axes,
         )
         plot_avalanche_distribution(
             avalanche.sizes,
@@ -271,15 +349,17 @@ def replot_existing_output(run_dir: Path) -> None:
             f"Avalanche distribution {hour:g} h",
             xlim=PAPER_AVALANCHE_XLIM,
             ylim=PAPER_AVALANCHE_YLIM,
+            fit_smax=smax,
         )
 
-    # 再計算した指標は data/ (= fig2c が読む場所) に別名で置く。metrics.csv を上書きしないのは
-    # そちらが重みブロック等スパイクからは再計算できない列を持つため。
+    # 再計算した指標は **fig2c が読む場所** (= data_dir) に別名で置く。metrics.csv を
+    # 上書きしないのは、そちらが重みブロックなどスパイクからは再計算できない列を持つため。
     replot_metrics = data_dir(run_dir) / REPLOT_METRICS_NAME
     with open(replot_metrics, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))
         writer.writeheader()
         writer.writerows(metrics_rows)
+    print(f"  Recomputed metrics -> {replot_metrics}")
 
     # 本番実行 (main) と同じ Figure 2c / 2d も再生成する。
     # fig2c は metrics.csv と weights_*h.npz を、fig2d は spikes_*h.npz と config.yaml を
@@ -287,7 +367,10 @@ def replot_existing_output(run_dir: Path) -> None:
     print(f"\nGenerating visualizations...")
     try:
         print(f"  Figure 2c...")
-        plot_figure2c(str(run_dir), layout, metrics_name=REPLOT_METRICS_NAME)
+        # **metrics_name を明示すること。** 省略すると fig2c は元の metrics.csv を読み、
+        # 再計算した値ではなく古い値で右列が描かれる (しかも例外は出ない)。
+        plot_figure2c(str(run_dir), layout,
+                      metrics_name=REPLOT_METRICS_NAME, llr_smax=smax)
     except Exception as e:
         print(f"  Warning: Figure 2c generation failed: {e}")
 
@@ -303,7 +386,7 @@ def replot_existing_output(run_dir: Path) -> None:
 def main():
     args = parse_args()
     if args.replot_from is not None:
-        replot_existing_output(Path(args.replot_from))
+        replot_existing_output(Path(args.replot_from), smax_override=args.avalanche_smax)
         return
 
     manager = ConfigManager()
@@ -337,6 +420,18 @@ def main():
         geometry.save(out_dir / AXONS_NAME)
         print(f"  Saved axon geometry: {geometry.seg_owner.size} segments -> {AXONS_NAME}")
 
+    # 構造図一式 (area / connection_mask_coarse / weight・delay・distance 分布 /
+    # network_sample / axon_network / connection_probability)。
+    # scripts/visualize_network_structure.py が出すものと同じで、出力先はこの run の
+    # ディレクトリ。シミュレーション結果には依存しないので、長い run が途中で落ちても
+    # 構造の記録だけは残るよう **setup の前**に出す。
+    order_axes = resolve_order_axes(layout)
+    print("\nGenerating network structure figures...")
+    try:
+        visualize_structure(builder, config, out_dir, seed=0, order_axes=order_axes)
+    except Exception as e:
+        print(f"  Warning: network structure visualization failed: {e}")
+
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
 
@@ -352,6 +447,8 @@ def main():
     print(f"  Saved connectivity: {weights_row.size} synapses -> {CONNECTIVITY_NAME}")
 
     group_ids = layout.ids_by("polarity")
+    smax = resolve_avalanche_smax(config, args.avalanche_smax)
+    print(f"  Avalanche fit range: [1, {smax}] (N={builder.total_neurons})")
     wmax = max_plasticity_weight(config)
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
@@ -422,8 +519,9 @@ def main():
             "mean_rate_hz": float(np.mean(rates)),
             "avalanche_threshold_ms": avalanche.threshold_ms,
             "num_avalanches": int(avalanche.sizes.size),
+            "avalanche_smax": smax,
             "llr": log_likelihood_ratio_power_vs_exponential(avalanche.sizes),
-            "delta_cr": criticality_index_delta_cr(avalanche.sizes),
+            "delta_cr": criticality_index_delta_cr(avalanche.sizes, smax=smax),
             "burstiness_index": burstiness_index(local_times, record_window_ms),
             "bimodality_d": bimodality_d(avalanche.sizes),
         }
@@ -446,22 +544,33 @@ def main():
         )
         metrics_rows.append(row)
 
-        plot_raster(
-            local_times,
-            spikes["ids"],
-            out_dir / f"raster_{hour:g}h.png",
-            f"Raster {hour:g} h",
-            xlim_s=PAPER_RASTER_XLIM_S,
-            ylim_neuron=PAPER_RASTER_YLIM_NEURON,
-            layout=layout,
-        )
-        plot_avalanche_distribution(
-            avalanche.sizes,
-            out_dir / f"avalanche_{hour:g}h.png",
-            f"Avalanche distribution {hour:g} h",
-            xlim=PAPER_AVALANCHE_XLIM,
-            ylim=PAPER_AVALANCHE_YLIM,
-        )
+        # 図の生成は失敗しても run を落とさない。ここまでで npz と metrics 行は確定して
+        # いるので、数時間回した結果を描画の都合で失うことのないようにする。
+        try:
+            plot_raster(
+                local_times,
+                spikes["ids"],
+                out_dir / f"raster_{hour:g}h.png",
+                f"Raster {hour:g} h",
+                xlim_s=PAPER_RASTER_XLIM_S,
+                ylim_neuron=raster_ylim(builder.total_neurons),
+                layout=layout,
+                order_axes=order_axes,
+            )
+        except Exception as e:
+            print(f"  Warning: raster generation failed at {hour:g}h: {e}")
+
+        try:
+            plot_avalanche_distribution(
+                avalanche.sizes,
+                out_dir / f"avalanche_{hour:g}h.png",
+                f"Avalanche distribution {hour:g} h",
+                xlim=PAPER_AVALANCHE_XLIM,
+                ylim=PAPER_AVALANCHE_YLIM,
+                fit_smax=smax,
+            )
+        except Exception as e:
+            print(f"  Warning: avalanche plot failed at {hour:g}h: {e}")
 
         # neuron_test 相当の単一ニューロン膜電位トレース。
         # 記録窓の先頭 trace_window_s 秒ぶんを採取済みなので、ラスター先頭と時間軸が揃う。
@@ -489,7 +598,7 @@ def main():
     print(f"\nGenerating visualizations...")
     try:
         print(f"  Figure 2c...")
-        plot_figure2c(str(out_dir), layout)
+        plot_figure2c(str(out_dir), layout, llr_smax=smax)
     except Exception as e:
         print(f"  Warning: Figure 2c generation failed: {e}")
 
