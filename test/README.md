@@ -50,7 +50,7 @@ test/
 | `test_area_plotting.py` | `plot_area()` が境界を閉じない / bbox 全体を塗る / 座標の有無で誤判定する。SDF 実装で踏んだ罠 3 つを固定 | 13 / 3.5s |
 | `test_lesion_builder.py` | `replace_global_coo()`（損傷実験の構造的除去の土台）が壊れる | 25 / 1.3s |
 | `test_akita_soc.py` | Akita モデルの素の数式（escape noise / conductance LIF / STDP kernel / STP）と replot 経路 | 31 / 2.1s |
-| `test_develop_script.py` | `scripts/develop.py` の N 非依存化。「論文の 100」が N に追従しなくなる | 12 / 3.9s |
+| `experiments/develop/test_develop.py` | develop 実験。「論文の 100」が N に追従すること / task プロファイルを config が選ぶこと / seed 範囲の展開 / `config.yaml` が build を通った記録に限られること / 本番と再解析が同じ列を作ること | 30 / 4.5s |
 
 **所要時間の 9 割が `test_axon_growth.py` 1 本**（107 秒。残り全部で 11 秒）。
 軸索・領域に触っていないなら `pytest test/ -q --ignore=test/test_axon_growth.py` で十分。

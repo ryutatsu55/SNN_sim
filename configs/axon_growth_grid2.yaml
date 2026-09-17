@@ -10,8 +10,8 @@
 simulation:
   N: 67  # 面積より算出 (0.16 mm^2 x 420 neurons/mm^2 = 67.2)
   dt: 0.1
-  # seed: 1
-  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
+  seed: 1
+  backend: cpu       # GeNN バックエンド: cuda | cpu | auto
 
 inputs:
   # akita_escape_lif の escape 発火が自発活動を供給するため外部ノイズは不要。

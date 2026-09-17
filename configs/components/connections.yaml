@@ -92,8 +92,8 @@ axon_growth:
 # ============================================================================
 axon_growth_fine:
   mean_axon_length: 1100.0   # um  軸索全長 (Rayleigh 分布) の平均
-  segment_length: 10.0       # um  1 セグメントの長さ
-  angle_sigma: 0.0316227766  # rad = 0.1 / sqrt(10)。Lp = 2*10/sigma^2 = 20 mm
+  segment_length: 1.0       # um  1 セグメントの長さ
+  angle_sigma: 0.01  # rad = 0.1 / sqrt(10)。Lp = 2*10/sigma^2 = 20 mm
   dendrite_radius: 150.0     # um  樹状突起円の半径 (結合の受容範囲)
   connection_prob: 0.2       #     樹状突起円への侵入 1 回あたりの結合確率
   boundary: deflect          #     境界処理: deflect (壁沿いに滑る) | reflect | stop

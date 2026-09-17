@@ -7,16 +7,17 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # 単体実行 (python -m ... でない直接実行) でも src パッケージを解決できるようにする
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
-from src.core.output_manager import AXES_NAME, CONFIG_NAME, data_dir, locate, require
+from src.core.output_manager import AXES_NAME, CONFIG_NAME, locate, require
+from scripts.develop.paths import records_dir
 from src.utils.analysis.powerlaw import llr_ceiling_per_avalanche
 from src.utils.analysis.weights import BLOCK_ORDER, block_masks, excitatory_flags
-from src.utils.experiments.akita_soc.runio import (
+from scripts.develop.records import (
     WEIGHTS,
     discover_records,
     load_connectivity,
@@ -69,8 +70,9 @@ def plot_figure2c(folder, layout, output_dir=None, metrics_name='metrics.csv',
                   llr_smax=100):
     """右列の指標は `metrics_name` から読む。
 
-    再解析 (`akita_soc_fig2.py --replot-from`) は指標を計算し直して別名で書くので、
-    どちらを描くかは呼び出し側が名前で明示する。自動で新しい方を選ぶようなことはしない。
+    本番の run も再解析 (`scripts/develop/replot.py`) も `metrics.csv` に書くので、
+    通常はこの既定で足りる。引数に残してあるのは、手元で別名の CSV を描き比べたいときの
+    ためで、**自動で新しい方を選ぶようなことはしない**。
 
     Args:
         llr_smax: LLR 天井線を引く打ち切り上限。論文の 100 は **N=100 のこと**なので、
@@ -82,7 +84,7 @@ def plot_figure2c(folder, layout, output_dir=None, metrics_name='metrics.csv',
         output_dir = folder
 
     # organize_output() 後は csv/npz が data/ にあるので、読み込みはそちらを見る。
-    source_dir = str(data_dir(folder))
+    source_dir = str(records_dir(folder))
     metrics_path = os.path.join(source_dir, metrics_name)
 
     if not os.path.exists(metrics_path):

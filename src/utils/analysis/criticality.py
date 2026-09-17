@@ -9,50 +9,63 @@ from __future__ import annotations
 import numpy as np
 from scipy import signal
 
-from src.utils.analysis.powerlaw import _fit_power_loglog, discrete_distribution
-
 
 def criticality_index_delta_cr(
-    sizes: np.ndarray, smax: int = 100, smin_max: int = 10, min_points: int = 10
+    sizes: np.ndarray, smax: int = 100, smin: int = 1, min_points: int = 10
 ) -> float:
     """臨界性指標 ΔCr(Ikeda-Akita-Takahashi 2023 supplementary 式 S21-S24)。
 
-    pemp(s)=経験PMF, pfit(s)=log-log 線形回帰の**生の回帰線**(exp(b)·s^slope)。
-    smin を [1, smin_max] で走査して線形回帰の平均二乗誤差を最小化(論文: 小サイズは
-    べき乗からずれるため除外)。smax=100。
-        Aupper = Σ max(pemp−pfit, 0),  Alower = Σ min(pemp−pfit, 0)   [smin..smax]
+    出自は Tetzlaff et al. 2010 の Δp。原著の定義は
+    「log-log プロット上で、分布の直線部分に引いた回帰直線を各データ点から引き、
+    **全データ点にわたる差の平均**を Δp とする」。
+    ずれを測る空間は **log-log プロットの縦軸**、つまり log10(pemp) − log10(pfit) であり、
+    値は **点数で割った平均**である。この 2 点が閾値 |Δp| < 0.195(Tetzlaff の
+    sub/critical/super 判定, Akita も踏襲) のスケールを与える。確率の生の差では
+    ±0.195 に届きえないし、和にすると点数だけで値が数倍動く。
+
+    Akita の修正(S22-S24)は、対称な大きいずれを「臨界」と誤判定しないために、
+    平均を上振れ/下振れに分けて大きい方を採ること:
+        Aupper = mean(max(残差, 0)),  Alower = mean(min(残差, 0))
         ΔCr    = |大きい方の符号付き値|。 正=超臨界, ≈0=臨界, 負=劣臨界。
 
-    重要: pfit は**再正規化しない**(旧実装は合計1へ正規化していたため Σ(pemp−pfit)=0 と
-    なり、かつ smin>1 選択時に −(小サイズ質量) の系統誤差が入って偽の強い劣臨界値を出していた)。
-    smin は小範囲に制限(旧実装は上限なしで tail へ退化)。
+    フィット範囲と評価範囲は別:
+      - 回帰は [smin, smax] の観測点に対して行う。
+      - 残差は **[1, smax] の全観測点**で評価する。回帰と同じ範囲だけで評価すると
+        最小二乗の性質から Σ残差 = 0、すなわち Aupper = |Alower| となって
+        sub/super の符号情報が消える。Tetzlaff の "all data points" もこちらを指す。
+
+    **`smin` は固定値で、0h の実測から較正してある。** 論文は「smin は線形フィットの
+    二乗誤差和を最小にするよう決めた」と書くが、その規準は再現しない —— こちらで
+    フィット範囲の SSE を最小化すると smin は上限へ張り付き(≈10)、全観測点で最小化すると
+    1 へ張り付く。どちらも ΔCr が論文と 2 倍ずれる。
+    そこで **0h(結合ゼロ = 100 個の独立ポアソン = パラメータ自由度ゼロ)を較正点に使う**:
+    93 run の 0h でスキャンすると **smin=3 で ΔCr = −0.236 ± 0.018**、論文 Fig 2(c) の
+    画素実測値 **−0.232** と一致する(自動選択は smin≈7 を選び −0.479 と 2 倍外していた)。
+    3h でも −0.209 vs 論文 −0.214 で一致する。
+    別の値を使いたいときは明示的に渡すこと(自動選択はしない)。
     """
-    support, prob = discrete_distribution(sizes, xmax=smax)
-    if support.size < min_points:
+    data = np.asarray(sizes, dtype=np.int64)
+    data = data[(data >= 1) & (data <= smax)]
+    if data.size == 0:
         return np.nan
 
-    best_error = np.inf
-    best_prob = None
-    best_fit = None
-    for smin in support:
-        if smin > smin_max:
-            break
-        mask = support >= smin
-        if np.count_nonzero(mask) < min_points:
-            break
-        _, _, fit = _fit_power_loglog(support[mask], prob[mask])
-        error = float(np.mean((np.log(prob[mask]) - np.log(fit)) ** 2))
-        if error < best_error:
-            best_error = error
-            best_prob = prob[mask]
-            best_fit = fit
-
-    if best_prob is None:
+    grid = np.arange(1, smax + 1)
+    prob = np.bincount(data, minlength=smax + 1)[1:smax + 1] / data.size
+    observed = prob > 0
+    fitted_on = observed & (grid >= smin)
+    if np.count_nonzero(fitted_on) < min_points:
         return np.nan
 
-    diff = best_prob - best_fit
-    upper = float(np.sum(np.maximum(diff, 0.0)))
-    lower = float(np.sum(np.minimum(diff, 0.0)))
+    log_grid = np.log10(grid)
+    log_prob = np.full(grid.shape, np.nan)
+    log_prob[observed] = np.log10(prob[observed])
+
+    slope, intercept = np.polyfit(log_grid[fitted_on], log_prob[fitted_on], 1)
+
+    residual = log_prob[observed] - (slope * log_grid[observed] + intercept)
+    count = residual.size
+    upper = float(np.sum(np.maximum(residual, 0.0)) / count)
+    lower = float(np.sum(np.minimum(residual, 0.0)) / count)
     return upper if abs(upper) >= abs(lower) else lower
 
 

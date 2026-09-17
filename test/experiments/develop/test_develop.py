@@ -1,0 +1,360 @@
+"""develop 実験 (`scripts/develop/`) の固定したい振る舞い。
+
+- 論文の「100」は定数ではなく系のサイズ N であること
+- module 軸を持たない run でも記録時刻に到達したときに落ちないこと
+- seed の範囲指定が意図どおり展開されること
+- `config.yaml` が「build を通った run の記録」以外にならないこと
+- 指標の列が 1 通りしかないこと (本番と再解析で食い違わない)
+- 再解析が、figure が読む場所に figure が読む名前で指標を置くこと
+"""
+import sys
+import tempfile
+import unittest
+import warnings
+from pathlib import Path
+
+import numpy as np
+
+root_path = Path(__file__).resolve().parents[3]
+if str(root_path) not in sys.path:
+    sys.path.insert(0, str(root_path))
+
+from scripts.develop import metrics, paths, panels
+from scripts.develop.records import METRICS_NAME
+from scripts.develop.replot import replot
+from src.core.config_manager import ConfigManager, expand_seed_spec
+from src.core.layout import NetworkLayout
+from src.core.output_manager import CONFIG_NAME, CONNECTIVITY_NAME, DATA_SUBDIR
+
+TASK_PATH = root_path / "scripts" / "develop" / "task.yaml"
+
+
+def _resolved_config(path="configs/akita_soc.yaml"):
+    return ConfigManager().resolve(str(root_path / path), "develop", task_path=TASK_PATH)
+
+
+def _fake_coo(num_neurons: int = 100, fan_out: int = 3, seed: int = 1):
+    """試験用の COO (row-major ソート済み)。"""
+    rng = np.random.default_rng(seed)
+    row = np.repeat(np.arange(num_neurons), fan_out)
+    col = rng.integers(0, num_neurons, row.size)
+    weights = rng.uniform(0.0, 1.0, row.size)
+    return row, col, weights
+
+
+class AvalancheSmaxTest(unittest.TestCase):
+    """論文の [1, 100] は定数ではなく系のサイズ N。"""
+
+    def test_defaults_to_network_size(self):
+        config = _resolved_config()
+        self.assertEqual(config.simulation.N, 100)
+        # 論文条件 (N=100) では従来と同一の値になる = 既存結果と比較可能
+        self.assertEqual(metrics.resolve_avalanche_smax(config), 100)
+
+    def test_follows_n_for_other_configs(self):
+        config = _resolved_config("configs/axon_growth_grid2.yaml")
+        self.assertEqual(metrics.resolve_avalanche_smax(config), config.simulation.N)
+        self.assertNotEqual(metrics.resolve_avalanche_smax(config), 100)
+
+    def test_override_wins(self):
+        config = _resolved_config()
+        self.assertEqual(metrics.resolve_avalanche_smax(config, 250), 250)
+
+    def test_rejects_degenerate_override(self):
+        config = _resolved_config()
+        with self.assertRaises(ValueError):
+            metrics.resolve_avalanche_smax(config, 1)
+
+    def test_raster_ylim_tracks_n(self):
+        self.assertEqual(panels.raster_ylim(100), (0.0, 100.0))   # 論文条件は不変
+        self.assertEqual(panels.raster_ylim(256), (0.0, 256.0))
+
+
+class OrderAxesFallbackTest(unittest.TestCase):
+    """module 軸を持たない run で `plot_raster` が KeyError を投げないこと。
+
+    記録ループはシミュレーションの途中で図を描くので、ここで例外が出ると
+    **その時点までの数時間の実行が失われる**。
+    """
+
+    def test_drops_axis_the_layout_does_not_have(self):
+        # akita_soc.yaml は area: no_space なので module 軸を持たない
+        layout = NetworkLayout.from_config(_resolved_config())
+        self.assertFalse(layout.has_axis("module"))
+        self.assertEqual(panels.resolve_order_axes(layout), panels.FALLBACK_ORDER_AXES)
+
+    def test_keeps_axes_that_exist(self):
+        layout = NetworkLayout.from_config(_resolved_config())
+        layout.add_axis("module", np.array(["M0"] * layout.total_neurons))
+        self.assertEqual(panels.resolve_order_axes(layout), panels.RASTER_ORDER_AXES)
+
+    def test_no_layout_means_no_ordering(self):
+        self.assertIsNone(panels.resolve_order_axes(None))
+
+
+class TaskSelectionTest(unittest.TestCase):
+    """どの記録プロトコルで走るかはメイン config の `task:` が決めること。
+
+    記録条件は結果を変えるので、選択が呼び出し側 (CLI や スクリプトのハードコード) に
+    あると、`config.yaml` を見ても何で走ったか分からなくなる。
+    """
+
+    def test_task_comes_from_the_main_config(self):
+        config = ConfigManager().resolve(
+            str(root_path / "scripts" / "develop" / "axon_growth_grid.yaml"),
+            task_path=TASK_PATH)
+        self.assertEqual(config.task.profile_name, "develop")
+
+    def test_config_without_task_is_rejected(self):
+        # `task:` を書いていない config は、既定を推測せず落ちる
+        with self.assertRaises(ValueError):
+            ConfigManager().resolve(str(root_path / "configs" / "akita_soc.yaml"),
+                                    task_path=TASK_PATH)
+
+    def test_explicit_argument_still_wins(self):
+        # 1 つの config を複数 task で使い回す既存スクリプトのための経路
+        config = ConfigManager().resolve(
+            str(root_path / "scripts" / "develop" / "axon_growth_grid.yaml"),
+            "develop", task_path=TASK_PATH)
+        self.assertEqual(config.task.profile_name, "develop")
+
+
+class TraceSettingTest(unittest.TestCase):
+    """膜電位トレースを採ったかどうかが、その run の記録に残ること。
+
+    引数で渡せるようにすると、完走した run に `trace_*.npz` が無いときに
+    「採らない設定だった」のか「採ろうとして失敗した」のかが区別できなくなる。
+    """
+
+    def test_task_profile_declares_it(self):
+        # キーが task.yaml に無いと、run の config.yaml にも残らない
+        config = _resolved_config()
+        self.assertIn("trace_neuron", config.task.model_dump())
+        self.assertIn("trace_window_s", config.task.model_dump())
+
+    def test_default_is_off(self):
+        from scripts.develop.run_one import resolve_trace
+        config = _resolved_config()
+        neuron, window_s = resolve_trace(config)
+        self.assertIsNone(neuron)
+        self.assertGreater(window_s, 0.0)
+
+    def test_reads_the_neuron_id(self):
+        from scripts.develop.run_one import resolve_trace
+        config = _resolved_config()
+        config.task.trace_neuron = 7
+        self.assertEqual(resolve_trace(config)[0], 7)
+
+    def test_rejects_out_of_range_neuron(self):
+        """長い run を回し切ってから IndexError で落ちないこと。"""
+        from scripts.develop.run_one import resolve_trace
+        config = _resolved_config()
+        config.task.trace_neuron = config.simulation.N     # 0..N-1 なので範囲外
+        with self.assertRaises(SystemExit):
+            resolve_trace(config)
+
+    def test_old_config_without_the_key_still_runs(self):
+        from scripts.develop.run_one import resolve_trace
+        config = _resolved_config()
+        del config.task.trace_neuron        # このキーが無い時代の run
+        self.assertIsNone(resolve_trace(config)[0])
+
+
+class SeedSpecTest(unittest.TestCase):
+    """`seed: [1, 10]` は「1 と 10 の 2 本」ではなく「1 から 10 まで」。"""
+
+    def test_scalar(self):
+        self.assertEqual(expand_seed_spec(5), [5])
+
+    def test_inclusive_range(self):
+        self.assertEqual(expand_seed_spec([1, 10]), list(range(1, 11)))
+
+    def test_range_with_step(self):
+        self.assertEqual(expand_seed_spec([1, 10, 2]), [1, 3, 5, 7, 9])
+
+    def test_rejects_a_plain_list_of_seeds(self):
+        # 3 つ以上並べたものは範囲として読めないので、黙って別の意味に解釈しない
+        with self.assertRaises(ValueError):
+            expand_seed_spec([1, 2, 3, 4])
+
+    def test_rejects_reversed_range(self):
+        with self.assertRaises(ValueError):
+            expand_seed_spec([10, 1])
+
+
+class RunPathsTest(unittest.TestCase):
+    """npz の読み場所が、新レイアウトでも旧 run でも同じ規則で決まること。"""
+
+    def test_new_layout_reads_data_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            paths.prepare(run)
+            np.savez_compressed(paths.data_path(run, "spikes_0h.npz"), times=[], ids=[])
+            self.assertEqual(paths.records_dir(run), run / DATA_SUBDIR)
+
+    def test_unorganized_old_run_reads_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            np.savez_compressed(run / "spikes_0h.npz", times=[], ids=[])
+            self.assertEqual(paths.records_dir(run), run)
+
+    def test_rejects_unknown_figure_kind(self):
+        with self.assertRaises(ValueError):
+            paths.fig_path("run", "histogram", "x.png")
+
+
+class PendingConfigTest(unittest.TestCase):
+    """`config.yaml` は「build を通った run の記録」以外にならないこと。
+
+    ランチャは起動前に config を置くが、その時点では `network.sparse` がまだ "auto" で、
+    記録としては不完全。だから引き継ぎは別名 (`pending_config.yaml`) で置き、
+    `config.yaml` を書くのは build を通した run 本体だけにしてある。
+    """
+
+    def test_handoff_is_not_named_config_yaml(self):
+        self.assertNotEqual(paths.PENDING_CONFIG_NAME, CONFIG_NAME)
+
+    def test_dump_config_does_not_claim_to_be_a_record(self):
+        """`dump_config` は sparse 未解決でも警告を出さない (記録を主張しないので)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _resolved_config()
+            self.assertNotIn(config.network.sparse, ("on", "off"))   # まだ "auto"
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")   # 警告が出たら失敗
+                ConfigManager.dump_config(config, Path(tmp) / paths.PENDING_CONFIG_NAME)
+
+    def test_save_config_still_warns_before_build(self):
+        """`save_config` の不変条件は残っていること (引数で黙らせられない)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _resolved_config()
+            with self.assertWarns(UserWarning):
+                ConfigManager().save_config(config, save_dir=tmp)
+
+    def test_save_config_is_quiet_once_sparse_is_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _resolved_config()
+            config.network.sparse = "off"        # build() が焼き込む値
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                ConfigManager().save_config(config, save_dir=tmp)
+
+
+class MetricsColumnsTest(unittest.TestCase):
+    """`build_row` が **1 通りの列**を作ること。
+
+    指標の実装が 2 つあった頃は、再解析側にだけ E/I 列と重みブロック列が無く、
+    本番と再解析で列が食い違っていた。いまは入力がすべて必須なので、作られる列は
+    常に同じ 1 組になる。
+    """
+
+    def _row(self):
+        rng = np.random.default_rng(0)
+        layout = NetworkLayout.from_config(_resolved_config())
+        row, col, weights = _fake_coo()
+        return metrics.build_row(
+            0.0,
+            np.sort(rng.uniform(0.0, 30000.0, 500)),
+            rng.integers(0, 100, 500),
+            total_neurons=100, record_window_ms=30000.0, smax=100,
+            layout=layout, weights=weights, row=row, col=col, wmax=1.0,
+        )
+
+    def test_row_has_every_family_of_columns(self):
+        row = self._row()
+        self.assertIn("delta_cr", row)                                        # スパイク系
+        self.assertTrue(any(k.startswith(("exc", "inh")) for k in row))       # E/I 系
+        self.assertIn("weight_at_max_fraction", row)                          # 重みブロック系
+        self.assertIn("diagnosis", row)                                       # 診断
+
+    def test_inputs_are_all_required(self):
+        # 列を減らして続行する経路は無い。足りなければ呼び出しの時点で落ちる。
+        with self.assertRaises(TypeError):
+            metrics.build_row(0.0, [1.0], [0], total_neurons=1,
+                              record_window_ms=10.0, smax=10)
+
+
+class ReplotPlacementTest(unittest.TestCase):
+    """再解析した指標が figure の読む場所に、figure が読む名前で置かれること。
+
+    ここがズレると再解析は指標を計算し直すのに図は古い metrics.csv のまま、という
+    **例外の出ない**食い違いになる。本番と同じ `metrics.csv` を上書きするので、
+    置き場所を間違えると古い CSV がそのまま残ることになる。
+    """
+
+    def _make_run(self, tmp_dir, organized: bool) -> Path:
+        run_dir = Path(tmp_dir)
+        target = run_dir / DATA_SUBDIR if organized else run_dir
+        target.mkdir(parents=True, exist_ok=True)
+
+        manager = ConfigManager()
+        config = manager.resolve(str(root_path / "configs" / "akita_soc.yaml"), "develop",
+                                 task_path=TASK_PATH)
+        config.task.record_window_ms = 30000.0
+        # 本来 NetworkBuilder が build() 時に焼き込む値。ここはフィクスチャで
+        # ビルドを通さないので、save_config() の警告を出さないために実値を入れておく。
+        config.network.sparse = "off"
+        manager.save_config(config, save_dir=target)
+
+        rng = np.random.default_rng(0)
+        np.savez_compressed(
+            target / "spikes_0h.npz",
+            times=np.sort(rng.uniform(0.0, 30000.0, 500)),
+            ids=rng.integers(0, 100, 500),
+        )
+        # 重みブロック列は必須なので、結合構造と重みも置く
+        row, col, weights = _fake_coo()
+        np.savez_compressed(target / CONNECTIVITY_NAME, row=row, col=col, shape=(100, 100))
+        np.savez_compressed(target / "weights_0h.npz", data=weights)
+        return run_dir
+
+    def _assert_placement(self, run_dir: Path):
+        metrics_path = paths.records_dir(run_dir) / METRICS_NAME
+        self.assertTrue(metrics_path.exists(), f"{metrics_path} が無い")
+        header = metrics_path.read_text(encoding="utf-8").splitlines()[0]
+        # fig2c の天井線がこの列を見る
+        self.assertIn("avalanche_smax", header)
+        # 重みブロック列まで揃っていること (本番と同じ列)
+        self.assertIn("weight_at_max_fraction", header)
+        # 図は種類別のサブディレクトリへ
+        self.assertTrue(paths.fig_path(run_dir, paths.RASTER, "raster_0h.png").exists())
+        self.assertTrue(paths.fig_path(run_dir, paths.AVALANCHE, "avalanche_0h.png").exists())
+
+    def test_run_root_of_organized_run(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = self._make_run(tmp_dir, organized=True)
+            self.assertFalse((run_dir / CONFIG_NAME).exists())  # data/ にしか無い
+            replot(run_dir)
+            self._assert_placement(run_dir)
+
+    def test_data_subdir_is_normalized_to_run_root(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = self._make_run(tmp_dir, organized=True)
+            replot(run_dir / DATA_SUBDIR)
+            self._assert_placement(run_dir)
+
+    def test_unorganized_run(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = self._make_run(tmp_dir, organized=False)
+            replot(run_dir)
+            self._assert_placement(run_dir)
+
+    def test_smax_override_is_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = self._make_run(tmp_dir, organized=True)
+            replot(run_dir, smax_override=250)
+            rows = (paths.records_dir(run_dir) / METRICS_NAME).read_text(
+                encoding="utf-8").splitlines()
+            column = rows[0].split(",").index("avalanche_smax")
+            self.assertEqual(rows[1].split(",")[column], "250")
+
+    def test_missing_connectivity_is_loud(self):
+        """古い密形式の run は、列を減らして続行せず落ちること。"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = self._make_run(tmp_dir, organized=False)
+            (run_dir / CONNECTIVITY_NAME).unlink()
+            with self.assertRaises(FileNotFoundError):
+                replot(run_dir)
+
+
+if __name__ == "__main__":
+    unittest.main()

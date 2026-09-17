@@ -1,4 +1,4 @@
-"""親 run (`scripts/develop.py` の出力) からネットワークを引き継ぐ。
+"""親 run (`scripts/develop/` の出力) からネットワークを引き継ぐ。
 
 引き継ぎは「同じ config を同じ seed で再ビルドし、保存済みの重みを流し込む」の 2 段。
 結合構造そのものは再生成すれば完全に一致する (seed / backend / assignment / sparse が

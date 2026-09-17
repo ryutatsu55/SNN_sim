@@ -10,7 +10,7 @@ akita_soc の `{kind}_{hour}h.npz` を使わず `{kind}_p{index:03d}.npz` にし
    絶対時刻ではない。
 3. **akita_soc の解析 CLI に誤読されない。** あちらの glob は `spikes_*h.npz`、regex は
    末尾 `h.npz` 必須なので、`spikes_p003.npz` はどちらにも掛からない。
-   `develop.py --replot-from` に損傷 run を渡しても「見つからない」で止まる。
+   `scripts/develop/replot.py` に損傷 run を渡しても「見つからない」で止まる。
 
 時刻は `probes.csv` が持つ (index -> phase / 切断からの経過 ms / 窓幅)。
 """

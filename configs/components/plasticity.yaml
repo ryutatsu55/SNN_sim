@@ -27,18 +27,6 @@ custom_Akita:
     beta_E: 1.00
     Wmin: 0.0
     Wmax: 1.0
-  # g_max スイープ (E-I 比制御)
-  e-stdp_gmax05: {tau_rec: 150.0, U: 0.4, g_max: 0.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax20: {tau_rec: 150.0, U: 0.4, g_max: 2.0,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax225: {tau_rec: 150.0, U: 0.4, g_max: 2.25, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax23: {tau_rec: 150.0, U: 0.4, g_max: 2.3,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax24: {tau_rec: 150.0, U: 0.4, g_max: 2.4,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax25: {tau_rec: 150.0, U: 0.4, g_max: 2.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax26: {tau_rec: 150.0, U: 0.4, g_max: 2.6,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax27: {tau_rec: 150.0, U: 0.4, g_max: 2.7,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax275: {tau_rec: 150.0, U: 0.4, g_max: 2.75, normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax30: {tau_rec: 150.0, U: 0.4, g_max: 3.0,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
-  e-stdp_gmax35: {tau_rec: 150.0, U: 0.4, g_max: 3.5,  normalize_gmax_by_fan_in: false, A_E: 0.02, tau_E: 20.0, beta_E: 1.00, Wmin: 0.0, Wmax: 1.0}
 
   e-stdp_akita_stable_probe:
     tau_rec: 150.0
@@ -53,6 +41,7 @@ custom_Akita:
 
   # 汎用の物理単位版 
   e-stdp_physical: {tau_rec: 150.0, U: 0.4, g_max: 0.0086, normalize_gmax_by_fan_in: false, A_E: 0.01, tau_E: 20.0, beta_E: 1.05, Wmin: 0.0, Wmax: 1.0}   # [µS] = 8.6 nS
+  e-stdp_physical_fine: {tau_rec: 150.0, U: 0.8, g_max: 0.02, normalize_gmax_by_fan_in: false, A_E: 0.01, tau_E: 20.0, beta_E: 1.05, Wmin: 0.0, Wmax: 1.0}   # [µS] = 8.6 nS
 
   # --- 抑制性 STDP (i-stdp) ---
   i-stdp:
@@ -66,18 +55,6 @@ custom_Akita:
     beta_I: 1.15
     Wmin: 0.0
     Wmax: 1.0
-  # g_max スイープ
-  i-stdp_gmax05: {tau_rec: 150.0, U: 0.4, g_max: 0.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax20: {tau_rec: 150.0, U: 0.4, g_max: 2.0,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax225: {tau_rec: 150.0, U: 0.4, g_max: 2.25, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax23: {tau_rec: 150.0, U: 0.4, g_max: 2.3,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax24: {tau_rec: 150.0, U: 0.4, g_max: 2.4,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax25: {tau_rec: 150.0, U: 0.4, g_max: 2.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax26: {tau_rec: 150.0, U: 0.4, g_max: 2.6,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax27: {tau_rec: 150.0, U: 0.4, g_max: 2.7,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax275: {tau_rec: 150.0, U: 0.4, g_max: 2.75, normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax30: {tau_rec: 150.0, U: 0.4, g_max: 3.0,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
-  i-stdp_gmax35: {tau_rec: 150.0, U: 0.4, g_max: 3.5,  normalize_gmax_by_fan_in: false, A_I: 0.02, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}
 
   i-stdp_akita_stable_probe:
     tau_rec: 150.0
@@ -92,6 +69,7 @@ custom_Akita:
 
   # 汎用の物理単位版
   i-stdp_physical: {tau_rec: 150.0, U: 0.4, g_max: 0.0429, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}   # [µS] = 42.9 nS (IPSP 2.0mV@-55)
+  i-stdp_physical_fine: {tau_rec: 150.0, U: 0.4, g_max: 0.05, normalize_gmax_by_fan_in: false, A_I: 0.01, tau_I1: 10.0, tau_I2: 20.0, beta_I: 1.15, Wmin: 0.0, Wmax: 1.0}   # [µS] = 42.9 nS (IPSP 2.0mV@-55)
 
 # =================================================================
 # Standard Plasticity Models Configuration
