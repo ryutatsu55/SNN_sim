@@ -472,10 +472,9 @@ def main():
                 trace_local_times,
                 trace_spikes["ids"],
                 dt=dt,
+                out_path=out_dir / f"neuron_trace_{hour:g}h.png",
                 id=TRACE_NEURON_ID,
                 window_s=trace_window_s,
-                title=f"neuron_trace_{hour:g}h",
-                save_path=str(out_dir),
             )
         except Exception as e:
             print(f"  Warning: neuron trace generation failed at {hour:g}h: {e}")

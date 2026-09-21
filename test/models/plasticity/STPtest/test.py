@@ -121,8 +121,8 @@ def main():
         trial_results["times"],
         trial_results["ids"],
         config,
-        id = 0,
-        save_path="test/models/plasticity/STPtest",
+        id=0,
+        out_path="test/models/plasticity/STPtest/neuron_test.png",
         x_data=x_data
     )
 
@@ -131,7 +131,7 @@ def main():
         coo.row, coo.col, coo.weights,
         coords=builder.global_coords,
         config=config,
-        save_path="test/models/plasticity/STPtest"
+        out_path="test/models/plasticity/STPtest/network.png",
         )
 
 if __name__ == "__main__":

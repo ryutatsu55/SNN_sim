@@ -29,15 +29,15 @@ from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
 from src.core.output_manager import AXES_NAME, AXONS_NAME, CONFIG_NAME, CONNECTIVITY_NAME
 from src.core.simulator import GeNNSimulator
-from scripts.develop import metrics, paths, panels
-from scripts.develop.fig2c import plot_figure2c
-from scripts.develop.fig2d import plot_figure2d
-from scripts.develop.records import (METRICS_NAME, SPIKES, TRACE, WEIGHTS,
-                                     MetricsWriter, record_filename)
-from scripts.develop.weight_track import visualize_weight_tracks
-# 構造図一式は visualize_network_structure と共有する。**ビルド済みの builder** を渡す
-# 版を呼ぶこと (config から作り直すと seed 未指定時に別の実現の図になってしまう)。
-from scripts.visualize_network_structure import visualize_structure
+from scripts.develop.analysis import metrics
+from scripts.develop.report import overview, panels, structure
+from scripts.develop.store import paths
+from scripts.develop.store.built import Built
+from scripts.develop.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
+                                           MetricsWriter, record_filename,
+                                           save_connectivity, save_spikes, save_trace,
+                                           save_weight_values)
+from scripts.develop.store.series import open_run
 
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
@@ -165,17 +165,23 @@ def _model_name(run_dir: Path, seed: int) -> str:
     return f"develop_{safe}_seed{seed}"
 
 
-def record_once(sim, builder, layout, config, run_dir: Path, hour: float, *,
+def record_once(sim, series, run_dir: Path, hour: float, *,
                 record_start_ms: float, record_window_steps: int, chunk_steps: int,
-                smax: int, wmax: float, weights_row, weights_col,
-                order_axes, trace_neuron: int | None, trace_window_s: float) -> dict:
-    """記録時刻 1 点ぶん: 窓を走らせ、npz を書き、図を描き、metrics の 1 行を返す。"""
+                trace_neuron: int | None, trace_window_s: float, metrics_csv) -> None:
+    """記録時刻 1 点ぶん: 窓を走らせ、npz を書き、**書いたものを読み直して**出力する。
+
+    最後の一手が要点。in-memory の値をそのまま図へ渡すと、本番と再解析で描画経路が
+    2 本になる (以前は `Trace` を「再解析が npz から組み立てるのと同じ形」に手で
+    組み直していた)。一度書いてから `series.window(hour)` で読み直せば、
+    `replot.py` とまったく同じ呼び出しになる。
+    """
+    config = series.config
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
 
     # 重みは窓に入る**前**の値。ここで pull しておかないと窓ぶんの可塑性が混ざる。
     weights = sim.pull_synapse_coo("w")["data"]
-    np.savez_compressed(paths.data_path(run_dir, record_filename(WEIGHTS, hour)), data=weights)
+    save_weight_values(paths.data_path(run_dir, record_filename(WEIGHTS, hour)), weights)
 
     trace = None
     if trace_neuron is None:
@@ -204,38 +210,23 @@ def record_once(sim, builder, layout, config, run_dir: Path, hour: float, *,
         spikes = {"times": times[order], "ids": ids[order]}
         trace = (trace_v, trace_i, trace_spikes, trace_window_s)
 
-    local_times = spikes["times"] - record_start_ms
-    np.savez_compressed(paths.data_path(run_dir, record_filename(SPIKES, hour)),
-                        times=spikes["times"], ids=spikes["ids"])
-
-    row = metrics.build_row(
-        hour, local_times, spikes["ids"],
-        total_neurons=builder.total_neurons,
-        record_window_ms=record_window_ms,
-        smax=smax, layout=layout,
-        weights=weights, row=weights_row, col=weights_col, wmax=wmax,
-    )
-
-    panels.draw_raster(run_dir, hour, local_times, spikes["ids"], builder.total_neurons,
-                       layout=layout, order_axes=order_axes)
-    panels.draw_avalanche(run_dir, hour, local_times, smax)
+    # **窓の原点を npz に埋める。** 再解析はこれを読むので、ファイル名から時刻を復元
+    # しなくて済む (`f"{hour:g}"` は有効数字 6 桁なので非整数の記録時刻は往復しない)。
+    save_spikes(paths.data_path(run_dir, record_filename(SPIKES, hour)),
+                spikes["times"], spikes["ids"], record_start_ms)
 
     if trace is not None:
         trace_v, trace_i, trace_spikes, trace_window_s = trace
-        trace_local_times = trace_spikes["times"] - record_start_ms
         # 図だけでなく生データも残す。1 ニューロン × 数万ステップで数百 KB しかない一方、
         # 「同じ窓のラスターと時間軸が揃った V/I」は後から作れない。
-        np.savez_compressed(
-            paths.data_path(run_dir, record_filename(TRACE, hour)),
-            V=trace_v, I=trace_i, dt=dt, neuron_id=trace_neuron,
-            window_s=trace_window_s,
-            spike_times=trace_local_times, spike_ids=trace_spikes["ids"],
-        )
-        panels.draw_trace(run_dir, hour, trace_v, trace_i, trace_local_times,
-                          trace_spikes["ids"], dt=dt, neuron_id=trace_neuron,
-                          window_s=trace_window_s)
+        save_trace(paths.data_path(run_dir, record_filename(TRACE, hour)),
+                   trace_v, trace_i, dt=dt, neuron_id=trace_neuron,
+                   window_s=trace_window_s,
+                   spike_times=trace_spikes["times"] - record_start_ms,
+                   spike_ids=trace_spikes["ids"])
 
-    return row
+    # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
+    panels.emit(series.window(hour), metrics=metrics_csv)
 
 
 def main():
@@ -294,15 +285,10 @@ def main():
         geometry.save(paths.data_path(run_dir, AXONS_NAME))
         print(f"  Saved axon geometry: {geometry.seg_owner.size} segments -> {AXONS_NAME}")
 
-    # 構造図一式。シミュレーション結果には依存しないので、長い run が途中で落ちても
-    # 構造の記録だけは残るよう **setup の前**に出す。
-    order_axes = panels.resolve_order_axes(layout)
+    # 構造図と数値レポート。シミュレーション結果には依存しないので、長い run が途中で
+    # 落ちても構造の記録だけは残るよう **setup の前**に出す。
     print("\nGenerating network structure figures...")
-    try:
-        visualize_structure(builder, config, paths.fig_dir(run_dir, paths.STRUCTURE),
-                            seed=0, order_axes=order_axes)
-    except Exception as e:
-        print(f"  Warning: network structure visualization failed: {e}")
+    structure.emit(Built.from_builder(builder, run_dir, geometry=geometry))
 
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
@@ -312,24 +298,23 @@ def main():
     # 値との並びが必ず一致する。
     connectivity = sim.synapse_connectivity_coo()
     weights_row, weights_col = connectivity["row"], connectivity["col"]
-    np.savez_compressed(
-        paths.data_path(run_dir, CONNECTIVITY_NAME),
-        row=weights_row, col=weights_col, shape=connectivity["shape"],
-    )
+    save_connectivity(paths.data_path(run_dir, CONNECTIVITY_NAME),
+                      weights_row, weights_col, connectivity["shape"])
     print(f"  Saved connectivity: {weights_row.size} synapses -> {CONNECTIVITY_NAME}")
 
-    smax = metrics.resolve_avalanche_smax(config)
-    print(f"  Avalanche fit range: [1, {smax}] (N={builder.total_neurons})")
-    wmax = metrics.max_plasticity_weight(config)
+    print(f"  Avalanche fit range: "
+          f"[1, {metrics.resolve_avalanche_smax(config)}] (N={builder.total_neurons})")
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
     buffer_ms = float(getattr(config.task, "record_buffer_ms", record_window_ms))
     chunk_steps = max(1, int(buffer_ms / dt))
     record_window_steps = max(1, int(record_window_ms / dt))
-    record_starts = sorted(float(hour) * 60.0 * 60.0 * 1000.0 for hour in config.task.record_hours)
+    record_starts = sorted(float(hour) * MS_PER_HOUR for hour in config.task.record_hours)
 
     # **1 行ずつ書く。** 途中で落ちた run も、そこまでの指標が読める。
     metrics_csv = MetricsWriter(paths.data_path(run_dir, METRICS_NAME))
+    # 記録はこれから書くので窓は 0 個。`series.window(hour)` が 1 窓ずつ拾っていく。
+    series = open_run(run_dir, require_windows=False)
     current_ms = 0.0
     for record_start_ms in record_starts:
         develop_ms = record_start_ms - current_ms
@@ -339,39 +324,18 @@ def main():
             run_steps(sim, int(round(develop_ms / dt)), chunk_steps, keep_spikes=False)
             current_ms += develop_ms
 
-        hour = record_start_ms / (60.0 * 60.0 * 1000.0)
-        row = record_once(
-            sim, builder, layout, config, run_dir, hour,
+        hour = record_start_ms / MS_PER_HOUR
+        record_once(
+            sim, series, run_dir, hour,
             record_start_ms=record_start_ms,
             record_window_steps=record_window_steps, chunk_steps=chunk_steps,
-            smax=smax, wmax=wmax, weights_row=weights_row, weights_col=weights_col,
-            order_axes=order_axes, trace_neuron=trace_neuron,
-            trace_window_s=trace_window_s,
+            trace_neuron=trace_neuron, trace_window_s=trace_window_s,
+            metrics_csv=metrics_csv,
         )
-        metrics_csv.append(row)
         current_ms += record_window_steps * dt
 
     print("\nGenerating visualizations...")
-    overview = paths.fig_dir(run_dir, paths.OVERVIEW)
-    try:
-        print("  Figure 2c...")
-        plot_figure2c(str(run_dir), layout, output_dir=str(overview),
-                      metrics_name=METRICS_NAME, llr_smax=smax)
-    except Exception as e:
-        print(f"  Warning: Figure 2c generation failed: {e}")
-
-    try:
-        print("  Figure 2d...")
-        plot_figure2d(str(run_dir), layout, output_dir=str(overview))
-    except Exception as e:
-        print(f"  Warning: Figure 2d generation failed: {e}")
-
-    try:
-        print("  Weight matrix tracks...")
-        visualize_weight_tracks(run_dir, layout, output_dir=overview,
-                                metrics_dir=paths.data_dir(run_dir))
-    except Exception as e:
-        print(f"  Warning: Weight matrix visualization failed: {e}")
+    overview.emit(open_run(run_dir))
 
     print(f"完了: {run_dir}")
 

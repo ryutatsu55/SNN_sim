@@ -37,7 +37,7 @@ if str(project_root) not in sys.path:
 from src.core.config_manager import ConfigManager, expand_seed_spec
 from src.core.output_manager import SOURCE_CONFIG_NAME
 
-from scripts.develop.paths import PENDING_CONFIG_NAME
+from scripts.develop.store.paths import PENDING_CONFIG_NAME
 
 _HERE = Path(__file__).resolve().parent
 

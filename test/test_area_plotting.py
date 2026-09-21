@@ -206,8 +206,9 @@ class TestAxonNetwork(unittest.TestCase):
 
         with mock.patch.object(netmod, "LineCollection", spy_lc), \
                 mock.patch.object(netmod, "_draw_nodes", spy_nodes):
-            netmod.axon_network(geometry, coords, self._config(), area=area,
-                                save_path=str(tmp), seed=self.SEED, **kwargs)
+            netmod.axon_network(geometry, coords, self._config(),
+                                Path(tmp) / "axon_network.png",
+                                area=area, seed=self.SEED, **kwargs)
         return area, geometry, coords, collections, sampled[0]
 
     def test_writes_a_png_and_draws_three_layers(self):
@@ -254,8 +255,9 @@ class TestAxonNetwork(unittest.TestCase):
 
             weights = np.ones(len(g.pre))
             with mock.patch.object(netmod, "_draw_nodes") as spy:
-                netmod.network(g.pre, g.post, weights, coords, config=self._config(),
-                               title="network_sample", save_path=str(tmp), seed=self.SEED)
+                netmod.network(g.pre, g.post, weights, coords, self._config(),
+                               Path(tmp) / "network_sample.png",
+                               title="network_sample", seed=self.SEED)
         np.testing.assert_array_equal(spy.call_args[0][3], axon_sample)
 
     def test_underlay_can_be_turned_off(self):

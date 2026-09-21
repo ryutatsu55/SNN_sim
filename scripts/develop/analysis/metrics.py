@@ -97,35 +97,28 @@ def weight_columns(weights, row, col, layout, wmax: float) -> dict:
     return weight_block_metrics(blocks, wmax=wmax)
 
 
-def build_row(
-    hour: float,
-    local_times,
-    ids,
-    *,
-    total_neurons: int,
-    record_window_ms: float,
-    smax: int,
-    layout,
-    weights,
-    row,
-    col,
-    wmax: float,
-) -> dict:
-    """`metrics.csv` の 1 行を作る。
+def build_row(window) -> dict:
+    """`metrics.csv` の 1 行を作る。**本番の run も再解析もこの 1 つを通る。**
 
-    Args:
-        hour: 記録時刻 [h]。行の識別子であり、fig2c / fig2d の x 軸。
-        local_times: 記録窓の先頭を 0 とするスパイク時刻 [ms]。絶対時刻を渡すと
-            アバランチ分割は同じでも burstiness のビン割りがずれる。
-        ids: スパイクのグローバル ID。
-        layout: E/I の判定に使う `NetworkLayout`。
-        weights / row / col: COO の重み。`connectivity.npz` と `weights_{h}h.npz` から。
-        wmax: 重み飽和率の分母 (`max_plasticity_weight(config)`)。
+    必要な値は全部 `window` から取る (`smax` も `wmax` も config から導けるので
+    引数にしない)。本番と再解析で別々に計算していた頃は、片方だけ直して食い違う事故が
+    起きていた。
+
+    `spikes().times` は**記録窓の先頭を 0 とするローカル時刻**。絶対時刻を使うと
+    アバランチ分割は同じでも burstiness のビン割りがずれる (契約でローカルに固定済み)。
     """
-    out: dict = {"hour": float(hour)}
-    out.update(spike_columns(local_times, ids, total_neurons, record_window_ms, smax))
-    out.update(group_columns(ids, layout, record_window_ms))
-    out.update(weight_columns(weights, row, col, layout, wmax))
+    spikes = window.spikes()
+    wiring = window.wiring()
+    layout = window.layout
+    record_window_ms = window.record_window_ms
+    smax = resolve_avalanche_smax(window.config)
+
+    out: dict = {"hour": float(window.hour)}
+    out.update(spike_columns(spikes.times, spikes.ids, window.total_neurons,
+                             record_window_ms, smax))
+    out.update(group_columns(spikes.ids, layout, record_window_ms))
+    out.update(weight_columns(window.weights(), wiring.row, wiring.col, layout,
+                              max_plasticity_weight(window.config)))
     out.update(diagnose_activity(
         mean_rate_hz=out["mean_rate_hz"],
         weight_at_max_fraction=out["weight_at_max_fraction"],

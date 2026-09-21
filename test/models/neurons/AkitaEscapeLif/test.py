@@ -110,7 +110,7 @@ def main():
         trial_results["times"],
         trial_results["ids"], 
         config,
-        save_path="test/models/neurons/AkitaEscapeLif"
+        out_path="test/models/neurons/AkitaEscapeLif/neuron_test.png",
     )
 
     coo = builder.global_coo()
@@ -118,7 +118,7 @@ def main():
         coo.row, coo.col, coo.weights,
         coords=builder.global_coords,
         config=config,
-        save_path="test/models/neurons/AkitaEscapeLif"
+        out_path="test/models/neurons/AkitaEscapeLif/network.png",
     )
 
 if __name__ == "__main__":

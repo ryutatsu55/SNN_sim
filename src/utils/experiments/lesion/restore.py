@@ -4,11 +4,18 @@
 結合構造そのものは再生成すれば完全に一致する (seed / backend / assignment / sparse が
 `config.yaml` に実値で記録されているため) ので、保存が要るのは**重みだけ**。
 
-このモジュールの存在意義はほぼ 1 点に尽きる —— **並び順が 2 系統ある**こと。
-`connectivity.npz` / `weights_{h}h.npz` は `simulator.synapse_connectivity_coo()` の
-「シナプス集団ごとのブロック連結 (ペア major)」で、`NetworkBuilder.global_coo()` は
-行優先ソート済み。**実測でこの 2 つは位置一致しない。** 位置で対応づけるコードを書くと、
-気付かないまま別のシナプスに重みが乗る。ここを通せばそれが起きない。
+**位置ではなく (pre, post) で対応づける**のがこのモジュールの一貫した方針。理由は 3 つ:
+
+1. **本数が違う場合がある。** 切断後のネットワークは損傷前の部分集合なので、位置では
+   そもそも並ばない (`align_subset_to_coo`)。これがいちばん本質的な理由。
+2. **古い親 run がありうる。** `simulator.synapse_connectivity_coo()` が並びを
+   `NetworkBuilder.global_coo()` へ揃える前に作られた run は、GeNN の格納順
+   (シナプス集団ごとのブロック連結) で書かれている。本数が同じでどちらも正しいので、
+   位置で対応づけると気付かないまま別のシナプスに重みが乗る。
+3. 引き当てに失敗したとき「親 run と別のネットワークを再ビルドした」と言い切れる。
+
+軸索幾何の検証 (`verify_axon_geometry` / `verify_geometry_alignment`) は並び順とは
+無関係で、「同じ軸索が同じ経路を伸びたか」を結合集合の一致より強く確かめるためのもの。
 """
 from __future__ import annotations
 

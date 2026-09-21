@@ -92,9 +92,8 @@ def main():
     coo = builder.global_coo()
     plotting.network(
         coo.row, coo.col, coo.weights,
-        coords=builder.global_coords,
-        config=config,
-        save_path=output_dir
+        builder.global_coords, config,
+        f"{output_dir}/network.png",
     )
 
     print(f"Saving spike animation to {video_path} ...")

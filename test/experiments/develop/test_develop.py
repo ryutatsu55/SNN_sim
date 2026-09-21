@@ -6,6 +6,7 @@
 - `config.yaml` が「build を通った run の記録」以外にならないこと
 - 指標の列が 1 通りしかないこと (本番と再解析で食い違わない)
 - 再解析が、figure が読む場所に figure が読む名前で指標を置くこと
+- 記録時刻の正が npz にあり、ファイル名の丸めに影響されないこと
 """
 import sys
 import tempfile
@@ -19,9 +20,13 @@ root_path = Path(__file__).resolve().parents[3]
 if str(root_path) not in sys.path:
     sys.path.insert(0, str(root_path))
 
-from scripts.develop import metrics, paths, panels
-from scripts.develop.records import METRICS_NAME
+from scripts.develop.analysis import metrics
+from scripts.develop.figures import style
+from scripts.develop.store import paths
+from scripts.develop.store.records import METRICS_NAME, MS_PER_HOUR, SPIKES, WEIGHTS, \
+    record_filename, save_spikes, save_weight_values
 from scripts.develop.replot import replot
+from scripts.develop.store.series import open_run
 from src.core.config_manager import ConfigManager, expand_seed_spec
 from src.core.layout import NetworkLayout
 from src.core.output_manager import CONFIG_NAME, CONNECTIVITY_NAME, DATA_SUBDIR
@@ -34,12 +39,53 @@ def _resolved_config(path="configs/akita_soc.yaml"):
 
 
 def _fake_coo(num_neurons: int = 100, fan_out: int = 3, seed: int = 1):
-    """試験用の COO (row-major ソート済み)。"""
+    """試験用の COO。**本物の run と同じく行優先ソート済みで、(pre, post) の重複なし。**
+
+    重複を作らないために行ごとに非復元抽出する。ここが崩れていると、記録を読む側の
+    行優先チェック (`records._require_row_major`) が正しく弾いてしまい、テストが
+    「規約を守っていない入力」を使っていることになる。
+    """
     rng = np.random.default_rng(seed)
     row = np.repeat(np.arange(num_neurons), fan_out)
-    col = rng.integers(0, num_neurons, row.size)
+    col = np.concatenate([np.sort(rng.choice(num_neurons, size=fan_out, replace=False))
+                          for _ in range(num_neurons)])
     weights = rng.uniform(0.0, 1.0, row.size)
     return row, col, weights
+
+
+def _make_run(tmp_dir, hours=(0.0,)) -> Path:
+    """再解析にかけられる最小の run を作る (GeNN は通さない)。
+
+    新しいレイアウトで置く: `config.yaml` は run 直下、npz は `data/`。
+    """
+    run_dir = Path(tmp_dir)
+    paths.prepare(run_dir)
+
+    manager = ConfigManager()
+    config = manager.resolve(str(root_path / "configs" / "akita_soc.yaml"), "develop",
+                             task_path=TASK_PATH)
+    config.task.record_window_ms = 30000.0
+    # 本来 NetworkBuilder が build() 時に焼き込む値。ここはフィクスチャで
+    # ビルドを通さないので、save_config() の警告を出さないために実値を入れておく。
+    config.network.sparse = "off"
+    manager.save_config(config, save_dir=run_dir)
+
+    row, col, weights = _fake_coo()
+    np.savez_compressed(paths.data_path(run_dir, CONNECTIVITY_NAME),
+                        row=row, col=col, shape=(100, 100))
+
+    rng = np.random.default_rng(0)
+    for hour in hours:
+        start_ms = hour * MS_PER_HOUR
+        save_spikes(
+            paths.data_path(run_dir, record_filename(SPIKES, hour)),
+            times=start_ms + np.sort(rng.uniform(0.0, 30000.0, 500)),
+            ids=rng.integers(0, 100, 500),
+            record_start_ms=start_ms,
+        )
+        save_weight_values(paths.data_path(run_dir, record_filename(WEIGHTS, hour)),
+                           weights)
+    return run_dir
 
 
 class AvalancheSmaxTest(unittest.TestCase):
@@ -65,13 +111,9 @@ class AvalancheSmaxTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             metrics.resolve_avalanche_smax(config, 1)
 
-    def test_raster_ylim_tracks_n(self):
-        self.assertEqual(panels.raster_ylim(100), (0.0, 100.0))   # 論文条件は不変
-        self.assertEqual(panels.raster_ylim(256), (0.0, 256.0))
-
 
 class OrderAxesFallbackTest(unittest.TestCase):
-    """module 軸を持たない run で `plot_raster` が KeyError を投げないこと。
+    """module 軸を持たない run で描画が KeyError を投げないこと。
 
     記録ループはシミュレーションの途中で図を描くので、ここで例外が出ると
     **その時点までの数時間の実行が失われる**。
@@ -81,15 +123,15 @@ class OrderAxesFallbackTest(unittest.TestCase):
         # akita_soc.yaml は area: no_space なので module 軸を持たない
         layout = NetworkLayout.from_config(_resolved_config())
         self.assertFalse(layout.has_axis("module"))
-        self.assertEqual(panels.resolve_order_axes(layout), panels.FALLBACK_ORDER_AXES)
+        self.assertEqual(style.available_order_axes(layout), style.FALLBACK_ORDER_AXES)
 
     def test_keeps_axes_that_exist(self):
         layout = NetworkLayout.from_config(_resolved_config())
         layout.add_axis("module", np.array(["M0"] * layout.total_neurons))
-        self.assertEqual(panels.resolve_order_axes(layout), panels.RASTER_ORDER_AXES)
+        self.assertEqual(style.available_order_axes(layout), style.ORDER_AXES)
 
     def test_no_layout_means_no_ordering(self):
-        self.assertIsNone(panels.resolve_order_axes(None))
+        self.assertIsNone(style.available_order_axes(None))
 
 
 class TaskSelectionTest(unittest.TestCase):
@@ -101,7 +143,7 @@ class TaskSelectionTest(unittest.TestCase):
 
     def test_task_comes_from_the_main_config(self):
         config = ConfigManager().resolve(
-            str(root_path / "scripts" / "develop" / "axon_growth_grid.yaml"),
+            str(root_path / "scripts" / "develop" / "axon_growth_hierarchy.yaml"),
             task_path=TASK_PATH)
         self.assertEqual(config.task.profile_name, "develop")
 
@@ -114,7 +156,7 @@ class TaskSelectionTest(unittest.TestCase):
     def test_explicit_argument_still_wins(self):
         # 1 つの config を複数 task で使い回す既存スクリプトのための経路
         config = ConfigManager().resolve(
-            str(root_path / "scripts" / "develop" / "axon_growth_grid.yaml"),
+            str(root_path / "scripts" / "develop" / "axon_growth_hierarchy.yaml"),
             "develop", task_path=TASK_PATH)
         self.assertEqual(config.task.profile_name, "develop")
 
@@ -183,20 +225,11 @@ class SeedSpecTest(unittest.TestCase):
 
 
 class RunPathsTest(unittest.TestCase):
-    """npz の読み場所が、新レイアウトでも旧 run でも同じ規則で決まること。"""
+    """run の内部構造を知るのが paths.py だけであること。"""
 
-    def test_new_layout_reads_data_subdir(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run = Path(tmp)
-            paths.prepare(run)
-            np.savez_compressed(paths.data_path(run, "spikes_0h.npz"), times=[], ids=[])
-            self.assertEqual(paths.records_dir(run), run / DATA_SUBDIR)
-
-    def test_unorganized_old_run_reads_root(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run = Path(tmp)
-            np.savez_compressed(run / "spikes_0h.npz", times=[], ids=[])
-            self.assertEqual(paths.records_dir(run), run)
+    def test_records_live_under_data(self):
+        self.assertEqual(paths.data_path("run", "spikes_0h.npz"),
+                         Path("run") / DATA_SUBDIR / "spikes_0h.npz")
 
     def test_rejects_unknown_figure_kind(self):
         with self.assertRaises(ValueError):
@@ -247,68 +280,123 @@ class MetricsColumnsTest(unittest.TestCase):
     常に同じ 1 組になる。
     """
 
-    def _row(self):
-        rng = np.random.default_rng(0)
-        layout = NetworkLayout.from_config(_resolved_config())
-        row, col, weights = _fake_coo()
-        return metrics.build_row(
-            0.0,
-            np.sort(rng.uniform(0.0, 30000.0, 500)),
-            rng.integers(0, 100, 500),
-            total_neurons=100, record_window_ms=30000.0, smax=100,
-            layout=layout, weights=weights, row=row, col=col, wmax=1.0,
-        )
+    def _row(self, tmp_dir):
+        return metrics.build_row(open_run(_make_run(tmp_dir)).windows[0])
 
     def test_row_has_every_family_of_columns(self):
-        row = self._row()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            row = self._row(tmp_dir)
         self.assertIn("delta_cr", row)                                        # スパイク系
         self.assertTrue(any(k.startswith(("exc", "inh")) for k in row))       # E/I 系
         self.assertIn("weight_at_max_fraction", row)                          # 重みブロック系
         self.assertIn("diagnosis", row)                                       # 診断
 
-    def test_inputs_are_all_required(self):
-        # 列を減らして続行する経路は無い。足りなければ呼び出しの時点で落ちる。
-        with self.assertRaises(TypeError):
-            metrics.build_row(0.0, [1.0], [0], total_neurons=1,
-                              record_window_ms=10.0, smax=10)
+    def test_parameters_come_from_the_config(self):
+        """`smax` は引数ではなく config から導かれること。
+
+        図と指標が別々に smax を決められる状態だと、図に書かれた α と CSV の α が
+        食い違う (どちらも例外を出さない)。`build_row` は window 1 つしか受け取らない。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            window = open_run(_make_run(tmp_dir)).windows[0]
+            row = metrics.build_row(window)
+        self.assertEqual(row["avalanche_smax"], window.config.simulation.N)
+
+
+class RunSeriesTest(unittest.TestCase):
+    """run 全体を読む入口 (`series.open_run`) が守ること。"""
+
+    def test_hour_comes_from_the_npz_not_the_filename(self):
+        """記録時刻の正は npz。ファイル名の `{hour:g}` は有効数字 6 桁しか持たない。
+
+        ここが崩れると、非整数の record_hours で本番と再解析の窓の原点が約 1 ms ずれ、
+        burstiness_index のビン割りが変わって値が食い違う。
+        """
+        start_ms = MS_PER_HOUR / 3.0            # 1/3 h = 1200000.0 ms
+        exact_hour = start_ms / MS_PER_HOUR
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir, hours=(exact_hour,))
+            series = open_run(run_dir)
+            window, = series.windows
+            # ファイル名は丸められている
+            self.assertEqual(window.spikes_path.name, "spikes_0.333333h.npz")
+            self.assertNotEqual(float("0.333333"), exact_hour)
+            # 読み戻した時刻は丸められていない
+            self.assertEqual(window.hour, exact_hour)
+            self.assertEqual(window.record_start_ms, start_ms)
+
+    def test_windows_are_sorted_by_time(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir, hours=(0.0, 2.0, 10.0))
+            series = open_run(run_dir)
+            self.assertEqual([w.hour for w in series.windows], [0.0, 2.0, 10.0])
+
+    def test_times_are_local_to_the_window(self):
+        """契約どおり `Spikes.times` が窓の先頭を 0 とするローカル時刻であること。
+
+        絶対時刻が混ざると、アバランチ分割は同じでも burstiness のビン割りがずれる。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            window, = open_run(_make_run(tmp_dir, hours=(2.0,))).windows
+            spikes = window.spikes()
+            self.assertTrue(np.all(spikes.times >= 0.0))
+            self.assertTrue(np.all(spikes.times <= window.record_window_ms))
+            self.assertEqual(window.record_start_ms, 2.0 * MS_PER_HOUR)
+
+    def test_missing_config_is_loud(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir)
+            (run_dir / CONFIG_NAME).unlink()
+            with self.assertRaises(FileNotFoundError):
+                open_run(run_dir)
+
+    def test_unsorted_connectivity_is_rejected(self):
+        """COO の並びを揃える前に作られた run を、読んだ時点で弾くこと。
+
+        本数も値も正しいので位置で対応づけると**黙って別のシナプスに重みが乗る**。
+        静かな誤りにせず、読み込みで止める。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir)
+            row, col, _ = _fake_coo()
+            shuffled = np.random.default_rng(0).permutation(row.size)
+            np.savez_compressed(paths.data_path(run_dir, CONNECTIVITY_NAME),
+                                row=row[shuffled], col=col[shuffled], shape=(100, 100))
+            with self.assertRaises(ValueError) as caught:
+                open_run(run_dir)
+            self.assertIn("行優先", str(caught.exception))
+
+    def test_missing_connectivity_is_loud(self):
+        """古い密形式の run は、列を減らして続行せず落ちること。"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir)
+            paths.data_path(run_dir, CONNECTIVITY_NAME).unlink()
+            with self.assertRaises(FileNotFoundError):
+                open_run(run_dir)
+
+    def test_weight_count_mismatch_is_loud(self):
+        """重みの本数が connectivity と合わなければ落ちること。
+
+        黙って通すと、ブロック分けが 1 本ずつずれた図と指標ができあがる。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir)
+            series = open_run(run_dir)
+            save_weight_values(series.windows[0].weights_path, np.zeros(3))
+            with self.assertRaises(ValueError):
+                series.windows[0].weights()
 
 
 class ReplotPlacementTest(unittest.TestCase):
     """再解析した指標が figure の読む場所に、figure が読む名前で置かれること。
 
-    ここがズレると再解析は指標を計算し直すのに図は古い metrics.csv のまま、という
+    ここがズレると再解析は指標を計算し直すのに図は古い `metrics.csv` のまま、という
     **例外の出ない**食い違いになる。本番と同じ `metrics.csv` を上書きするので、
     置き場所を間違えると古い CSV がそのまま残ることになる。
     """
 
-    def _make_run(self, tmp_dir, organized: bool) -> Path:
-        run_dir = Path(tmp_dir)
-        target = run_dir / DATA_SUBDIR if organized else run_dir
-        target.mkdir(parents=True, exist_ok=True)
-
-        manager = ConfigManager()
-        config = manager.resolve(str(root_path / "configs" / "akita_soc.yaml"), "develop",
-                                 task_path=TASK_PATH)
-        config.task.record_window_ms = 30000.0
-        # 本来 NetworkBuilder が build() 時に焼き込む値。ここはフィクスチャで
-        # ビルドを通さないので、save_config() の警告を出さないために実値を入れておく。
-        config.network.sparse = "off"
-        manager.save_config(config, save_dir=target)
-
-        rng = np.random.default_rng(0)
-        np.savez_compressed(
-            target / "spikes_0h.npz",
-            times=np.sort(rng.uniform(0.0, 30000.0, 500)),
-            ids=rng.integers(0, 100, 500),
-        )
-        # 重みブロック列は必須なので、結合構造と重みも置く
-        row, col, weights = _fake_coo()
-        np.savez_compressed(target / CONNECTIVITY_NAME, row=row, col=col, shape=(100, 100))
-        np.savez_compressed(target / "weights_0h.npz", data=weights)
-        return run_dir
-
     def _assert_placement(self, run_dir: Path):
-        metrics_path = paths.records_dir(run_dir) / METRICS_NAME
+        metrics_path = paths.data_path(run_dir, METRICS_NAME)
         self.assertTrue(metrics_path.exists(), f"{metrics_path} が無い")
         header = metrics_path.read_text(encoding="utf-8").splitlines()[0]
         # fig2c の天井線がこの列を見る
@@ -319,41 +407,43 @@ class ReplotPlacementTest(unittest.TestCase):
         self.assertTrue(paths.fig_path(run_dir, paths.RASTER, "raster_0h.png").exists())
         self.assertTrue(paths.fig_path(run_dir, paths.AVALANCHE, "avalanche_0h.png").exists())
 
-    def test_run_root_of_organized_run(self):
+    def test_writes_where_the_figures_read(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir = self._make_run(tmp_dir, organized=True)
-            self.assertFalse((run_dir / CONFIG_NAME).exists())  # data/ にしか無い
-            replot(run_dir)
+            run_dir = _make_run(tmp_dir)
+            replot(run_dir, with_structure=False)
             self._assert_placement(run_dir)
 
     def test_data_subdir_is_normalized_to_run_root(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir = self._make_run(tmp_dir, organized=True)
-            replot(run_dir / DATA_SUBDIR)
+            run_dir = _make_run(tmp_dir)
+            replot(run_dir / DATA_SUBDIR, with_structure=False)
             self._assert_placement(run_dir)
 
-    def test_unorganized_run(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir = self._make_run(tmp_dir, organized=False)
-            replot(run_dir)
-            self._assert_placement(run_dir)
+    def test_rebuild_must_match_the_recorded_connectivity(self):
+        """構造図のための再ビルドが、記録と違うネットワークを作ったら落ちること。
 
-    def test_smax_override_is_recorded(self):
+        このフィクスチャの COO は本物のビルド結果ではないので、再ビルドすれば必ず
+        食い違う。**黙って別のネットワークの構造図を描かない**ことをここで押さえる
+        (他のテストが `with_structure=False` を渡しているのはこのため)。
+        """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir = self._make_run(tmp_dir, organized=True)
-            replot(run_dir, smax_override=250)
-            rows = (paths.records_dir(run_dir) / METRICS_NAME).read_text(
-                encoding="utf-8").splitlines()
-            column = rows[0].split(",").index("avalanche_smax")
-            self.assertEqual(rows[1].split(",")[column], "250")
-
-    def test_missing_connectivity_is_loud(self):
-        """古い密形式の run は、列を減らして続行せず落ちること。"""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir = self._make_run(tmp_dir, organized=False)
-            (run_dir / CONNECTIVITY_NAME).unlink()
-            with self.assertRaises(FileNotFoundError):
+            run_dir = _make_run(tmp_dir)
+            with self.assertRaises(SystemExit):
                 replot(run_dir)
+
+    def test_metrics_hour_matches_the_series(self):
+        """`metrics.csv` の hour 列と npz 由来の時刻が一致すること。
+
+        食い違うと fig2c が「指標は N 行、重み軌跡は M 点」の図を描こうとする。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir, hours=(0.0, 6.0))
+            replot(run_dir, with_structure=False)
+            rows = paths.data_path(run_dir, METRICS_NAME).read_text(
+                encoding="utf-8").splitlines()
+            column = rows[0].split(",").index("hour")
+            recorded = [float(row.split(",")[column]) for row in rows[1:]]
+            self.assertEqual(recorded, [w.hour for w in open_run(run_dir).windows])
 
 
 if __name__ == "__main__":

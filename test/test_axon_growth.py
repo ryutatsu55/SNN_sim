@@ -765,8 +765,8 @@ class TestAxonGeometryIO(unittest.TestCase):
         config = _cfg(network=_cfg(space=_cfg()))
         with tempfile.TemporaryDirectory() as tmp:
             restored = AxonGeometry.load(geometry.save(Path(tmp) / AXONS_NAME))
-            axon_network(restored, coords, config, title="round_trip",
-                         save_path=tmp, seed=0)
+            axon_network(restored, coords, config, Path(tmp) / "round_trip.png",
+                         title="round_trip", seed=0)
             self.assertTrue((Path(tmp) / "round_trip.png").exists())
 
 

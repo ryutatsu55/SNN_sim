@@ -20,8 +20,9 @@
 **使わない**。あれがあるせいで「完走したか否かで run の形が変わる」状態になり、
 `locate()` の 2 箇所探索が必要になっていた。最初から正しい場所へ書けば両方とも要らない。
 
-ただし**読む側は旧 run も相手にする**ので、`records_dir()` が 3 通り
-(新レイアウト / organize 済み / organize 前) を吸収する。
+読む側も同じ `data_dir()` を通る。**旧レイアウトの吸収は持たない** —— 記録窓の原点
+(`records.RECORD_START_KEY`) を持たない古い run はどのみち再解析できないので、置き場所
+だけ吸収しても意味がない。古い run を読みたくなったら再実行すること。
 """
 from __future__ import annotations
 
@@ -58,7 +59,7 @@ DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, OVERVIEW)
 
 
 def data_dir(run_dir: str | Path) -> Path:
-    """npz / csv を**書く**場所。"""
+    """npz / csv の置き場所。**書く側も読む側もここを通る。**"""
     return Path(run_dir) / DATA_SUBDIR
 
 
@@ -82,21 +83,4 @@ def prepare(run_dir: str | Path, fig_kinds: tuple[str, ...] = DEFAULT_FIG_KINDS)
     data_dir(run_dir).mkdir(parents=True, exist_ok=True)
     for kind in fig_kinds:
         fig_dir(run_dir, kind).mkdir(parents=True, exist_ok=True)
-    return run_dir
-
-
-def records_dir(run_dir: str | Path) -> Path:
-    """npz を**読む**場所。新レイアウトと旧 run の両方を吸収する。
-
-    - 新レイアウト      : `<run>/data` (config.yaml は run 直下)
-    - organize_output 後: `<run>/data` (config.yaml も data/ の中)
-    - organize_output 前: `<run>` 直下
-
-    判定を「data/ に npz があるか」で行うので、上の 3 つが 1 本の規則で片づく。
-    config.yaml の所在では判定できない (新レイアウトでは data/ に無いため)。
-    """
-    run_dir = Path(run_dir)
-    candidate = data_dir(run_dir)
-    if candidate.is_dir() and any(candidate.glob("*.npz")):
-        return candidate
     return run_dir

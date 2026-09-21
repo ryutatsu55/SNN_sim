@@ -110,17 +110,16 @@ def main():
         results,
         I_in,
         trial_results["times"],
-        trial_results["ids"], 
+        trial_results["ids"],
         config,
-        save_path=output_dir
+        f"{output_dir}/neuron_test.png",
     )
 
     coo = builder.global_coo()
     plotting.network(
         coo.row, coo.col, coo.weights,
-        coords=builder.global_coords,
-        config=config,
-        save_path=output_dir
+        builder.global_coords, config,
+        f"{output_dir}/network.png",
     )
 
     print(f"Results saved to: {output_dir}")

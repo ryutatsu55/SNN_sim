@@ -119,8 +119,8 @@ def main():
         trial_results["times"],
         trial_results["ids"], 
         config,
-        id = 0,
-        save_path="test/models/plasticity/TransTest"
+        id=0,
+        out_path="test/models/plasticity/TransTest/neuron_test.png",
     )
 
     coo = builder.global_coo()
@@ -128,7 +128,7 @@ def main():
         coo.row, coo.col, coo.weights,
         coords=builder.global_coords,
         config=config,
-        save_path="test/models/plasticity/TransTest"
+        out_path="test/models/plasticity/TransTest/network.png",
         )
 
     # plotting.plot_raster(

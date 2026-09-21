@@ -2,10 +2,15 @@
 
 入力は **run ディレクトリではなく config** で、NetworkBuilder を実際に走らせる
 (GeNN のコンパイルと実行は行わず、呼ぶのは `_generate_global_matrices()` だけ)。
-既存の実験結果を解析する `src/utils/experiments/` の CLI とは入力が別物なので、
-実験を回す側である scripts/ に置いている。
 
-    python scripts/visualize_network_structure.py configs/test.yaml -o output/
+    python scripts/tools/visualize_network_structure.py configs/test.yaml -o output/
+
+**特定の実験の持ち物ではないので `scripts/tools/` に置く。** 描く内容はどれも
+「この config が作ったネットワークはどんな形か」であって、実験の都合では変わらない。
+
+ただし実験が**自分の構造図を持ちたくなったら、ここを共有せず複製する**こと
+(`scripts/develop/structure.py` がその例)。空間構造を持たせるか、どんな図をどんな形式で
+出すかは実験ごとに細部が違ってくるので、汎用化にこだわって引数を肥大化させない。
 """
 from __future__ import annotations
 
@@ -16,8 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
-# プロジェクトルートにパスを通す
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# プロジェクトルートにパスを通す (scripts/tools/ から 2 階層上)
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.utils.analysis.connectivity import (
     bridge_hop_matrix,
@@ -39,7 +44,7 @@ from src.utils.plotting.matrices import (
 from src.utils.plotting.network import axon_network, network
 from src.utils.plotting.ordering import DEFAULT_ORDER_AXES
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _register_plugins():
@@ -215,9 +220,9 @@ def visualize_structure(builder, config, output_dir: str | Path, seed: int = 0,
         # 空間ネットワーク図は plotting.network.network に一本化 (サンプリング + 矢印/重み太さ)。
         # COO をそのまま渡すので、密行列の復元は要らず N の上限も無い。
         network(
-            coo.row, coo.col, coo.weights, coords, config=config,
-            layout=layout, title="network_sample", save_path=str(output_dir),
-            seed=seed, area=area,
+            coo.row, coo.col, coo.weights, coords, config,
+            output_dir / "network_sample.png",
+            layout=layout, title="network_sample", seed=seed, area=area,
         )
 
         # 軸索の折れ線で結合を描いた図。幾何を残すのは axon_growth だけなので、
@@ -226,8 +231,8 @@ def visualize_structure(builder, config, output_dir: str | Path, seed: int = 0,
             geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
         if geometry is not None:
             axon_network(
-                geometry, coords, config, layout=layout, title="axon_network",
-                save_path=str(output_dir), seed=seed, area=area,
+                geometry, coords, config, output_dir / "axon_network.png",
+                layout=layout, title="axon_network", seed=seed, area=area,
             )
         else:
             print(f"  connection ({config.network.connection.profile_name}) が軸索の幾何を"

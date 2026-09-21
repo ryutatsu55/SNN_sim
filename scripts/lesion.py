@@ -1,6 +1,6 @@
 """損傷 (lesion) 実験。
 
-`scripts/develop.py` が育てたネットワークを引き継ぎ、**特定の接続を構造的に除去**して、
+`scripts/develop/` が育てたネットワークを引き継ぎ、**特定の接続を構造的に除去**して、
 切断直前から回復までを等間隔で記録する。
 
 ## 2 フェーズ / 2 モデル構成
@@ -74,18 +74,7 @@ from src.utils.experiments.lesion.selectors import LesionContext, combine, parse
 from src.utils.plotting.distributions import plot_avalanche_distribution
 from src.utils.plotting.raster import plot_raster
 
-# develop.py と共通の実行ヘルパ。ここは「発達ループを回す」という同じ仕事なので、
-# コピーではなく import で共有する (develop.py 本体は一切変更しない)。
-from scripts.develop import (
-    PAPER_AVALANCHE_XLIM,
-    PAPER_AVALANCHE_YLIM,
-    PAPER_RASTER_XLIM_S,
-    raster_ylim,
-    resolve_avalanche_smax,
-    resolve_order_axes,
-    run_steps,
-)
-from scripts.visualize_network_structure import visualize_structure
+from scripts.tools.visualize_network_structure import visualize_structure
 
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
@@ -99,6 +88,82 @@ import src.models.synapses.custom
 
 TASK_NAME = "akita_soc_fig2"
 HOUR_MS = 60.0 * 60.0 * 1000.0
+
+# ---------------------------------------------------------------------------- #
+# develop 実験と共通の実行ヘルパ。
+#
+# **暫定的にここへ複製してある。** 以前は `from scripts.develop import ...` で共有して
+# いたが、develop は `scripts/develop/` パッケージへ再設計され、実験どうしの横 import は
+# 作らない方針になった (1 実験 = 1 ディレクトリ、依存は 実験 → src/utils → src/core の
+# 一方向だけ)。lesion 自身を同じ形へ移すときに、共有すべきものは `src/utils/analysis` へ
+# 上げて整理すること。それまでの延命措置。
+# ---------------------------------------------------------------------------- #
+
+# 論文 (Ikeda-Akita-Takahashi 2023) Fig.2 の軸。図を並べて比べるための固定値。
+PAPER_RASTER_XLIM_S = (0.0, 30.0)
+PAPER_AVALANCHE_XLIM = (1.0, 1000.0)
+PAPER_AVALANCHE_YLIM = (1e-5, 1.0)
+RASTER_ORDER_AXES = ("module", "polarity")
+FALLBACK_ORDER_AXES = ("polarity",)
+
+
+def resolve_avalanche_smax(config, override: int | None = None) -> int:
+    """べき乗フィット / ΔCr の上限サイズ。既定は **システムサイズ N**。
+
+    論文の [1, 100] は N=100 のネットワークの話で、100 は定数ではなく系のサイズそのもの。
+    smax は「データの切り取り」ではなくモデルの正規化台なので、定数に戻さないこと。
+    """
+    if override is not None:
+        if override < 2:
+            raise ValueError(f"avalanche smax は 2 以上である必要があります (got {override})。")
+        return int(override)
+    return int(config.simulation.N)
+
+
+def resolve_order_axes(layout, axes=RASTER_ORDER_AXES):
+    """layout が実際に持っている軸だけに絞った並べ替え軸を返す。
+
+    無い軸を `plot_raster` に渡すと `NetworkLayout` が KeyError を送出し、**probe に
+    到達した瞬間に長い run が落ちる**ので、ここで落としておく。
+    """
+    if layout is None or not axes:
+        return None
+    available = tuple(axis for axis in axes if layout.has_axis(axis))
+    if available != tuple(axes):
+        dropped = [axis for axis in axes if axis not in available]
+        print(f"  Note: layout に無い並べ替え軸を除外しました: {dropped}")
+    if not available:
+        available = FALLBACK_ORDER_AXES
+    return available
+
+
+def raster_ylim(total_neurons: int) -> tuple[float, float]:
+    """並べ替えを行わない場合のラスター y 範囲。論文の (0, 100) は N=100 のこと。"""
+    return (0.0, float(total_neurons))
+
+
+def run_steps(sim, steps: int, chunk_steps: int, keep_spikes: bool):
+    """chunk_steps ずつ進めながらスパイクを回収する。"""
+    all_times = []
+    all_ids = []
+    remaining = int(steps)
+    while remaining > 0:
+        n_steps = min(remaining, chunk_steps)
+        sim.step(n_steps)
+        if keep_spikes:
+            spikes = sim.get_global_spikes()
+            if spikes["times"].size > 0:
+                all_times.append(spikes["times"])
+                all_ids.append(spikes["ids"])
+        sim.flush_recording()
+        remaining -= n_steps
+
+    if not all_times:
+        return {"times": np.array([], dtype=np.float32), "ids": np.array([], dtype=np.int32)}
+    times = np.concatenate(all_times)
+    ids = np.concatenate(all_ids)
+    order = np.argsort(times)
+    return {"times": times[order], "ids": ids[order]}
 
 
 def parse_args():

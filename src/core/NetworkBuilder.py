@@ -61,13 +61,18 @@ class SynapseIndex:
     (pygenn が set_sparse_connections で lexsort し、値の getter は行優先で返す)。
     ここに保持する配列はその順序と一致しており、`simulator.pull_synapse` 系はこれを使って
     結合マスクを再走査せずに値をグローバルIDへ散布できる。
+
+    `global_positions` は **`global_coo()` の中での位置**。集団は `global_coo()` からの
+    ブール選択で切り出されるので (`_pair_coo`)、GeNN から取り出した値はこの位置へ
+    そのまま散布すれば `global_coo()` と同じ並びになる —— 並べ替えは要らない。
     """
     src_name: str
     tgt_name: str
-    local_src: np.ndarray   # int32, 集団ローカル pre index
-    local_tgt: np.ndarray   # int32, 集団ローカル post index
-    global_src: np.ndarray  # int32, グローバル pre ID
-    global_tgt: np.ndarray  # int32, グローバル post ID
+    local_src: np.ndarray        # int32, 集団ローカル pre index
+    local_tgt: np.ndarray        # int32, 集団ローカル post index
+    global_src: np.ndarray       # int32, グローバル pre ID
+    global_tgt: np.ndarray       # int32, グローバル post ID
+    global_positions: np.ndarray # int64, global_coo() の中での位置
 
     @property
     def num_synapses(self) -> int:
@@ -616,8 +621,9 @@ class NetworkBuilder:
         「集団ローカルの (pre, post) 行優先ソート順」になる。
 
         Returns:
-            (local_src, local_tgt, weights_flat, delays_ms) いずれも行優先ソート済みで
-            index が整合した 1D 配列。接続が無ければすべて空配列。
+            (local_src, local_tgt, weights_flat, delays_ms, positions) いずれも行優先
+            ソート済みで index が整合した 1D 配列。接続が無ければすべて空配列。
+            `positions` は `global_coo()` の中での位置 (昇順)。
         """
         coo = self.global_coo()
         if self._index_table is None:
@@ -628,11 +634,13 @@ class NetworkBuilder:
             (pop_code[coo.row] == code_of_name[src_name])
             & (pop_code[coo.col] == code_of_name[tgt_name])
         )
+        positions = np.flatnonzero(sel)
         return (
-            local_of[coo.row[sel]],
-            local_of[coo.col[sel]],
-            coo.weights[sel],
-            coo.delays[sel],
+            local_of[coo.row[positions]],
+            local_of[coo.col[positions]],
+            coo.weights[positions],
+            coo.delays[positions],
+            positions,
         )
 
     def _build_synapses(self):
@@ -649,9 +657,8 @@ class NetworkBuilder:
                 src_indices = self.layout.global_indices(src_name)
                 tgt_indices = self.layout.global_indices(tgt_name)
 
-                local_src_idx, local_tgt_idx, weights_flat, delays_flat_ms = self._pair_coo(
-                    src_name, tgt_name
-                )
+                local_src_idx, local_tgt_idx, weights_flat, delays_flat_ms, positions = \
+                    self._pair_coo(src_name, tgt_name)
 
                 delay_by_target = getattr(syn_cfg, "delay_by_target", None)
                 # delay_by_target 指定は集団内で単一定数 = 均一遅延。この場合のみ GeNN の
@@ -747,6 +754,7 @@ class NetworkBuilder:
                     local_tgt=local_tgt_idx.astype(np.int32, copy=False),
                     global_src=np.asarray(src_indices, dtype=np.int32)[local_src_idx],
                     global_tgt=np.asarray(tgt_indices, dtype=np.int32)[local_tgt_idx],
+                    global_positions=positions,
                 )
 
                 sg.set_sparse_connections(local_src_idx, local_tgt_idx)

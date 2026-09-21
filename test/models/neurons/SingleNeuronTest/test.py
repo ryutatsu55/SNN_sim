@@ -107,7 +107,7 @@ def main():
         trial_results["times"],
         trial_results["ids"], 
         config,
-        save_path="test/models/neurons/SingleNeuronTest"
+        out_path="test/models/neurons/SingleNeuronTest/neuron_test.png",
     )
 
     coo = builder.global_coo()
@@ -115,7 +115,7 @@ def main():
         coo.row, coo.col, coo.weights,
         coords=builder.global_coords,
         config=config,
-        save_path="test/models/neurons/SingleNeuronTest"
+        out_path="test/models/neurons/SingleNeuronTest/network.png",
     )
 
 if __name__ == "__main__":

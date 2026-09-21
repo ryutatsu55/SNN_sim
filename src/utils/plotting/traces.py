@@ -1,11 +1,21 @@
-"""単一ニューロンの時系列 (膜電位・電流・スパイク) と STDP 窓の描画。"""
-import os
+"""単一ニューロンの時系列 (膜電位・電流・スパイク) と STDP 窓の描画。
+
+呼ぶのは `scripts/test.py` と `test/models/` の手動テスト、それに膜電位トレースを採る
+実験 (`scripts/develop/panels.py`)。
+
+保存先は `out_path` で受ける。`plotting/` の他の図と同じ約束で、**ファイル名を決めるのは
+呼び出し側**。以前は `title` をファイル名に流用していたので、呼び出し側が
+`PQN_test(..., title="test/models/neurons/PQN_test/PQN_V_test")` のようにタイトル欄へパスを
+埋める羽目になっていた。`title` が残っているのは実際に図へ描く `stdp_window` だけ。
+"""
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.utils.plotting.common import save_figure
 
-def PQN_test(V_data, I_in, config, title="PQN_V_test"):
+
+def PQN_test(V_data, I_in, config, out_path):
     tmax = config.task.duration/1000
     time_axis = np.arange(len(V_data)) * config.simulation.dt / 1000.0
 
@@ -20,10 +30,11 @@ def PQN_test(V_data, I_in, config, title="PQN_V_test"):
     ax2.set_xlabel('[s]')
     ax2.set_xlim(0, tmax)
 
-    plt.tight_layout()
-    plt.savefig(f"{title}.png")
+    save_figure(fig, out_path, dpi=None)
 
-def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuron_test", save_path=".", x_data=None):
+
+def neuron_test(V_data, I_in, spike_times, spike_ids, config, out_path, *,
+                id=0, x_data=None):
     V_data = V_data[:, id]
     I_in = I_in[:, id]
     tmax = config.task.duration / 1000
@@ -69,11 +80,10 @@ def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuro
     else:
         ax2.set_xlabel('Time [s]')
 
-    plt.tight_layout()
-    plt.savefig(f"{save_path}/{title}.png")
+    save_figure(fig, out_path, dpi=None)
 
-def neuron_trace(V, I_in, spike_times, spike_ids, dt, id=0, window_s=10.0,
-                 title="neuron_trace", save_path="."):
+
+def neuron_trace(V, I_in, spike_times, spike_ids, dt, out_path, *, id=0, window_s=10.0):
     """
     単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描画する。
 
@@ -87,6 +97,7 @@ def neuron_trace(V, I_in, spike_times, spike_ids, dt, id=0, window_s=10.0,
         spike_times: 窓内スパイク時刻 [ms] (窓の先頭を0とするローカル時刻)
         spike_ids: spike_times に対応するグローバルニューロンID
         dt: シミュレーションのタイムステップ [ms]
+        out_path: 保存先ファイルパス
         id: 電圧トレースを表示する対象ニューロンID (ラスターの中心)
         window_s: x軸に表示する時間幅 [s]
     """
@@ -122,22 +133,21 @@ def neuron_trace(V, I_in, spike_times, spike_ids, dt, id=0, window_s=10.0,
     else:
         ax1.set_xlabel('Time [s]')
 
-    plt.tight_layout()
-    plt.savefig(f"{save_path}/{title}.png")
+    save_figure(fig, out_path, dpi=None)
     plt.close()
 
 
-def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="."):
+def stdp_window(dw: np.ndarray, dt: np.ndarray, out_path, *, title="stdp_window"):
     """
     STDPの学習特性（Δt vs Δw）をプロットし、画像として保存する関数。
 
     Args:
         dw: 重みの変化量 (Δw = w_after - w_before) の配列
         dt: スパイク時間差 (Δt = t_post - t_pre) [ms] の配列
-        title: グラフ/ファイル名
-        save_path: 画像の保存先ディレクトリ
+        out_path: 保存先ファイルパス
+        title: グラフのタイトル
     """
-    plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(10, 6))
 
     # 0点を強調するガイドライン
     plt.axhline(0, color='black', linewidth=1, linestyle='--')
@@ -162,12 +172,6 @@ def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="
     plt.grid(True, which='both', linestyle=':', alpha=0.5)
     plt.legend()
 
-    # 保存処理
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-
-    file_full_path = os.path.join(save_path, f"{title}.png")
-    plt.savefig(file_full_path, dpi=300)
-    plt.close()
-
-    print(f"  [Visualization] STDP window plot saved to: {file_full_path}")
+    # tight_layout は掛けない (元からの体裁を保つため)。
+    save_figure(fig, out_path, dpi=300, tight_layout=False)
+    print(f"  [Visualization] STDP window plot saved to: {out_path}")
