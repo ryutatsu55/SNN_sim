@@ -30,7 +30,7 @@ from src.models.network.area import (
 )
 from src.models.network.connectors import AxonGeometry, AxonGrowthTopology
 from src.models.network.space import AreaUniformSpace, RandomCircle2DSpace
-from src.core.output_manager import AXONS_NAME
+from src.models.network.connectors import AXONS_NAME
 
 
 def _cfg(**kwargs):

@@ -9,7 +9,7 @@
 やること:
 
 1. config を解決する (task プロファイルはこのディレクトリの `task.yaml` から)
-2. `simulation.seed` の指定を展開する (`5` → 1 本 / `[1, 10]` → 10 本)
+2. `simulation.seed` の指定を展開する (`5` → 1 本 / `[1, 5, 42]` → 3 本 / `[1..10]` → 10 本)
 3. `outputs/akita_soc/<条件>/` を作る。**既にあれば拒否して止まる**
 4. seed ごとの run ディレクトリに、seed を実値にした `config.yaml` を置く
 5. `run_one` を子プロセスとして並列に起動し、各々の出力を `<run>/run.log` へ流す
@@ -34,8 +34,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.core.config_manager import ConfigManager, expand_seed_spec
-from src.core.output_manager import SOURCE_CONFIG_NAME
+from src.core.config_manager import ConfigManager, SOURCE_CONFIG_NAME, expand_seed_spec
 
 from scripts.akita_soc.store.paths import PENDING_CONFIG_NAME
 

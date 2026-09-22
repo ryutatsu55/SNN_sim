@@ -200,11 +200,13 @@ scripts/lesion/
 ### `store/parent.py` —— 実験どうしの横 import を作らないための場所
 
 lesion は develop の run を読むが、**`scripts/develop/` を import しない**。代わりに
-「develop 形式の記録を読む実装」をこちらが持つ。読むのは 5 つだけ
+「develop 形式の記録を読む実装」をこちらが持つ。読むのは 6 つだけ
 (`config.yaml` / `connectivity.npz` / `weights_{h}h.npz` / `layout_axes.npz` /
-`axon_geometry.npz`) で、これは develop の内部事情ではなく **develop と lesion の契約**。
+`axon_geometry.npz` / `metrics.csv`) で、これは develop の内部事情ではなく
+**develop と lesion の契約**。ファイル名も `store/parent.py` がローカルに宣言する。
 
 規約が変わったら直す場所は 1 つで、そのことがモジュールの docstring に書いてある。
+**この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**
 
 ---
 

@@ -11,6 +11,7 @@
 """
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +25,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 from src.core.registry import DATA_LOADERS
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import create_run_output_dir
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
 from src.utils.plotting import model_test, network
@@ -60,7 +60,8 @@ def main():
     print(f"Loading config from {config_src}...")
     manager = ConfigManager() 
     config = manager.resolve(config_src, TASK_NAME)
-    output_dir = create_run_output_dir(TASK_NAME)
+    output_dir = Path("outputs") / TASK_NAME / datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {output_dir}")
 
     # 2. ネットワークの構築 (DataLoaderより先に実行して layout を生成する)

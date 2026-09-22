@@ -6,8 +6,8 @@
 これがあると、同じ関数が実験をまたいで動き、共有層と実験固有層の間の移動が
 `git mv` 1 回で済む。
 
-関連: `docs/architecture/experiment_structure.md`（この契約を使う側の構成） /
-`docs/scripts_unification_plan.md`（なぜこの形に統一したか）
+関連: `docs/architecture/experiment_structure.md`（この契約を使う側の構成。
+なぜこの形に統一したかもそこ）
 
 ---
 

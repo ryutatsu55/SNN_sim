@@ -46,7 +46,8 @@ from src.utils.analysis.weights import (
 )
 from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
-from src.core.output_manager import AXES_NAME, CONFIG_NAME, locate, require
+from src.core.config_manager import CONFIG_NAME
+from src.core.layout import AXES_NAME
 
 
 class AkitaEscapeLIFTest(unittest.TestCase):
@@ -332,11 +333,14 @@ def minimal_layout(num_exc: int = 2, num_inh: int = 2):
 
 
 def load_run_layout(run_dir: Path):
-    """保存物から NetworkLayout を復元する (各 main() が行う手続きと同じ)。"""
-    config = ConfigManager().load_resolved(require(run_dir, CONFIG_NAME))
+    """保存物から NetworkLayout を復元する (各 main() が行う手続きと同じ)。
+
+    config は run ルート、軸は `data/`。**実験の `store/series.py` と同じ置き場所。**
+    """
+    config = ConfigManager().load_resolved(run_dir / CONFIG_NAME)
     layout = NetworkLayout.from_config(config)
-    axes_path = locate(run_dir, AXES_NAME)
-    if axes_path is not None:
+    axes_path = run_dir / "data" / AXES_NAME
+    if axes_path.exists():
         layout.load_axes_file(axes_path)
     return layout
 

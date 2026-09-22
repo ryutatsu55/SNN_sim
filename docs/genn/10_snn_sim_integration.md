@@ -264,8 +264,7 @@ model_test.neuron_test(results, I_in, trial_results["times"], trial_results["ids
 network(BuiltNetwork.from_builder(builder, output_dir), output_dir / "network.png")
 ```
 
-- 出力先は [src/core/output_manager.py](../../src/core/output_manager.py) の
-  `create_run_output_dir(TASK_NAME)` がタイムスタンプ付きで作成（`outputs/<task>/<timestamp>/`）。
+- 出力先は各ツールが `outputs/<task>/<timestamp>/` を自前で作る（`scripts/tools/` の 2 行）。
 - **描画関数は `(view, out_path)` を取る。** `view` は読み出し契約
   [src/utils/runview.py](../../src/utils/runview.py) の `Built` / `Window` / `Series` で、
   build 直後の `NetworkBuilder` は `BuiltNetwork.from_builder()` でそのまま載る。

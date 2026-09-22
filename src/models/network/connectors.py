@@ -281,6 +281,11 @@ class BeggsPlenzGaussianTopology(GaussianDistanceTypeTopology):
     """Beggs & Plenz (2003) 再現用の種別別ガウス結合プロファイル。具体値は YAML から読む。"""
     pass
 
+# 軸索の折れ線 (AxonGeometry) を書き出す npz の名前。`save()` と `load()` が対で使う。
+# 「どの軸索がどのブリッジを通ったか」= 損傷実験で必要になる記録。
+AXONS_NAME = "axon_geometry.npz"
+
+
 @dataclass(frozen=True)
 class AxonGeometry:
     """軸索の折れ線と、各シナプスがどこで接触したかを持つプレーンなデータ。
@@ -315,10 +320,9 @@ class AxonGeometry:
     def save(self, path: "Path | str") -> "Path":
         """8 本の配列を npz として `path` へ書き出し、そのパスを返す。
 
-        **置き場所 (どの run ディレクトリの、どのファイル名か) は呼び出し側が決める。**
-        ここが知っているのは「軸索の記録をどう直列化するか」だけで、`outputs/` の規約は
-        持たない (`NetworkLayout.save_axes()` と同じ切り分け。ファイル名の定数は
-        `src/core/output_manager.py` の `AXONS_NAME`)。
+        **置き場所 (どの run ディレクトリか) は呼び出し側が決める。** ここが知っているのは
+        「軸索の記録をどう直列化するか」と、その名前 (`AXONS_NAME`) までで、`outputs/` の
+        規約は持たない (`NetworkLayout.save_axes()` と同じ切り分け)。
 
         軸索の軌跡は seed から再現できるが、再現には同じコード・同じエリア・同じ
         `segment_length` が要る (CLAUDE.md 注記 16b / 16d)。損傷実験の対象は

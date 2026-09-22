@@ -108,7 +108,7 @@ build 後に永続化する。**配置場所は呼び出し側の決定**なの�
 渡すこと:
 
 ```python
-layout.save_axes(out_dir / AXES_NAME)   # AXES_NAME は src/core/output_manager.py
+layout.save_axes(out_dir / AXES_NAME)   # AXES_NAME は src/core/layout.py
 ```
 
 `scripts/develop/run_one.py` が実際の呼び出し例。`NetworkLayout` はシリアライズを所有するが、

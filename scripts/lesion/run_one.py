@@ -41,9 +41,9 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.core.config_manager import ConfigManager
+from src.core.config_manager import CONFIG_NAME, ConfigManager
 from src.core.NetworkBuilder import GlobalCOO, NetworkBuilder
-from src.core.output_manager import AXES_NAME, CONFIG_NAME, CONNECTIVITY_NAME
+from src.core.layout import AXES_NAME
 from src.core.simulator import GeNNSimulator
 from src.utils.analysis.axons import subset_geometry, synapse_crossed_parts
 from src.utils.analysis.connectivity import bridge_part_indices
@@ -62,7 +62,7 @@ from scripts.lesion.store.records import (METRICS_NAME, MS_PER_HOUR, PHASE_BASEL
                                           MetricsWriter, probe_filename, save_connectivity,
                                           save_cut, save_manifest, save_spikes,
                                           save_weight_values, write_table)
-from scripts.lesion.store.records import pre_connectivity_path
+from scripts.lesion.store.records import POST_CONNECTIVITY_NAME, pre_connectivity_path
 from scripts.lesion.store.series import open_run
 
 import src.models.neurons.akita_escape_lif
@@ -117,7 +117,7 @@ def build_network(config, model_name, restored_weights=None,
     乱数の消費が終わった後・GeNN 登録の前に呼ばれるので、ネットワーク実現は
     同一 seed のまま変わらない。
     """
-    # コード生成先は `src/core/output_manager.py` の GENN_CODE_DIR (既定)。
+    # コード生成先は `src/core/NetworkBuilder.py` の GENN_CODE_DIR (既定)。
     builder = NetworkBuilder(config, model_name=model_name)
 
     def transform(coo: GlobalCOO) -> GlobalCOO:
@@ -310,8 +310,6 @@ def main():
         "avalanche_smax": smax,
         "hub_z": float(getattr(protocol, "hub_z", 2.5)),
         "preserve_fan_in_scale": True,
-        # sham を作らない方針なので、**回復とドリフトの分離は原理的にできない。**
-        # 親 run の終盤の動きを添えて、同オーダーなら結論を出さない判断材料にする。
         "parent_drift": parent.drift,
         "timeline_ms": {
             "settle": float(protocol.settle_ms),
@@ -360,7 +358,7 @@ def main():
     # 切断後の結合も先に書いておく。**`open_run()` は 2 本とも要求する**ので、
     # baseline probe を読み直す時点で揃っている必要がある。
     keep = ~np.asarray(selection.cut, dtype=bool)
-    save_connectivity(paths.data_path(run_dir, CONNECTIVITY_NAME),
+    save_connectivity(paths.data_path(run_dir, POST_CONNECTIVITY_NAME),
                       coo.row[keep], coo.col[keep],
                       np.asarray(coo.shape, dtype=np.int64))
     save_manifest(paths.data_dir(run_dir), manifest)
@@ -404,7 +402,7 @@ def main():
 
     # 記録済みの切断後 COO と、GeNN が実際に持っている COO が同じであることを確かめる。
     connectivity2 = sim2.synapse_connectivity_coo()
-    save_connectivity(paths.data_path(run_dir, CONNECTIVITY_NAME), connectivity2["row"],
+    save_connectivity(paths.data_path(run_dir, POST_CONNECTIVITY_NAME), connectivity2["row"],
                       connectivity2["col"], connectivity2["shape"])
 
     # 構造図。**切断後の幾何を渡すこと。** builder のコネクタが持つ幾何は

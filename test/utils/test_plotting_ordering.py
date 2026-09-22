@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.core.config_manager import ConfigManager  # noqa: E402
 from src.core.layout import NetworkLayout  # noqa: E402
-from src.core.output_manager import CONFIG_NAME  # noqa: E402
+from src.core.config_manager import CONFIG_NAME  # noqa: E402
 from src.utils.plotting.distributions import (  # noqa: E402
     delay_distribution,
     distance_distribution,

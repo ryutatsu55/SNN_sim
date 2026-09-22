@@ -27,8 +27,14 @@ if project_root not in sys.path:
 # Pydanticの設定モデルと、コンポーネントを動的ロードするレジストリをインポート
 from src.core.config_manager import AppConfig
 from src.core.layout import NetworkLayout
-from src.core.output_manager import GENN_CODE_DIR
 from src.core.registry import AREA_MODELS, SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
+
+# GeNN が生成する `<モデル名>_CODE` を集める親ディレクトリ。
+#
+# **実行環境の都合であって実験条件ではない**ので config には持たせない。
+# `NetworkBuilder(code_gen_dir=...)` を省略するとここへ出る。
+GENN_CODE_DIR = "genn_code"
+
 
 class GlobalCOO(NamedTuple):
     """グローバルID空間での結合を COO で表したもの。**ビルド以降の唯一の受け渡し形式**。

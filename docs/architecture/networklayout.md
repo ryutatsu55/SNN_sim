@@ -148,7 +148,7 @@ W_sorted = W[np.ix_(order, order)]      # module → E/I の順にブロック�
 | `load_axes(dict)` / `load_axes_file(path)` | 復元（既存の同名軸は上書き） |
 
 置き場所（どの run の、どのファイル名か）は**呼び出し側が決める**。規約は
-`src/core/output_manager.py` の `AXES_NAME = "layout_axes.npz"`。
+`src/core/layout.py` の `AXES_NAME = "layout_axes.npz"`。
 
 ---
 

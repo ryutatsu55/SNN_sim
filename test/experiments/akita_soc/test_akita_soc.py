@@ -27,7 +27,7 @@ from scripts.akita_soc.store.records import (MS_PER_HOUR, SPIKES, WEIGHTS, disco
                                              save_weight_values)
 from scripts.akita_soc.store.series import open_run
 from src.core.config_manager import ConfigManager
-from src.core.output_manager import CONNECTIVITY_NAME
+from scripts.akita_soc.store.records import CONNECTIVITY_NAME
 
 TASK_PATH = root_path / "scripts" / "akita_soc" / "task.yaml"
 CONFIG_PATH = root_path / "scripts" / "akita_soc" / "akita_soc.yaml"

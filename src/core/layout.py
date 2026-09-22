@@ -28,8 +28,8 @@ population のグローバルID集合は**常に昇順**である (`ids_by` が 
 要求も特権も無い**。切り出しは常に fancy-index (`np.ix_`) で行う。
 
 外部軸はビルド時にしか存在しないため、解析側で復元できるよう `save_axes()` /
-`load_axes_file()` で npz に永続化する。**どの run ディレクトリのどのファイル名か**は
-呼び出し側が決める (規約は `src/core/output_manager.py`)。
+`load_axes_file()` で npz に永続化する。ファイル名は `AXES_NAME`、**どの run ディレクトリへ
+置くか**は呼び出し側が決める。
 """
 from __future__ import annotations
 
@@ -40,6 +40,9 @@ import numpy as np
 
 # random 割当用のシード派生オフセット。行列生成用 RNG(NetworkBuilder.self.rng)とは
 # 別ストリームにし、E/I 割当と行列値の相関を避けるために seed に加算する定数。
+# 外部軸を書き出す npz の名前。`save_axes()` と `load_axes_file()` が対で使う。
+AXES_NAME = "layout_axes.npz"
+
 _ASSIGN_SEED_OFFSET = 104729
 
 # 誤上書きを防ぐため overwrite=True を要求する軸 = **config だけから再導出できる軸**。
@@ -480,9 +483,9 @@ class NetworkLayout:
     def save_axes(self, path: Path | str) -> Optional[Path]:
         """外部軸を npz として `path` に書き出す。保存すべき軸が無ければ何もせず None。
 
-        **置き場所 (どの run ディレクトリの、どのファイル名か) は呼び出し側が決める。**
-        このクラスが知っているのは「軸をどう npz に直列化するか」だけで、`outputs/` の
-        ディレクトリ規約は持たない (それは `src/core/output_manager.py` の担当)。
+        **置き場所 (どの run ディレクトリか) は呼び出し側が決める。** このクラスが知って
+        いるのは「軸をどう npz に直列化するか」と、その名前 (`AXES_NAME`) までで、
+        `outputs/` のディレクトリ規約は持たない。
 
         `add_axis` が dtype=object を具体 dtype へ正規化しているのは、この npz を
         `allow_pickle=False` で読み書きできるようにするためである。

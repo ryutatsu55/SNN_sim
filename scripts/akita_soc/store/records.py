@@ -1,8 +1,8 @@
 """akita_soc 実験の記録ファイル名の規約。
 
 `weights_{h}h.npz` / `spikes_{h}h.npz` の "h" は 72 時間発達実験の記録時刻であって、
-プロジェクト共通の概念ではない。よって `src/core/output_manager.py` (run ディレクトリ
-構造・config.yaml・layout_axes.npz など) には置かず、この実験のモジュールが持つ。
+プロジェクト共通の概念ではない。よって `src/core/` (config.yaml は `config_manager.py`、
+layout_axes.npz は `layout.py` が持つ) には置かず、この実験のモジュールが持つ。
 
 **この規約を知っているのはここだけ**。ファイル名 (`record_filename` / `discover_records`)
 だけでなく、**npz の中の鍵の名前**も書き出しと読み取りが対で持つ (`save_spikes` /
@@ -27,7 +27,6 @@ from pathlib import Path
 
 import numpy as np
 
-from src.core.output_manager import CONNECTIVITY_NAME
 from src.utils.runview import Spikes, Trace, Wiring
 
 # 記録ファイル名 `<種別>_<時刻>h.npz`。種別に数字を含めない前提で時刻と切り分ける。
@@ -39,6 +38,9 @@ SPIKES = "spikes"
 # 記録窓の先頭を 1 ステップ刻みで採った V / Isyn_rec で、同じ窓のラスターと
 # 時間軸が揃っている。図にしか残さないのは勿体ないので npz にも落とす。
 TRACE = "trace"
+
+# 結合構造。シミュレーション中に変わらないので run につき 1 回だけ書く。
+CONNECTIVITY_NAME = "connectivity.npz"
 
 # 記録時刻ごとの指標。本番の run も再解析も**同じこのファイル**に書く
 # (どちらも metrics.build_row() を通るので列も値も一致する)。

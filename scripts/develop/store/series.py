@@ -16,9 +16,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.core.config_manager import ConfigManager
+from src.core.config_manager import CONFIG_NAME, ConfigManager
 from src.core.layout import NetworkLayout
-from src.core.output_manager import AXES_NAME, CONFIG_NAME
+from src.core.layout import AXES_NAME
 
 from src.utils import runview
 from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring

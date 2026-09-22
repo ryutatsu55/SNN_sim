@@ -9,8 +9,14 @@ import warnings
 from typing import Dict, Any, Literal, Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
-# run ディレクトリのファイル名規約は output_manager が唯一の定義元。
-from src.core.output_manager import CONFIG_NAME, SOURCE_CONFIG_NAME
+# `save_config()` が run ディレクトリへ書き出す 2 ファイルの名前。
+#
+#   config.yaml        … 解決後 config (seed/backend/assignment は実値)。再実行用の記録
+#   source_config.yaml … resolve() に渡した入力 YAML の逐語コピー
+#
+# **書くのは `save_config()` だけ。** 読む側 (実験の store/ とテスト) はここを import する。
+CONFIG_NAME = "config.yaml"
+SOURCE_CONFIG_NAME = "source_config.yaml"
 
 
 # メイン config が layout.assignment を書かなかったときに適用する値。

@@ -41,8 +41,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 
-from src.core.config_manager import ConfigManager, load_yaml
-from src.core.output_manager import CONFIG_NAME
+from src.core.config_manager import CONFIG_NAME, ConfigManager, load_yaml
 
 from scripts.lesion.store.paths import PENDING_CONFIG_NAME
 

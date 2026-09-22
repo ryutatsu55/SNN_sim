@@ -44,7 +44,6 @@ from pathlib import Path
 
 import numpy as np
 
-from src.core.output_manager import CONNECTIVITY_NAME
 from src.utils.runview import Spikes, Wiring
 
 # 記録ファイル名 `<種別>_p<番号>.npz`。
@@ -53,8 +52,9 @@ PROBE_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_p(?P<index>\d+)\.npz")
 SPIKES = "spikes"
 WEIGHTS = "weights"
 
-# Phase 1 (切断前) の結合。Phase 2 のものは output_manager の CONNECTIVITY_NAME。
-PRE_CONNECTIVITY_NAME = "connectivity_pre.npz"
+# 結合構造。**2 つあるのが lesion の特徴**で、切断の前後で別ファイルに書く。
+POST_CONNECTIVITY_NAME = "connectivity.npz"      # Phase 2 (切断後)
+PRE_CONNECTIVITY_NAME = "connectivity_pre.npz"   # Phase 1 (切断前)
 
 MANIFEST_NAME = "lesion.json"
 CUT_NAME = "lesion_cut.npz"
@@ -155,7 +155,7 @@ def _require_row_major(wiring: Wiring, path: Path) -> None:
 
 
 def post_connectivity_path(directory: Path) -> Path:
-    return Path(directory) / CONNECTIVITY_NAME
+    return Path(directory) / POST_CONNECTIVITY_NAME
 
 
 def pre_connectivity_path(directory: Path) -> Path:

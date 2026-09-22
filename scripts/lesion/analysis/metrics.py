@@ -158,10 +158,8 @@ def add_diagnosis(row: dict) -> dict:
 def delta_from_baseline(rows: list[dict], baseline: dict) -> list[dict]:
     """各行に `delta_{col}` / `ratio_{col}` を足す。
 
-    ベースラインは**切断直前の 1 点のみ** (sham を作らない方針)。よって
-    「回復」と「損傷が無くても進んだ発達の続き」は原理的に分離できない。
-    親 run の終盤のドリフト幅 (`lesion.json` の `parent_drift`) と比べて、
-    同オーダーなら結論を出さないこと。
+    **ベースラインは切断直前の 1 点のみ。** この差だけで回復を語らず、`lesion.json` の
+    `parent_drift` と突き合わせて読むこと (理由は `scripts/lesion/README.md`)。
     """
     out = []
     for row in rows:

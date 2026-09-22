@@ -12,8 +12,7 @@
 §5 の出力一覧は develop の具体例として読むこと。
 
 前提となる読み出し契約は `docs/architecture/runview_contract.md`。
-run の回し方と出力の規約は `docs/develop_refactor_plan.md`。
-なぜこの形に統一したかは `docs/scripts_unification_plan.md`。
+run の回し方と出力の規約は各実験の README (`scripts/develop/README.md` ほか)。
 
 ---
 
@@ -82,6 +81,20 @@ scripts/develop/
 ものは 1 ファイルにまとまる (`network.py` の直線版と軸索版、`synapse_hist.py` の
 遅延/距離/重み、`weight_matrix.py` の 1 枚版・時系列パネル・差分パネル)。
 **片方だけ直すと壊れるものを同じファイルに置く**、というのが基準。
+
+### 入口が 3 つある理由
+
+`__main__.py` (親) は seed を展開して run ディレクトリを作り、`run_one.py` (子) を
+**`subprocess` で**並列起動する。スレッドや `multiprocessing` ではなく別プロセスなのは
+3 つとも同じ理由:
+
+1. **プロセス完全分離。** GeNN / CUDA は fork されたプロセスで初期化すると壊れる
+2. **1 seed の異常終了が他へ波及しない**
+3. **部分再実行がそのまま手に入る。** 子を単独で叩けば失敗した run だけやり直せる
+   (`python -m scripts.develop.run_one <run ディレクトリ>`)
+
+親が run ディレクトリ名を起動前に決められるので、各子のログを `<run>/run.log` へ
+置ける (ログの置き場所問題が根ごと消える)。
 
 ---
 
@@ -268,4 +281,6 @@ built.verify_against(series.wiring())     # 一致しなければ落とす
    もっと良い名前があるかもしれない（`stages/` / `emit/` / 直下に 3 ファイル平置き）
 2. **akita_soc と develop の図をどこまで揃えるか。** いまは複製で、片方だけ直したときに
    気づく仕組みが `reference_figures.md5` しかない
-   （`docs/scripts_unification_plan.md`）
+3. **seed 横断の `summary/` に何を置くか。** 時刻ごとの mean±SD だけでは足りない ——
+   **遷移時刻が seed でばらつく量は、時刻ごとに平均すると遷移がなまって消える。**
+   seed ごとのスカラー要約 (遷移時刻など) の分布も要る

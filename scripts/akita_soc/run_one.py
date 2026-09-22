@@ -22,15 +22,17 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.core.config_manager import ConfigManager
+from src.core.config_manager import CONFIG_NAME, ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import AXES_NAME, AXONS_NAME, CONFIG_NAME, CONNECTIVITY_NAME
+from src.core.layout import AXES_NAME
+from src.models.network.connectors import AXONS_NAME
 from src.core.simulator import GeNNSimulator
 from scripts.akita_soc.analysis import metrics
 from scripts.akita_soc.report import overview, panels, structure
 from scripts.akita_soc.store import paths
 from src.utils.runview import BuiltNetwork as Built
-from scripts.akita_soc.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
+from scripts.akita_soc.store.records import (CONNECTIVITY_NAME, METRICS_NAME, MS_PER_HOUR,
+                                           SPIKES, TRACE, WEIGHTS,
                                            MetricsWriter, record_filename,
                                            save_connectivity, save_spikes, save_trace,
                                            save_weight_values)
@@ -246,7 +248,7 @@ def main():
     if trace_neuron is not None:
         print(f"  膜電位トレース: neuron {trace_neuron}, 窓の先頭 {trace_window_s} s")
 
-    # コード生成先は `src/core/output_manager.py` の GENN_CODE_DIR (既定)。
+    # コード生成先は `src/core/NetworkBuilder.py` の GENN_CODE_DIR (既定)。
     builder = NetworkBuilder(config, model_name=_model_name(run_dir, seed))
     genn_model, layout = builder.build(rec_spike=True)
 

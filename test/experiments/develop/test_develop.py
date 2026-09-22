@@ -29,7 +29,9 @@ from scripts.develop.replot import replot
 from scripts.develop.store.series import open_run
 from src.core.config_manager import ConfigManager, expand_hours_spec, expand_seed_spec
 from src.core.layout import NetworkLayout
-from src.core.output_manager import CONFIG_NAME, CONNECTIVITY_NAME, DATA_SUBDIR
+from src.core.config_manager import CONFIG_NAME
+from scripts.develop.store.paths import DATA_SUBDIR
+from scripts.develop.store.records import CONNECTIVITY_NAME
 
 TASK_PATH = root_path / "scripts" / "develop" / "task.yaml"
 # テスト用のネットワーク設定。**実験の config を借りない** ——
@@ -508,12 +510,6 @@ class ReplotPlacementTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = _make_run(tmp_dir)
             replot(run_dir, with_structure=False)
-            self._assert_placement(run_dir)
-
-    def test_data_subdir_is_normalized_to_run_root(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir = _make_run(tmp_dir)
-            replot(run_dir / DATA_SUBDIR, with_structure=False)
             self._assert_placement(run_dir)
 
     def test_rebuild_must_match_the_recorded_connectivity(self):

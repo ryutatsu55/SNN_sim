@@ -3,7 +3,7 @@
     python -m scripts.tools.spike_animation
 
 **実験ではなく道具。** 記録窓を複数持たず、再解析の経路も無いので
-`scripts/develop/` の 5 層は敷かない (判定軸は `docs/scripts_unification_plan.md`)。
+`scripts/develop/` の 5 層は敷かない (判定軸は `docs/architecture/experiment_structure.md` §8)。
 出力は `outputs/spike_animation/<日時>/`。
 
 図はすべて共有層 (`src/utils/plotting/`) のものを、契約 (`src/utils/runview.py`) 越しに
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/snn_sim_matplotlib")
@@ -28,7 +29,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import create_run_output_dir
 from src.core.registry import DATA_LOADERS
 from src.core.simulator import GeNNSimulator
 from src.utils.analysis.spikes import export_spike_csv
@@ -62,7 +62,8 @@ def main():
     print(f"Loading config from {CONFIG_PATH}...")
     manager = ConfigManager()
     config = manager.resolve(CONFIG_PATH, TASK_NAME)
-    output_dir = create_run_output_dir(EXPERIMENT)
+    output_dir = Path("outputs") / EXPERIMENT / datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {output_dir}")
 
     print("Building Network with GeNN...")

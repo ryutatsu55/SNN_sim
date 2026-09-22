@@ -9,7 +9,7 @@
 (ルート `CLAUDE.md`)。develop の内部事情に lesion がぶら下がると、develop を直すたびに
 lesion が壊れる。
 
-代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 5 つだけで、
+代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 6 つだけで、
 develop の `store/records.py` 全体ではない:
 
     config.yaml            ネットワーク設定 (同じ seed から同じネットワークが出る)
@@ -17,10 +17,15 @@ develop の `store/records.py` 全体ではない:
     data/weights_{h}h.npz  引き継ぐ時点の重み (値ベクトル)
     data/layout_axes.npz   外部軸 (module など)。任意
     data/axon_geometry.npz 軸索の折れ線。任意 (axon_growth 系のみ)
+    data/metrics.csv       親 run の終盤ドリフト。任意 (無ければ理由が manifest に入る)
 
-**この 5 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
-ここに書いてよい理由。ファイル名の規約が変わったら、ここも直す —— 直す場所が 1 つで、
-そのことが docstring に書いてあれば、横 import より安全に保てる。
+**この 6 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
+ここに書いてよい理由。**この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**
+ファイル名の規約が変わったら、ここも直す —— 直す場所が 1 つで、そのことが docstring に
+書いてあれば、横 import より安全に保てる。
+
+したがって**ファイル名は下でローカルに宣言する。** `src/core` から import すると、
+「lesion が親について何を仮定しているか」がこのファイルを読むだけでは分からなくなる。
 
 読めた値は `src/utils/runview.py` の形 (`Wiring`) で返す。**親も子も、読めた値の形は同じ。**
 """
@@ -34,14 +39,24 @@ from pathlib import Path
 import numpy as np
 
 from src.core.config_manager import ConfigManager
-from src.core.output_manager import (AXES_NAME, AXONS_NAME, CONFIG_NAME, CONNECTIVITY_NAME,
-                                     DATA_SUBDIR)
 from src.utils.runview import Wiring
+
+# ------------------------------------------------------------------------------------
+# 親 (develop 形式) の run ディレクトリ規約。**上の 6 つの契約がここに対応する。**
+#
+# `store/paths.py` にも同名の定数があるが、あちらは**自分の run** の規約で、こちらは
+# **親の run** の規約。値がたまたま一致しているだけなので、片方を変えても他方は動かない。
+# ------------------------------------------------------------------------------------
+CONFIG_NAME = "config.yaml"
+DATA_SUBDIR = "data"
+CONNECTIVITY_NAME = "connectivity.npz"
+AXES_NAME = "layout_axes.npz"
+AXONS_NAME = "axon_geometry.npz"
+METRICS_NAME = "metrics.csv"
 
 # develop / akita_soc の記録ファイル名 `<種別>_<時刻>h.npz`。
 RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
 WEIGHTS = "weights"
-METRICS_NAME = "metrics.csv"
 # 親 run の終盤ドリフトとして manifest に添える行数。
 DRIFT_TAIL_ROWS = 3
 
@@ -59,7 +74,7 @@ class Parent:
     drift: dict
 
 
-def _data_dir(run_dir: Path) -> Path:
+def _parent_data_dir(run_dir: Path) -> Path:
     """親 run の `data/`。**旧レイアウト (run 直下に平置き) は受け付けない。**
 
     吸収しても意味がないため。記録窓の原点を持たない古い run はどのみち引き継げず、
@@ -113,14 +128,17 @@ def _load_wiring(data_dir: Path) -> Wiring:
 def _load_drift(data_dir: Path) -> dict:
     """親 run の `metrics.csv` の末尾数行。**結果を読むときのドリフトの目安。**
 
-    sham が無いので「回復」と「損傷が無くても進んだ発達の続き」は分離できない
-    (`scripts/lesion/README.md`)。
+    親がこれを持たなくても run は完走するので、**取れなかったときは理由を返す。**
+    空 dict だと「親に metrics.csv が無かった」と「読んだが行が無かった」が区別できず、
+    `parent_drift` が空であることの意味が読めなくなる。
     """
     path = data_dir / METRICS_NAME
     if not path.exists():
-        return {}
+        return {"unavailable": f"親 run に {METRICS_NAME} がありません: {data_dir}"}
     with open(path, newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))[-DRIFT_TAIL_ROWS:]
+    if not rows:
+        return {"unavailable": f"親 run の {METRICS_NAME} に行がありません: {path}"}
     return {"note": "sham 無しなので、回復幅がこのドリフト幅と同オーダーなら結論を出さない",
             "tail_rows": rows}
 
@@ -151,7 +169,7 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
             f"{config_path} がありません。build を通った run を指してください。")
     config = ConfigManager().load_resolved(config_path)
 
-    data_dir = _data_dir(run_dir)
+    data_dir = _parent_data_dir(run_dir)
     records = _discover_weight_records(data_dir)
     if not records:
         raise FileNotFoundError(f"{WEIGHTS}_*h.npz が見つかりません: {data_dir}")

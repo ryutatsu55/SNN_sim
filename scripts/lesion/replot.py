@@ -35,7 +35,6 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import CONFIG_NAME, DATA_SUBDIR
 from src.utils.analysis.axons import subset_geometry
 from src.utils.analysis.weights import align_subset_to_coo
 from src.utils.runview import BuiltNetwork
@@ -139,11 +138,7 @@ def rebuild(series) -> BuiltNetwork:
 
 
 def replot(run_dir: Path, *, with_structure: bool = True) -> Path:
-    # <run>/data を渡されても run ルートに正規化する (タブ補完で入り込みやすいため)。
     run_dir = Path(run_dir)
-    if run_dir.name == DATA_SUBDIR and (run_dir.parent / CONFIG_NAME).exists():
-        run_dir = run_dir.parent
-
     series = open_run(run_dir)
     print(f"Replot: {run_dir} (N={series.total_neurons}, probe={len(series.windows)})")
 

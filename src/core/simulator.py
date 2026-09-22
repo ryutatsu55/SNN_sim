@@ -38,7 +38,7 @@ class GeNNSimulator:
         print(f"=== [Simulator] Setup: Building model '{self.model.name}' ===")
 
         # コード生成先。`<builder.code_gen_dir>/<model_name>_CODE` に集める。
-        # 既定は `output_manager.GENN_CODE_DIR`。
+        # 既定は `NetworkBuilder.GENN_CODE_DIR`。
         build_path = getattr(self.builder, "code_gen_dir", None)
         # **always_rebuild=True は外さない。** コンパイルフラグ (NetworkBuilder の
         # optimize_code) と GeNN 本体の変更は model.sha に入らないため、既定の増分ビルドだと
