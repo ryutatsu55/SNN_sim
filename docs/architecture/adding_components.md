@@ -65,7 +65,7 @@ neurons:
 ### 1-4. メインスクリプトで登録をトリガする
 
 ```python
-# scripts/test.py
+# scripts/tools/pipeline_check.py
 import src.models.neurons.my_neuron  # @register デコレータを走らせる
 ```
 
@@ -111,7 +111,7 @@ build 後に永続化する。**配置場所は呼び出し側の決定**なの�
 layout.save_axes(out_dir / AXES_NAME)   # AXES_NAME は src/core/output_manager.py
 ```
 
-`scripts/akita_soc_fig2.py` が実際の呼び出し例。`NetworkLayout` はシリアライズを所有するが、
+`scripts/develop/run_one.py` が実際の呼び出し例。`NetworkLayout` はシリアライズを所有するが、
 `outputs/` のレイアウトは所有しない。
 
 ### `module` 軸は大抵コードを書かなくてよい

@@ -1,13 +1,10 @@
 """develop の run を読む。`Window` (記録窓 1 つ) と `Series` (run 全体)。
 
-`scripts/tools/runview.py` の契約を、この実験のファイル名規約 (`records.py`) の上に
+`src/utils/runview.py` の契約を、この実験のファイル名規約 (`records.py`) の上に
 実装したもの。**ここは読み出しだけ。加工はしない。**
 
-以前はここに `weight_trajectories()` / `firing_rate_series()` / `weight_deltas()` という
-run 全体の計算が同居していた。「何を測るか」で変わるものなので、それぞれ**唯一の
-利用者である図**へ移した (`figures/fig2c.py` / `figures/fig2d.py` /
-`figures/weight_matrix.py`)。読み手に加工を混ぜると、図のファイルを見ても何を計算して
-いるのか分からなくなる。
+run 全体を通した計算 (重み軌跡・発火レートの時系列) は、それを使う図のファイルにある
+(`figures/fig2c.py` / `figures/fig2d.py` / `figures/weight_matrix.py`)。
 
 **時刻の正は npz が持つ。** ファイル名の `{hour:g}` は有効数字 6 桁なので、record_hours が
 非整数だと往復で元に戻らない。`Window.hour` は npz の `record_start_ms` から作る。
@@ -23,8 +20,8 @@ from src.core.config_manager import ConfigManager
 from src.core.layout import NetworkLayout
 from src.core.output_manager import AXES_NAME, CONFIG_NAME
 
-from scripts.tools import runview
-from scripts.tools.runview import Coo, MissingData, Spikes, Trace, Wiring
+from src.utils import runview
+from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
 
 from scripts.develop.store import paths
 from scripts.develop.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
@@ -102,11 +99,10 @@ class Series(runview.Series):
         return self._wiring
 
     def metrics(self) -> pd.DataFrame:
-        """`metrics.csv` を読む。
+        """`metrics.csv` を読む。**呼ばれた時点で読む** (開いた時点ではない)。
 
-        **メソッドであってフィールドではない。** 再解析は「開く → 指標を書き直す →
-        図を描く」の順に進むので、開いた時点で読んでしまうと図が**前回の値**を描く
-        (しかも例外は出ない)。呼ばれた時点で読めば構造的に起こらない。
+        再解析は「開く → 指標を書き直す → 図を描く」の順に進むので、先に読むと図が
+        前回の値を描く。
         """
         path = paths.data_path(self.run_dir, METRICS_NAME)
         if not path.exists():
@@ -118,9 +114,7 @@ class Series(runview.Series):
     def window(self, hour: float) -> Window:
         """**いま書いたばかりの**記録を指す `Window` を作る。
 
-        `run_one.py` が使う。本番も再解析も「一度ファイルに書いてから読み直す」ことで
-        描画経路を 1 本に保つための入口で、これが無いと本番だけ in-memory の値を
-        手で組み立てて渡すことになる (以前はそうなっていた)。
+        `run_one.py` が「書いてから読み直す」ための入口。
         """
         data_dir = paths.data_dir(self.run_dir)
         spikes_path = data_dir / record_filename(SPIKES, hour)
@@ -131,15 +125,12 @@ class Series(runview.Series):
 def open_run(run_dir: str | Path, *, require_windows: bool = True) -> Series:
     """run ディレクトリを開く。config を読み、layout を復元し、記録を時刻順に並べる。
 
-    `connectivity.npz` は run を通して不変なのでここで 1 回だけ読む。
+    結合構造は run を通して不変なのでここで 1 回だけ読む。
+    **layout が復元できなければ落とす** (E/I 列の無い `metrics.csv` を作らないため)。
 
     Args:
         require_windows: 記録が 1 つも無いときに落とすか。`run_one.py` は**これから
             記録を書く**ところで開くので `False` を渡す。
-
-    **layout が復元できなければ落とす。** 無いと E/I 列が作れず、本番より列の少ない
-    `metrics.csv` で上書きしてしまう。「並べ替えだけ諦めて続行」は、失われるのが図では
-    なく記録なので割に合わない。
     """
     run_dir = Path(run_dir)
     config_path = run_dir / CONFIG_NAME

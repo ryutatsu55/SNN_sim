@@ -16,13 +16,11 @@
         ├── trace/           … task.trace_neuron を指定した run のみ
         └── overview/        … figure2c / figure2d / weight_track
 
-`src/core/output_manager.py` の `organize_output()` (走り終えてから data/ へ移す) は
-**使わない**。あれがあるせいで「完走したか否かで run の形が変わる」状態になり、
-`locate()` の 2 箇所探索が必要になっていた。最初から正しい場所へ書けば両方とも要らない。
+**最初から正しい場所へ書く。** `src/core/output_manager.py` の `organize_output()`
+(走り終えてから `data/` へ移す) は使わないので、完走したか否かで run の形が変わらない。
 
-読む側も同じ `data_dir()` を通る。**旧レイアウトの吸収は持たない** —— 記録窓の原点
-(`records.RECORD_START_KEY`) を持たない古い run はどのみち再解析できないので、置き場所
-だけ吸収しても意味がない。古い run を読みたくなったら再実行すること。
+読む側も同じ `data_dir()` を通る。**旧レイアウトの吸収は持たない** —— 記録窓の原点を
+持たない古い run はどのみち再解析できない。読みたくなったら再実行すること。
 """
 from __future__ import annotations
 

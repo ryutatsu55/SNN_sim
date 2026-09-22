@@ -27,6 +27,7 @@ if project_root not in sys.path:
 # Pydanticの設定モデルと、コンポーネントを動的ロードするレジストリをインポート
 from src.core.config_manager import AppConfig
 from src.core.layout import NetworkLayout
+from src.core.output_manager import GENN_CODE_DIR
 from src.core.registry import AREA_MODELS, SPATIAL_MODELS, CONNECTION_MODELS, WEIGHT_MODELS, DELAY_MODELS, NEURON_MODELS, SYNAPSE_MODELS, PLASTICITY_MODELS
 
 class GlobalCOO(NamedTuple):
@@ -84,9 +85,10 @@ class NetworkBuilder:
         self.config = config
         self.rng = np.random.RandomState(config.simulation.seed)
 
-        # GeNN が生成する <model_name>_CODE を置く親ディレクトリ。
-        # None の場合はカレントディレクトリ (従来挙動)。Simulator.setup() の build() で使う。
-        self.code_gen_dir = code_gen_dir
+        # GeNN が生成する <model_name>_CODE を置く親ディレクトリ。`Simulator.setup()` が使う。
+        # **省略するとプロジェクトの既定 (`genn_code/`)。** 生成コードがリポジトリ直下へ
+        # 散らばらないよう、行き先は 1 か所に集める。
+        self.code_gen_dir = code_gen_dir or GENN_CODE_DIR
 
         # config のニューロン宣言順に連番でグローバルインデックスを割り当てる決定論的レイアウト。
         # RandomState を消費しないため、GeNN ビルドなしでも from_config だけで再現できる。

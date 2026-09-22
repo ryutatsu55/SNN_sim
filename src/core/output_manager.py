@@ -34,6 +34,12 @@ AXONS_NAME = "axon_geometry.npz"
 
 # locate() が探すサブディレクトリ。organize_output() が data/ へ移動するため、run ルートを
 # 渡された場合と data/ を直接渡された場合の両方を受け付ける。
+# GeNN が生成する `<モデル名>_CODE` を集める親ディレクトリ。
+#
+# **実行環境の都合であって実験条件ではない**ので config には持たせない。
+# `NetworkBuilder(code_gen_dir=...)` を省略するとここへ出る。
+GENN_CODE_DIR = "genn_code"
+
 _SEARCH_SUBDIRS = ("", DATA_SUBDIR)
 
 

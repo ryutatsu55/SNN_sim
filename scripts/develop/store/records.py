@@ -11,11 +11,12 @@
 ファイルを**置く場所**は `paths.py` が持ち、**run 1 つを時刻順に読む**のは `series.py`。
 このモジュールはファイル 1 つの読み書きまでを受け持つ。
 
-返す値の形は `scripts/tools/runview.py` の契約 (`Spikes` / `Trace` / `Wiring`) に従う。
+返す値の形は `src/utils/runview.py` の契約 (`Spikes` / `Trace` / `Wiring`) に従う。
 **この実験に固有なのはファイル名と npz の鍵名だけで、読めた値の形は全実験共通。**
 
-`src/utils/experiments/akita_soc/runio.py` からの複製。あちらは旧 `akita_soc_fig2.py` 用で、
-develop は独立に管理する方針なので、同期させる必要はない。
+**`scripts/akita_soc/store/records.py` と同じ規約だが、別のファイルとして持つ。**
+実験ごとに記録の中身は変わりうるので、共通化して片方の都合でもう片方が動くことを
+避ける (図と同じ線引き)。共有するのは「読めた値の形」= 契約だけ。
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from src.core.output_manager import CONNECTIVITY_NAME
-from scripts.tools.runview import Spikes, Trace, Wiring
+from src.utils.runview import Spikes, Trace, Wiring
 
 # 記録ファイル名 `<種別>_<時刻>h.npz`。種別に数字を含めない前提で時刻と切り分ける。
 RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
@@ -77,11 +78,9 @@ def parse_record_name(name: str) -> tuple[str, float]:
 
 
 def parse_hour(path: Path | str, kind: str | None = None) -> float:
-    """ファイル名から記録時刻 [h] を取り出す。
+    """ファイル名から記録時刻 [h] を取り出す。規約外なら **ValueError**。
 
-    `kind` を指定すると種別が一致することも確認する (spikes を weights として
-    読んでしまう取り違えを防ぐ)。規約外なら **ValueError**。以前は失敗時に -1.0 を
-    返す実装が混在していたが、それは「時刻 -1 の記録」として静かに紛れ込む。
+    `kind` を指定すると種別の一致も確認する (spikes を weights として読む取り違えを防ぐ)。
     """
     found_kind, hour = parse_record_name(Path(path).name)
     if kind is not None and found_kind != kind:
@@ -126,14 +125,10 @@ def load_connectivity(directory: Path) -> Wiring:
 
 
 def _require_row_major(wiring: Wiring, path: Path) -> None:
-    """記録された COO が**行優先ソート済み**であることを確かめる。
+    """記録された COO が**行優先ソート済み**であることを確かめ、違えば止める。
 
-    `simulator.synapse_connectivity_coo()` が並びを `NetworkBuilder.global_coo()` へ
-    揃える前の run は、GeNN の格納順 (シナプス集団ごとのブロック連結) で書かれている。
-    同じネットワークで本数も同じなので、**位置で対応づけると黙って別のシナプスに値が
-    乗る。** 読んだ時点で弾いて、静かな誤りを明示的なエラーにする。
-
-    狭義単調増加であることは「行優先かつ (pre, post) の重複なし」と同値。
+    並びが違うと、位置で重みと対応づけたときに黙って別のシナプスに値が乗る。
+    キーの狭義単調増加は「行優先かつ (pre, post) の重複なし」と同値。
     """
     if wiring.row.size < 2:
         return
@@ -208,11 +203,9 @@ def save_spikes(path: Path, times, ids, record_start_ms: float) -> None:
 
 
 def load_spikes(path: Path) -> Spikes:
-    """スパイク npz を読み、**窓の原点を引いたローカル時刻**にして返す。
+    """スパイク npz を読み、**窓の原点を引いたローカル時刻**で返す。
 
-    絶対時刻は返さない (契約の `Spikes.times` はローカル)。必要なら
-    `read_record_start_ms()` の値を足すこと。絶対時刻を既定にすると、アバランチ分割は
-    同じでも burstiness のビン割りが静かにずれる。
+    絶対時刻は返さない。必要なら `read_record_start_ms()` の値を足す。
     """
     with np.load(path) as data:
         if RECORD_START_KEY not in data.files:
@@ -258,15 +251,9 @@ def load_trace(path: Path) -> Trace:
 
 
 class MetricsWriter:
-    """`metrics.csv` を **1 行ずつ追記**する。
+    """`metrics.csv` を **1 行ずつ追記**する。途中で落ちた run もそこまでが読める。
 
-    以前は全記録時刻ぶんを貯めてから最後に一括で書いていたので、72 時間の run が
-    50 時間で落ちると npz は残るのに指標が全滅した (しかも重みブロック列は
-    スパイクから再計算できないので再解析でも戻らない)。1 行ずつ書けば
-    途中で落ちた run も「そこまでの結果」として読める。
-
-    ヘッダは**最初の行で確定**する。以降の行でキーが変わると、既に書いたヘッダと
-    食い違うので例外を投げる (黙って列がずれた CSV を作らない)。
+    ヘッダは**最初の行で確定**する。以降の行でキーが変わると例外。
     """
 
     def __init__(self, path: Path | str):

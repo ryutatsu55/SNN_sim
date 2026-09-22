@@ -17,11 +17,27 @@ root_path = Path(__file__).resolve().parent.parent
 sys.path.append(str(root_path))
 
 from src.models.network.area import DiskArea, Modular4Area, NoSpaceArea, RectArea
-from src.utils.plotting.area import DEFAULT_PAD, draw_area, plot_area
+from src.utils.plotting.area import DEFAULT_PAD, area_figure, draw_area
+from src.utils.runview import BuiltNetwork, Coo
 
 
 def _cfg(**kwargs):
     return SimpleNamespace(**kwargs)
+
+
+def _built(*, area=None, coords=None, geometry=None, coo=None, layout=None,
+           area_profile="disk", connection_profile="axon_growth"):
+    """契約 (`src/utils/runview.py`) を満たす最小の `Built`。
+
+    図は view からしかデータを取らないので、テストも view を組み立てて渡す。
+    `BuiltNetwork` をそのまま使えるのは、あれが `NetworkBuilder` を import せず
+    ダックタイピングで受けているから。
+    """
+    config = _cfg(network=_cfg(space=_cfg(),
+                               area=_cfg(profile_name=area_profile),
+                               connection=_cfg(profile_name=connection_profile)))
+    return BuiltNetwork(run_dir=Path("."), config=config, layout=layout, coo=coo,
+                        coords=coords, area=area, geometry=geometry)
 
 
 MODULAR_SPEC = _cfg(
@@ -56,7 +72,8 @@ class TestDrawArea(unittest.TestCase):
         fig, ax = plt.subplots()
         self.assertFalse(draw_area(ax, NoSpaceArea(_cfg())))
         self.assertEqual(len(ax.collections), 0, "無界なのに何か描かれている")
-        self.assertFalse(plot_area(NoSpaceArea(_cfg()), Path("/dev/null/never")))
+        # 図の側 (`area_figure`) はここまで来ない。無界のエリアは契約の `area()` が
+        # MissingData を投げ、登録簿がそれを受けて 1 枚飛ばす。
 
     def test_none_area_is_skipped(self):
         fig, ax = plt.subplots()
@@ -143,7 +160,8 @@ class TestPlotArea(unittest.TestCase):
         area.num_neurons = 2827
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "sub" / "area.png"
-            self.assertTrue(plot_area(area, out, title="Area: disk"))
+            area_figure(_built(area=area), out)
+            self.assertTrue(out.exists())
             self.assertTrue(out.exists(), "親ディレクトリごと作られていない")
             self.assertGreater(out.stat().st_size, 0)
 
@@ -178,11 +196,6 @@ class TestAxonNetwork(unittest.TestCase):
         conn.generate_sparse()
         return area, conn.axon_geometry(), coords
 
-    @staticmethod
-    def _config():
-        """`axon_network` が触るのは config.network.space だけ (エリアを渡せば見もしない)。"""
-        return _cfg(network=_cfg(space=_cfg()))
-
     def _draw(self, tmp, **kwargs):
         """描画して、LineCollection に渡された折れ線と、描かれたニューロンを回収する。"""
         from unittest import mock
@@ -204,18 +217,19 @@ class TestAxonNetwork(unittest.TestCase):
             sampled.append(np.asarray(sample))
             return real_nodes(ax, x, y, sample, is_exc, node_size)
 
+        view = _built(area=area, coords=coords, geometry=geometry)
         with mock.patch.object(netmod, "LineCollection", spy_lc), \
-                mock.patch.object(netmod, "_draw_nodes", spy_nodes):
-            netmod.axon_network(geometry, coords, self._config(),
-                                Path(tmp) / "axon_network.png",
-                                area=area, seed=self.SEED, **kwargs)
+                mock.patch.object(netmod, "_draw_nodes", spy_nodes), \
+                mock.patch.object(netmod, "SAMPLE_SEED", self.SEED), \
+                mock.patch.multiple(netmod, **(kwargs or {"SAMPLE_SEED": self.SEED})):
+            netmod.axon_network(view, Path(tmp) / "axon_network.png")
         return area, geometry, coords, collections, sampled[0]
 
     def test_writes_a_png_and_draws_three_layers(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            _, _, _, collections, _ = self._draw(Path(tmp), title="axon_network")
+            _, _, _, collections, _ = self._draw(Path(tmp))
             self.assertTrue((Path(tmp) / "axon_network.png").exists())
             # 下敷き (全軸索) / 結合経路 / 樹状突起の破線 の 3 枚
             self.assertEqual(len(collections), 3)
@@ -253,18 +267,20 @@ class TestAxonNetwork(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _, g, coords, _, axon_sample = self._draw(Path(tmp))
 
-            weights = np.ones(len(g.pre))
-            with mock.patch.object(netmod, "_draw_nodes") as spy:
-                netmod.network(g.pre, g.post, weights, coords, self._config(),
-                               Path(tmp) / "network_sample.png",
-                               title="network_sample", seed=self.SEED)
+            coo = Coo(row=np.asarray(g.pre), col=np.asarray(g.post),
+                      weights=np.ones(len(g.pre)), delays=None,
+                      shape=(len(coords), len(coords)))
+            view = _built(coords=coords, coo=coo)
+            with mock.patch.object(netmod, "_draw_nodes") as spy, \
+                    mock.patch.object(netmod, "SAMPLE_SEED", self.SEED):
+                netmod.network(view, Path(tmp) / "network_sample.png")
         np.testing.assert_array_equal(spy.call_args[0][3], axon_sample)
 
     def test_underlay_can_be_turned_off(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            _, _, _, collections, _ = self._draw(Path(tmp), show_axons=False)
+            _, _, _, collections, _ = self._draw(Path(tmp), SHOW_ALL_AXONS=False)
         self.assertEqual(len(collections), 2, "下敷きが消えていない")
 
 

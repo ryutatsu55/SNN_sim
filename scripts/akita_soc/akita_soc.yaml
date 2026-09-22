@@ -1,0 +1,71 @@
+# Ikeda-Akita-Takahashi (2023, APL Bioeng.) Fig.2 の再現条件。
+#
+# **この実験の持ち物なので `scripts/akita_soc/` に置いてある** (1 実験 = 1 ディレクトリ)。
+# 領域も空間も持たない確率結合ネットワーク (N=100, E/I = 80/20) で、E-STDP と I-STDP が
+# 72 時間かけて臨界へ自己組織化する過程を追う。空間構造を入れた発達実験は
+# `scripts/develop/` にある。
+
+# 使う記録プロトコル (task.yaml のプロファイル名)。
+task: akita_soc
+
+simulation:
+  N: 100
+  dt: 0.1
+  # スカラーなら 1 本、[1, 5, 42] なら並べた 3 本、[1..8] なら seed 1..8 の 8 本
+  # (両端を含む範囲)。刻みは [1..10:2]。
+  # 展開するのはランチャの仕事で、各 run の config.yaml には実値が書かれる。
+  seed: 1
+  backend: cpu       # GeNN バックエンド: cuda | cpu | auto
+  # 同時に走らせる run の数。backend: cuda では 1 にすること。
+  parallel: 1
+
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  Layer_Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    polarity: excitatory
+    num: 80
+  Layer_Inh:
+    type: akita_escape_lif
+    mode: inhibitory
+    polarity: inhibitory
+    num: 20
+
+synapses:
+  from_Exc:
+    source: [Layer_Exc]
+    delay_by_target:
+      Layer_Exc: 1.5
+      Layer_Inh: 0.8
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: [Layer_Inh]
+    delay_by_target:
+      Layer_Exc: 0.8
+      Layer_Inh: 0.8
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  area: no_space            # 領域の制約なし (確率ベースの結合なので領域を参照しない)
+  space: no_space
+  connection: constant_prob_full
+  weight: constant_zero
+  delay: constant

@@ -37,8 +37,8 @@ class GeNNSimulator:
         """
         print(f"=== [Simulator] Setup: Building model '{self.model.name}' ===")
 
-        # コード生成先。builder.code_gen_dir が指定されていれば
-        # <code_gen_dir>/<model_name>_CODE に集約する (プロジェクト直下への散乱を防ぐ)。
+        # コード生成先。`<builder.code_gen_dir>/<model_name>_CODE` に集める。
+        # 既定は `output_manager.GENN_CODE_DIR`。
         build_path = getattr(self.builder, "code_gen_dir", None)
         if build_path:
             os.makedirs(build_path, exist_ok=True)

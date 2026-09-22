@@ -152,14 +152,9 @@ def draw_area(
     return True
 
 def area_figure(built, out_path: Path) -> None:
-    """エリア**単体**の図を 1 枚保存する。
+    """エリア**単体**の図を 1 枚保存する。副題に面積と実効密度が入る。
 
-    ここに描くのは領域だけ。細胞体と結合は `network()` が境界線の上へ重ねる担当なので、
-    この図には出さない (「領域そのものの確認」と「ネットワークが領域の中でどう
-    なっているかの確認」を別の図に分ける)。
-
-    無界のエリア (`no_space` など) は `built.area()` が `MissingData` を投げるので、
-    ここに分岐は書かない。
+    描くのは領域だけ。細胞体と結合を重ねた図は `network()`。
     """
     area = built.area()
     profile_name = built.config.network.area.profile_name

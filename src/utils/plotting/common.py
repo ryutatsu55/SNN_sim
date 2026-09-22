@@ -1,9 +1,7 @@
 """描画モジュール間で共有する最小限のプリミティブ。
 
-`plotting/` の各モジュールは「1 種類の図」を担当する対等な兄弟であって、どれかが
-他のユーティリティ置き場を兼ねてはいけない。共有物をここへ集めることで、
-`area.py` が `network.py` の内部関数を借りる (= 図の種類の間に上下関係ができ、
-循環 import を関数内 import で回避する羽目になる) 構図を無くしている。
+`plotting/` の各モジュールは「1 種類の図」を担当する対等な兄弟。共有物をここへ集める
+ことで、どの図も他の図の内部を借りずに済む。
 """
 from __future__ import annotations
 
@@ -23,20 +21,15 @@ BLOCK_COLORS = {
 
 def save_figure(fig, out_path: Path, *, dpi: int | None = 200,
                 bbox_inches: str | None = None, tight_layout: bool = True) -> None:
-    """図を保存して閉じる。保存先の親ディレクトリは必要なら作る。
+    """図を保存して閉じる。親ディレクトリは必要なら作る。
 
-    **`plotting/` が図をファイルにする唯一の出口。** 以前は `plt.savefig()` の直書きが
-    6 箇所あり、親ディレクトリを作るものと作らないものが混在していた。
+    **`plotting/` が図をファイルにする唯一の出口。**
 
-    `dpi` / `bbox_inches` / `tight_layout` を引数にしてあるのは、図の種類ごとに必要な値が
-    違うため (空間ネットワーク図は細い線を潰さないよう 300、はみ出すタイトルを詰めるため
-    `bbox_inches="tight"`。`stdp_window` だけは元から tight_layout を掛けていない)。
-    `dpi=None` は **matplotlib の既定 (rcParams) に任せる**という意味で、素の
-    `plt.savefig(path)` を使っていた図がそのままの解像度で出るようにしてある。
+    `dpi` / `bbox_inches` / `tight_layout` は図の種類ごとに必要な値が違うので引数。
+    `dpi=None` は matplotlib の既定 (rcParams) に任せるという意味。
 
-    **既定値も、呼び出し側が渡している値も変えないこと** —— 変えると既存の figure が
-    すべて差し替わる (実際、この 3 引数を用意せずに一律 dpi=200 にしたら
-    `neuron_trace` の png が 100 dpi から差し替わった)。
+    **既定値も、呼び出し側が渡している値も変えないこと。** 変えると既存の figure が
+    すべて差し替わる。
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

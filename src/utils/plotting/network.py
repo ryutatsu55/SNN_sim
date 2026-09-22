@@ -10,9 +10,17 @@
 座標を持たない図はここには無い。結合構造そのものの図 (粗視化した結合密度・距離依存の
 結合確率) は `matrices.py`、値の分布 (重み・遅延) は `distributions.py`。
 
-入力は COO (row, col と index 整合の 1D 配列)。密な (N, N) は受け取らない —
-ビルド以降の受け渡しは COO 一本、という全体の規約 (`NetworkBuilder.global_coo()`) に従う。
-E/I の分類は `layout.ids_by("polarity")` から得る。
+どちらも `(view, out_path)` を取る (`src/utils/runview.py` の契約)。座標も COO も area も
+軸索幾何も view から自分で取るので、**呼び出し側は「どの run か」しか渡さない**。
+持っていないもの (`no_space` の座標、`constant_prob` の軸索幾何) は view が
+`MissingData` を投げるので、ここに分岐は書かない。
+
+密な (N, N) は受け取らない —— ビルド以降の受け渡しは COO 一本、という全体の規約
+(`NetworkBuilder.global_coo()`) に従う。E/I の分類は `layout.ids_by("polarity")` から得る。
+
+サンプリングの seed と本数は**引数ではなく定数**。2 枚が同じ乱数列を同じ順に消費する
+ことで「同じニューロン・同じ結合が映る」という性質が成り立っているので、呼び出し側から
+片方だけ動かせてはいけない。
 """
 from __future__ import annotations
 
@@ -25,10 +33,22 @@ from matplotlib.lines import Line2D
 
 from src.utils.plotting.area import draw_area
 from src.utils.plotting.common import save_figure
+from src.utils.runview import optional
 
 # 送信元の極性で決まるエッジ色 (ノードの tab:red / tab:blue に合わせた半透明版)
 EDGE_COLORS = {True: (0.8, 0.2, 0.2, 0.5), False: (0.2, 0.2, 0.8, 0.5)}
 EDGE_COLOR_NO_LAYOUT = (0.4, 0.4, 0.4, 0.5)
+
+# 見た目とサンプリング。**引数にしない** —— 変えたくなったらここを直す。
+NODE_SIZE = 10
+N_SAMPLE = 500
+MAX_EDGES = 4000
+# `network` と `axon_network` が同じ seed から同じ順に乱数を引く。片方だけ変えないこと。
+SAMPLE_SEED = 0
+NETWORK_TITLE = "network_sample"
+AXON_TITLE = "axon_network"
+# 結合を作らなかった軸索も薄い下敷きとして描くか。
+SHOW_ALL_AXONS = True
 
 
 def _sample_nodes(total: int, n_sample: int, rng) -> np.ndarray:
@@ -81,47 +101,36 @@ def _apply_axis_limits(ax, config, area_drawn: bool) -> None:
         ax.margins(0.05)
 
 
-def network(row: np.ndarray, col: np.ndarray, weights: np.ndarray, coords: np.ndarray,
-            config, out_path, *, layout=None, node_size=10,
-            title="network", n_sample=500, max_edges=4000, seed=0,
-            area=None):
-    """
-    ニューロンの空間配置と結合 (COO) からネットワーク構造を可視化する。
+def network(view, out_path) -> None:
+    """結合を細胞体どうしを結ぶ直線の矢印として描く。
 
-    空間ネットワーク図を担う唯一の関数。大規模ネットワークでも破綻しないよう、
-    ニューロンを n_sample 個サンプリングし、両端がサンプルに含まれる結合だけを
-    描画する (さらに max_edges 本へ間引く)。エッジは矢印付きで、重みの符号で色分け
-    (正=興奮性=赤 / 負=抑制性=青)、絶対値に応じて線の太さを変える。
+    ニューロンを `N_SAMPLE` 個サンプリングし、両端がサンプルに含まれる結合だけを
+    `MAX_EDGES` 本まで描くので、大規模ネットワークでも破綻しない。エッジは重みの符号で
+    色分け (正=赤 / 負=青)、絶対値に応じて太さが変わる。
 
-    Parameters:
-        row, col (np.ndarray): 各結合の送信/受信グローバルID (1D, 行優先ソート済み)。
-        weights (np.ndarray): 各結合の重み (1D, row/col と index 整合)。
-        coords (np.ndarray): ニューロンの座標配列。形状は (N, 3)。
-        config: AppConfig。矩形空間 (x_range/y_range) なら軸範囲に使う。
-        layout: NetworkLayout。渡すとノードを E/I で色分けする (省略時は一色)。
-        node_size (int): ニューロン(ノード)の描画サイズ。
-        title (str): グラフ/ファイル名。
-        out_path: 画像の保存先ファイルパス。
-        n_sample (int): 描画に用いるニューロンのサンプリング数。
-        max_edges (int): 描画するエッジ数の上限 (annotate ループを抑える)。
-        seed (int): サンプリングの乱数シード。
-        area: BaseArea。渡すと領域の境界線を背景に敷き、軸範囲もそこから取る。
+    エリアは**あれば**境界線として下に敷き、軸範囲もそこから取る。
     """
+    coords = view.coords()
+    coo = view.coo()
+    layout = view.layout
+    config = view.config
+    area = optional(view.area)
+
     coords = np.asarray(coords)
-    row = np.asarray(row, dtype=np.int64)
-    col = np.asarray(col, dtype=np.int64)
-    weights = np.asarray(weights).reshape(-1)
+    row = np.asarray(coo.row, dtype=np.int64)
+    col = np.asarray(coo.col, dtype=np.int64)
+    weights = np.asarray(coo.weights).reshape(-1)
     if not (row.size == col.size == weights.size):
         raise ValueError("row / col / weights の長さが一致しません。")
     N = coords.shape[0]
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(SAMPLE_SEED)
 
     # Z軸が存在する場合でも、今回は2D平面(X, Y)への投影として扱う
     x = coords[:, 0]
     y = coords[:, 1]
 
     # --- ニューロンのサンプリングと E/I 判定 ---
-    sample = _sample_nodes(N, n_sample, rng)
+    sample = _sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
     is_exc = _excitatory_mask(layout, N)
@@ -130,11 +139,11 @@ def network(row: np.ndarray, col: np.ndarray, weights: np.ndarray, coords: np.nd
 
     # --- 領域の境界線を背景に敷く (ノードは zorder=3、エッジは 1 なので下に回る) ---
     # 塗りは入れない。この図の主役はグラフで、part ごとの塗り分けはエッジと色が競合して
-    # 読みにくくなる。領域そのものを見たいときは plot_area の図を見る。
+    # 読みにくくなる。領域そのものを見たいときは area_figure の図を見る。
     area_drawn = draw_area(ax, area, fill=False, boundary=True, zorder=0)
 
     # --- ノード描画 (layout があれば E/I で色分け) ---
-    _draw_nodes(ax, x, y, sample, is_exc, node_size)
+    _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
     # 描画用のスケール計算（太さの正規化用）
     abs_max = np.max(np.abs(weights)) if weights.size else 0.0
@@ -144,14 +153,14 @@ def network(row: np.ndarray, col: np.ndarray, weights: np.ndarray, coords: np.nd
     # 持たないが、可塑性で 0 まで落ちた結合はここに含まれる。
     keep = (np.abs(weights) != 0) & in_sample[row] & in_sample[col]
     sources, targets, edge_w = row[keep], col[keep], weights[keep]
-    # エッジが多すぎる場合はさらに max_edges 本へ間引く (annotate は1本ずつ描くため)
-    if sources.size > max_edges:
-        pick = rng.choice(sources.size, size=max_edges, replace=False)
+    # エッジが多すぎる場合はさらに MAX_EDGES 本へ間引く (annotate は1本ずつ描くため)
+    if sources.size > MAX_EDGES:
+        pick = rng.choice(sources.size, size=MAX_EDGES, replace=False)
         sources, targets, edge_w = sources[pick], targets[pick], edge_w[pick]
 
     # 矢印がノードの中心に刺さるのを防ぐためのマージン計算
     # (scatterの s は面積なので、半径は平方根に比例)
-    node_margin = np.sqrt(node_size) * 0.8
+    node_margin = np.sqrt(NODE_SIZE) * 0.8
 
     for s, t, w in zip(sources, targets, edge_w):
 
@@ -180,7 +189,7 @@ def network(row: np.ndarray, col: np.ndarray, weights: np.ndarray, coords: np.nd
         )
 
     ax.set_aspect('equal')
-    ax.set_title(f"{title}\n{sample.size} neurons sampled, {sources.size} edges drawn")
+    ax.set_title(f"{NETWORK_TITLE}\n{sample.size} neurons sampled, {sources.size} edges drawn")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
     _apply_axis_limits(ax, config, area_drawn)
@@ -216,12 +225,7 @@ def _contact_polyline(geometry, edge: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _save_legend_figure(handles, out_path: str) -> None:
-    """凡例**だけ**を別ファイルに保存する。
-
-    軸索の図は領域いっぱいに広がるので、凡例を図の中に置くとどこに置いても
-    経路の一部を隠す。図の外に出すには余白を作るしかなく、今度は絵が小さくなる。
-    そこで凡例は独立した png にして、本体からは外している。
-    """
+    """凡例**だけ**を別ファイルに保存する。軸索の図が凡例で隠れないようにするため。"""
     fig = plt.figure(figsize=(3.0, 0.32 * len(handles) + 0.3))
     legend = fig.legend(handles=handles, loc="center", fontsize=9, markerscale=1.5)
     # bbox_inches='tight' は「軸のある図」を前提にするため、凡例だけの図では
@@ -232,47 +236,32 @@ def _save_legend_figure(handles, out_path: str) -> None:
     plt.close(fig)
 
 
-def axon_network(geometry, coords, config, out_path, *, layout=None, node_size=10,
-                 title="axon_network", n_sample=500, max_edges=4000, seed=0, area=None,
-                 show_axons=True):
-    """結合を**軸索伸長過程の折れ線**として描く (直線矢印で描く `network` の対になる図)。
+def axon_network(view, out_path) -> None:
+    """結合を**それを作った軸索の折れ線**として描く (`network` の対になる図)。
 
-    `axon_growth` では結合は細胞体を結ぶ直線ではなく、伸びた軸索が誰かの樹状突起円を
-    横切った結果として生まれる。この図はその経路をそのまま描くので、
-    「どのブリッジを通ってモジュール間がつながったのか」が読める。
+    `axon_growth` の結合は、伸びた軸索が誰かの樹状突起円を横切った結果として生まれる。
+    その経路をそのまま描くので「どのブリッジを通ってモジュール間がつながったのか」が
+    読める。実線が pre から伸びた軸索、破線が接触点から post の細胞体へ届いた樹状突起で、
+    線幅は一定 (主題は経路の形)。
 
-    `network()` と**同じ seed から同じ順に乱数を引く**ので、2 枚の図に出るニューロンと
-    結合は一致する (エッジの順序も、COO の行優先順で揃う)。
-    並べて比較するための性質なので、サンプリングの手順を変えるときは両方同時に変えること。
+    凡例は `{stem}_legend.png` として別ファイルに出る。
 
-    凡例は図の中には描かず `{title}_legend.png` として別に保存する。軸索は領域全体に
-    広がるので、凡例をどこに置いても経路を隠してしまうため。
-
-    重みは受け取らない。この図の主題は経路の形なので線幅は一定。
-    矢印も描かない: 実線 = pre から伸びた軸索、破線 = 接触点から post 細胞体へ届いた
-    樹状突起、という区別がそのまま向きを表すし、annotate を数千回呼ぶと折れ線では重すぎる。
-
-    Parameters:
-        geometry: `seg_start` / `seg_end` / `offsets` / `pre` / `post` / `contact_seg` /
-            `contact_t` を持つオブジェクト (`AxonGrowthTopology.axon_geometry()` の戻り値)。
-            ダックタイピングで受けるので `src/models` には依存しない。
-        coords (np.ndarray): ニューロンの座標配列 (N, 2 以上)。
-        config: AppConfig。矩形空間 (x_range/y_range) なら軸範囲に使う。
-        layout: NetworkLayout。渡すと E/I で色分けする (省略時は一色)。
-        n_sample (int): 描画に用いるニューロンのサンプリング数。
-        max_edges (int): 描画する結合数の上限。
-        seed (int): サンプリングの乱数シード。`network()` と揃えること。
-        area: BaseArea。渡すと領域の境界線を背景に敷き、軸範囲もそこから取る。
-        show_axons (bool): サンプルしたニューロンの軸索**全体**を薄いグレーで下敷きにする。
-            結合を作らなかった軸索もここに出るので、伸長過程そのものが見える。
+    `network()` と**同じ乱数列を同じ順に消費する**ので、2 枚の図に出るニューロンと結合は
+    一致する。サンプリングの手順を変えるときは両方同時に変えること。
     """
+    geometry = view.geometry()
+    coords = view.coords()
+    config = view.config
+    layout = view.layout
+    area = optional(view.area)
+
     coords = np.asarray(coords, dtype=np.float64)
     N = coords.shape[0]
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(SAMPLE_SEED)
     x, y = coords[:, 0], coords[:, 1]
 
     # --- network() と同一のサンプリング (乱数の消費順まで同じ) ---
-    sample = _sample_nodes(N, n_sample, rng)
+    sample = _sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
     is_exc = _excitatory_mask(layout, N)
@@ -280,8 +269,8 @@ def axon_network(geometry, coords, config, out_path, *, layout=None, node_size=1
     pre = np.asarray(geometry.pre, dtype=np.int64)
     post = np.asarray(geometry.post, dtype=np.int64)
     edges = np.nonzero(in_sample[pre] & in_sample[post])[0]
-    if edges.size > max_edges:
-        edges = edges[rng.choice(edges.size, size=max_edges, replace=False)]
+    if edges.size > MAX_EDGES:
+        edges = edges[rng.choice(edges.size, size=MAX_EDGES, replace=False)]
 
     fig, ax = plt.subplots(figsize=(12, 10))
 
@@ -289,7 +278,7 @@ def axon_network(geometry, coords, config, out_path, *, layout=None, node_size=1
 
     # --- 下敷き: サンプルしたニューロンの軸索を丸ごと ---
     underlay = []
-    if show_axons:
+    if SHOW_ALL_AXONS:
         underlay = [poly for poly in (_axon_polyline(geometry, int(i)) for i in sample)
                     if len(poly) > 1]
         if underlay:
@@ -309,7 +298,7 @@ def axon_network(geometry, coords, config, out_path, *, layout=None, node_size=1
         ax.add_collection(LineCollection(stubs, colors=colors, linewidths=0.8,
                                          linestyles=(0, (2, 2)), zorder=1.5))
 
-    _draw_nodes(ax, x, y, sample, is_exc, node_size)
+    _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
     # 凡例は _draw_nodes が付けた E/I に線種の説明を足す (色は送信元の極性で決まる)。
     # ただしこの図には載せず、`{title}_legend.png` として別に出す (_save_legend_figure)。
@@ -324,7 +313,7 @@ def axon_network(geometry, coords, config, out_path, *, layout=None, node_size=1
         ax.get_legend().remove()
 
     ax.set_aspect('equal')
-    ax.set_title(f"{title}\n{sample.size} neurons sampled, {len(paths)} synapses "
+    ax.set_title(f"{AXON_TITLE}\n{sample.size} neurons sampled, {len(paths)} synapses "
                  f"drawn along axons, {len(underlay)} axons")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")

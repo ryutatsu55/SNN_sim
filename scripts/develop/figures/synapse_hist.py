@@ -14,7 +14,7 @@ from src.utils.analysis.weights import (
     excitatory_flags,
     synapse_distances,
 )
-from scripts.tools.runview import MissingData
+from src.utils.runview import MissingData
 from scripts.develop.figures import save
 from scripts.develop.figures.style import BLOCK_COLORS
 
@@ -30,12 +30,11 @@ def _value_distribution(built, values: np.ndarray, out_path: Path, *,
                         xlabel: str, title: str, unit: str = "") -> None:
     """COO 上の per-synapse 量のヒストグラム (左: 全体 / 右: E/I ブロック別)。
 
-    「各シナプスに 1 つ値が付いている」ものなら何でも描ける汎用版。遅延・距離・重みは
-    量が違うだけで見たい形は同じなので、図の骨格はここ 1 つに集約している。右パネルは
-    左と**同じビン境界**を使うので、ブロック別の山が全体のどこに乗っているか読める。
+    遅延・距離・重みの共通の骨格。右パネルは左と**同じビン境界**を使うので、
+    ブロック別の山が全体のどこに乗っているか読める。
 
     Args:
-        built: `store/built.py` の `Built`。row/col と E/I の分類をここから取る。
+        built: 契約の `Built`。row/col と E/I の分類をここから取る。
         values: 各シナプスの値 (1D, wiring と index 整合)
         xlabel: 横軸ラベル (単位を含めて呼び出し側が決める)
         title: 図全体のタイトル
@@ -89,15 +88,13 @@ def delay_distribution(built, out_path: Path) -> None:
     )
 
 def distance_distribution(built, out_path: Path) -> None:
-    """実在する結合の**長さ**のヒストグラム (全体 + E/I ブロック別)。遅延版の距離版。
+    """実在する結合の**長さ**のヒストグラム (全体 + E/I ブロック別)。
 
-    距離依存の結合則では遅延が距離の一次関数なので、`delay: distance_based` ならこの図は
-    遅延の図と相似形になる。両方を出す意味は、**一致しないとき**にどちらが原因かが分かる
-    ことにある (遅延だけ頭打ち = `max_delay` の clip、距離だけ広がっている = 伝導速度の設定)。
+    `delay: distance_based` なら遅延の図と相似形になる。ずれたときは、遅延だけ頭打ち
+    なら `max_delay` の clip、距離だけ広がっているなら伝導速度の設定。
 
-    `empirical_connection_probability` とは分母が違う。あちらは「その距離にある
-    ペアのうち何割が繋がったか」(確率)、こちらは「実際に張られた結合が何本あるか」(件数)。
-    ペアの数自体が距離とともに増えるので、確率が単調減少でも件数はピークを持つ。
+    `empirical_connection_probability` とは分母が違う。あちらは確率
+    (その距離のペアのうち何割が繋がったか)、こちらは件数。
     """
     wiring = built.wiring()
     _value_distribution(
@@ -106,11 +103,9 @@ def distance_distribution(built, out_path: Path) -> None:
     )
 
 def weight_distribution(built, out_path: Path) -> None:
-    """重み分布を全体 + E/I ブロック別のパネルで描く。
+    """その時点の重み分布を全体 + E/I ブロック別のパネルで描く。
 
-    **build 直後の初期重み 1 時点ぶん。** 時間発展の方は `weight_matrix.py` の
-    パネル図と `fig2c.py` の軌跡が受け持つ。重ね描きの骨格 (`hours` のループ) は
-    残してあるので、複数時刻を描きたくなったらここに渡す時刻を増やせばよい。
+    時間発展は `weight_matrix.py` のパネル図と `fig2c.py` の軌跡が受け持つ。
     """
     wiring = built.wiring()
     if wiring.num_synapses == 0:

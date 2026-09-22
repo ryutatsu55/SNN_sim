@@ -19,7 +19,7 @@ from src.utils.analysis.weights import (
     excitatory_flags,
     synapse_distances,
 )
-from scripts.tools.runview import MissingData
+from src.utils.runview import MissingData
 from scripts.develop.figures import save, style
 from scripts.develop.figures.style import BLOCK_COLORS, Ordering
 
@@ -58,16 +58,12 @@ def connection_mask(built, out_path: Path) -> None:
     (40000, 40000) の imshow は不可能かつ視覚的にも無意味なので、並べ替えた表示順位の
     軸上で K×K のセルに落とし、セルごとの結合密度 (実結合数 / セル内の全ペア数) を描く。
 
-    **並べ替え軸はラスターと同じ** (`style.available_order_axes()`)。`("polarity",)`
-    (E/I ブロック) でも `("module",)` (モジュールごとのブロック) でも
-    `("module", "polarity")` (モジュールで切って各モジュール内で E→I) でも同じ形で効く。
-    最外ブロックには軸の値 (`M0`, `M1`, …) が目盛りとして入る。
+    **並べ替え軸はラスターと同じ** (`style.available_order_axes()`)。最外ブロックには
+    軸の値 (`M0`, `M1`, …) が目盛りとして入る。
 
-    **色 = E/I ブロック (EE/EI/IE/II)、濃さ = 結合確率、線 = 最外ブロックの境界**。
-    E/I の切り替わりには線を引かない (色が既にそれを示しているので、線が 2 種類あると
-    格子が読めなくなる)。カラーバーは E/I と密度の 2 つを同時に表せないので出さず、
-    代わりに E/I ブロックの凡例を出して濃さのスケールをその見出しに書く。
-
+    **色 = E/I ブロック (EE/EI/IE/II)、濃さ = 結合確率、線 = 最外ブロックの境界。**
+    E/I の切り替わりには線を引かない (色が示しているため)。カラーバーの代わりに
+    E/I ブロックの凡例を出し、濃さのスケールをその見出しに書く。
     """
     wiring = built.wiring()
     row, col = wiring.row, wiring.col

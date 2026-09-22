@@ -4,13 +4,10 @@
 
 **引数は run ディレクトリ 1 つだけ。** そこに置かれた `config.yaml` が run の唯一の真実で、
 seed も記録条件もすべてそこから読む。run ディレクトリを作るのも config.yaml を置くのも
-ランチャ (`python -m scripts.develop`) の仕事で、ここではやらない。
+ランチャ (`python -m scripts.develop`) の仕事。
 
-この形の効き目:
-
-- **部分再実行がそのまま手に入る。** 失敗した seed の run ディレクトリを指して叩けばよく、
-  config を書き換える必要がない。
-- **再現が run ディレクトリ単位で閉じる。** ディレクトリごとコピーして叩けば同じ run になる。
+失敗した seed はこれを直接叩けばやり直せる。run ディレクトリごとコピーして叩けば
+同じ run になる。
 """
 import argparse
 import os
@@ -32,7 +29,7 @@ from src.core.simulator import GeNNSimulator
 from scripts.develop.analysis import metrics
 from scripts.develop.report import overview, panels, structure
 from scripts.develop.store import paths
-from scripts.develop.store.built import Built
+from src.utils.runview import BuiltNetwork as Built
 from scripts.develop.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
                                            MetricsWriter, record_filename,
                                            save_connectivity, save_spikes, save_trace,
@@ -50,11 +47,6 @@ import src.models.synapses.standard_models
 import src.models.synapses.custom
 
 
-# GeNN が生成するコード (<model名>_CODE) を集約する親ディレクトリ。
-# 実行環境の都合であって実験条件ではないので config には持たせない。
-GENN_CODE_DIR = "genn_code"
-
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -64,14 +56,10 @@ def parse_args():
 
 
 def resolve_trace(config) -> tuple[int | None, float]:
-    """膜電位トレースの設定を config から読む。`(ニューロン ID | None, 窓幅 [s])`。
+    """膜電位トレースの設定を `task.trace_neuron` / `task.trace_window_s` から読む。
 
-    記録条件なので task.yaml が持つ (`trace_neuron` / `trace_window_s`)。**採ったかどうかが
-    その run の記録の一部**なので、引数では渡せないようにしてある —— 引数にすると、
-    完走した run に trace の npz が無いときに「採らない設定だった」のか「採ろうとして
-    失敗した」のかが区別できなくなる。
-
-    古い config.yaml (このキーが無い時代の run) を再実行できるよう、欠けていれば「採らない」。
+    Returns:
+        `(ニューロン ID | None, 窓幅 [s])`。ID が None なら採らない (キーが無い場合も)。
     """
     neuron = getattr(config.task, "trace_neuron", None)
     window_s = float(getattr(config.task, "trace_window_s", 10.0))
@@ -115,15 +103,13 @@ def run_steps(sim: GeNNSimulator, steps: int, chunk_steps: int, keep_spikes: boo
 
 
 def capture_membrane_window(sim: GeNNSimulator, window_s: float, neuron_id: int):
-    """1ステップずつ進めながら対象ニューロンの V と Isyn_rec を記録し、窓内スパイクを返す。
+    """1 ステップずつ進めながら対象ニューロンの V と Isyn_rec を採り、窓内スパイクを返す。
 
-    メモリ節約のため全ニューロン行列ではなく対象ニューロン1本の列だけ保持する。
-    GeNN の記録バッファは max_timesteps ちょうど溜まった時のみ読み出せるため、
-    採取ステップ数はバッファ長の整数倍に丸め、バッファ境界ごとにスパイクを回収する。
-    直前に run_steps がバッファをフラッシュ済みなので、回収されるのはこの窓のスパイクだけ。
+    保持するのは対象ニューロン 1 本の列だけ。採取ステップ数は GeNN の記録バッファ長の
+    整数倍に丸める (バッファはちょうど溜まった時しか読み出せないため)。
 
     Returns:
-        (V, I, spikes, actual_window_s): actual_window_s はバッファ整数倍に丸めた実表示幅[s]。
+        `(V, I, spikes, actual_window_s)`。`actual_window_s` は丸めた後の実表示幅 [s]。
     """
     dt = sim.dt
     buf = sim.max_timesteps
@@ -158,7 +144,7 @@ def _model_name(run_dir: Path, seed: int) -> str:
     """GeNN のモデル名。**並列実行する run どうしで必ず違う名前になること。**
 
     同じ名前だと `<model名>_CODE` を共有し、同時にコード生成した 2 プロセスが互いの
-    生成物を壊す。seed を必ず含めるのはそのため。
+    生成物を壊す。
     """
     stem = run_dir.parent.name if run_dir.name.startswith("seed") else run_dir.name
     safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in stem)
@@ -170,10 +156,7 @@ def record_once(sim, series, run_dir: Path, hour: float, *,
                 trace_neuron: int | None, trace_window_s: float, metrics_csv) -> None:
     """記録時刻 1 点ぶん: 窓を走らせ、npz を書き、**書いたものを読み直して**出力する。
 
-    最後の一手が要点。in-memory の値をそのまま図へ渡すと、本番と再解析で描画経路が
-    2 本になる (以前は `Trace` を「再解析が npz から組み立てるのと同じ形」に手で
-    組み直していた)。一度書いてから `series.window(hour)` で読み直せば、
-    `replot.py` とまったく同じ呼び出しになる。
+    最後の一手で `replot.py` とまったく同じ呼び出しになる。
     """
     config = series.config
     dt = float(config.simulation.dt)
@@ -263,8 +246,8 @@ def main():
     if trace_neuron is not None:
         print(f"  膜電位トレース: neuron {trace_neuron}, 窓の先頭 {trace_window_s} s")
 
-    builder = NetworkBuilder(config, model_name=_model_name(run_dir, seed),
-                             code_gen_dir=GENN_CODE_DIR)
+    # コード生成先は `src/core/output_manager.py` の GENN_CODE_DIR (既定)。
+    builder = NetworkBuilder(config, model_name=_model_name(run_dir, seed))
     genn_model, layout = builder.build(rec_spike=True)
 
     # **ここが「run の記録」を書く唯一の場所。** build() を通ったので network.sparse は

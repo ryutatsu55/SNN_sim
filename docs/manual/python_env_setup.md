@@ -94,5 +94,5 @@ CUDA_PATH=/usr/local/cuda pip install -e .venv/src/pygenn/ --no-build-isolation
 ### 5. 動作確認
 構築した環境でプロジェクトが動作するか確認
 ```bash
-python scripts/test.py
+python -m scripts.tools.pipeline_check
 ```

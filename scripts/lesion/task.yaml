@@ -1,0 +1,70 @@
+# lesion 実験のプロトコル。
+#
+# **記録プロトコルと損傷プロトコルの両方**がここに入る。develop / akita_soc の task.yaml は
+# 「いつ記録するか」だけだが、損傷実験は「どこを切るか」「いつ切るか」も結果を決めるので、
+# 同じ場所に置く —— どちらも **run ディレクトリの config.yaml に焼き込まれる**ので、
+# 完走した run を見れば何をしたかが全部分かる。
+#
+# **どのプロファイルで走るかはランチャの `--task` が決める** (既定 `lesion`)。
+# develop のようにメイン config の `task:` から取れないのは、lesion のネットワーク設定が
+# 親 run の `config.yaml` から来るため。ランチャがそれと、ここで選んだプロファイルを
+# 合成して run の config.yaml を作る。
+
+lesion:
+  # --- 親 run からの引き継ぎ -------------------------------------------------
+  # 親 run のどの記録時刻の重みを引き継ぐか [h]。null なら**最後の記録**。
+  from_hour: null
+
+  # --- 切断 -----------------------------------------------------------------
+  # 切断 spec。**リストで複数書ける。** 組み合わせ方は cut_combine。
+  #   bridge:kind=inter_cluster                       ブリッジを跨いだ結合
+  #   hub:metric=participation,top=3,direction=out    ハブの出力
+  #   between:axis=module                             群をまたぐ結合
+  #   synapses:pairs=3-7+12-40                        名指し
+  cut:
+    - "bridge:kind=inter_cluster"
+  cut_combine: or            # "or" | "and"
+
+  # --- タイムライン ----------------------------------------------------------
+  # 復元直後・切断直後に落ち着かせる時間 [ms]。
+  settle_ms: 60000.0
+  # ベースライン記録窓 [ms]。null なら record_window_ms と同じ。
+  baseline_window_ms: null
+  # 切断後に観察する総時間 [h] と probe の間隔 [h] (等間隔)。
+  recovery_hours: 12.0
+  probe_interval_hours: 1.0
+  # 1 probe の記録窓 [ms]。
+  record_window_ms: 600000.0
+  # GeNN のスパイク記録バッファ [ms]。**record_window_ms より小さくすること。**
+  record_buffer_ms: 10000.0
+
+  # --- 解析 ------------------------------------------------------------------
+  # ハブ判定の within-module z 閾値 (Guimera-Amaral の既定 2.5)。
+  # **代謝ネットワーク由来の値**なので、次数の小さい網では下げないとハブが 0 個になる。
+  hub_z: 2.5
+  # 重い指標。大きな N では切る。**結果に効くので config 側にある** ——
+  # 引数にすると、列の無い metrics.csv を見て「測ったが 0 だった」のか
+  # 「測っていない」のかが区別できなくなる。
+  include_betweenness: true
+  include_clustering: true
+
+  # 記録としての総時間 [ms]。**実際の run 長を決めるのは上のタイムラインであって
+  # この値ではない。** 食い違わせないこと。
+  duration: 43200000.0       # 12 h
+
+lesion_dense_probe:
+  # 回復の初期を細かく見るプロファイル。probe を 15 分刻みにする。
+  from_hour: null
+  cut:
+    - "bridge:kind=inter_cluster"
+  cut_combine: or
+  settle_ms: 60000.0
+  baseline_window_ms: null
+  recovery_hours: 6.0
+  probe_interval_hours: 0.25
+  record_window_ms: 300000.0
+  record_buffer_ms: 10000.0
+  hub_z: 2.5
+  include_betweenness: true
+  include_clustering: true
+  duration: 21600000.0       # 6 h

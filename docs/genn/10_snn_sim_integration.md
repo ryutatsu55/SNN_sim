@@ -207,7 +207,7 @@ def get_global_spikes(self):
 - SNN_sim は変数アクセスに `pop.vars[name].view` を使います（汎用ドキュメントの `current_view` に相当）。
 - `_split_global_to_local` / `_merge_local_to_global` で「グローバル N ニューロン配列」と
   「ポピュレーションローカル配列」を相互変換します（global↔local インデックス対応は
-  `group_info` が保持）。
+  `NetworkLayout` が保持。`src/core/layout.py`）。
 - `reset()` は各群・各シナプスの変数を numpy 操作で初期状態へ戻し `push_to_device()`、
   試行ベースの実験（複数 trial）に対応します。
 
@@ -232,13 +232,17 @@ def get_global_spikes(self):
 
 ## 10.7 出力と可視化
 
-`scripts/test.py` のメインフロー:
+`scripts/tools/pipeline_check.py` のメインフロー:
 
 ```python
 manager = ConfigManager()
 config = manager.resolve(config_src, TASK_NAME)
+output_dir = create_run_output_dir(TASK_NAME)
+
 builder = NetworkBuilder(config)
-genn_model, group_info = builder.build(rec_spike=True)
+genn_model, layout = builder.build(rec_spike=True)      # 第2要素は NetworkLayout
+
+data_loader = DATA_LOADERS.get(TASK_NAME)(config, layout)
 sim = GeNNSimulator(genn_model, config, builder); sim.setup()
 
 for trial_inputs, meta in data_loader.generate():
@@ -250,15 +254,29 @@ for trial_inputs, meta in data_loader.generate():
     trial_results = sim.get_global_spikes()
     sim.reset()
 
-manager.save_resolved(config, save_dir=output_dir)
-visualize.neuron_test(results, I_in, trial_results["times"], trial_results["ids"], config, save_path=output_dir)
-visualize.network(weights=builder.global_weights, coords=builder.global_coords, config=config, save_path=output_dir)
+manager.save_config(config, save_dir=output_dir)
+
+# モデル単体を手で駆動した結果 = run ではないので契約を取らず、生配列を受ける。
+model_test.neuron_test(results, I_in, trial_results["times"], trial_results["ids"],
+                       config, f"{output_dir}/neuron_test.png")
+
+# ネットワーク図は run の図なので読み出し契約 (view) を通す。
+network(BuiltNetwork.from_builder(builder, output_dir), output_dir / "network.png")
 ```
 
 - 出力先は [src/core/output_manager.py](../../src/core/output_manager.py) の
   `create_run_output_dir(TASK_NAME)` がタイムスタンプ付きで作成（`outputs/<task>/<timestamp>/`）。
-- 可視化は [src/utils/plotting/](../../src/utils/plotting/)（ラスター、ネットワーク図、重み行列など）。
-  重み追跡など Akita 実験固有のものは [src/utils/experiments/akita_soc/](../../src/utils/experiments/akita_soc/)。
+- **描画関数は `(view, out_path)` を取る。** `view` は読み出し契約
+  [src/utils/runview.py](../../src/utils/runview.py) の `Built` / `Window` / `Series` で、
+  build 直後の `NetworkBuilder` は `BuiltNetwork.from_builder()` でそのまま載る。
+  詳細は [docs/architecture/runview_contract.md](../architecture/runview_contract.md)。
+- 汎用の図は [src/utils/plotting/](../../src/utils/plotting/)。ここにあるのは
+  **実験に依存しない道具 (`scripts/tools/`) が使う図だけ**で、実験は自分の
+  `scripts/<実験>/figures/` に持つ（例:
+  [scripts/akita_soc/figures/](../../scripts/akita_soc/figures/)）。
+- `model_test.py` だけは契約を取らない。描く対象が run ではなく
+  「DataLoader を 1 本回しながら毎ステップ `pull()` した配列」で、run ディレクトリも
+  記録窓も持たないため。
 
 ## 10.8 GeNN 汎用ドキュメントとの対応表
 

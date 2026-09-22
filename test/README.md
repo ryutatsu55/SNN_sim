@@ -16,6 +16,7 @@ test/
 │   ├── neurons/    <名前>/    ニューロンモデルの発火動態    → src/models/neurons/
 │   └── plasticity/ <名前>/    可塑性モデルの動態           → src/models/plasticity/
 ├── utils/          test_*.py  解析と描画                  → src/utils/
+├── experiments/    <実験>/    実験ディレクトリの記録規約と読み出し → scripts/<実験>/
 └── archive/                   完了済みの一回性検証。走らせなくてよい
 ```
 
@@ -48,9 +49,13 @@ test/
 | `test_global_coo.py` | 疎/密の生成経路が同じ COO を返さなくなる。build 以降を COO 一本にできる根拠そのもの | 5 / 0.4s |
 | `test_axon_growth.py` | 軸索が領域外へ出る・接していない部分領域が結合する・area が RNG を消費する・`DiskArea` の draw 順が `RandomCircle2DSpace` とずれる | 93 / **107s** |
 | `test_area_plotting.py` | `plot_area()` が境界を閉じない / bbox 全体を塗る / 座標の有無で誤判定する。SDF 実装で踏んだ罠 3 つを固定 | 13 / 3.5s |
-| `test_lesion_builder.py` | `replace_global_coo()`（損傷実験の構造的除去の土台）が壊れる | 25 / 1.3s |
-| `test_akita_soc.py` | Akita モデルの素の数式（escape noise / conductance LIF / STDP kernel / STP）と replot 経路 | 31 / 2.1s |
-| `experiments/develop/test_develop.py` | develop 実験。「論文の 100」が N に追従すること / task プロファイルを config が選ぶこと / seed 範囲の展開 / `config.yaml` が build を通った記録に限られること / 本番と再解析が同じ列を作ること | 30 / 4.5s |
+|  `test_akita_model.py` | Akita モデルの素の数式（escape noise / conductance LIF / STDP kernel / STP）とべき乗フィット・E/I ブロック統計 | 21 / 0.5s |
+| `experiments/test_report_registries.py` | **実験をまたぐ不変条件。** 出力の登録簿が表であること / 名前とファイル名が重複しないこと / 図の種類が `store/paths.py` に登録されていること / 図の md5 基準に載っている png が全部どれかの行から出ること / `report/` が matplotlib も numpy も import しないこと | 18 / 0.8s |
+| `experiments/develop/test_develop.py` | develop 実験。「論文の 100」が N に追従すること / task プロファイルを config が選ぶこと / seed 範囲の展開 / `config.yaml` が build を通った記録に限られること / 本番と再解析が同じ列を作ること | 39 / 6.5s |
+| `experiments/akita_soc/test_akita_soc.py` | akita_soc 実験。記録ファイル名の往復 / 時刻の正が npz にあること / 並べ替えが E/I だけであること / report が matplotlib を持たないこと | 12 / 1.4s |
+| `experiments/lesion/test_lesion.py` | 損傷実験。`replace_global_coo()`（構造的除去の土台）/ 切断 spec の選択 / probe の命名が develop と衝突しないこと / 窓幅が probe ごとに読まれること | 33 / 1.5s |
+| `experiments/lesion/test_lesion_analysis.py` | `axons` / `graph` / `isi` と重みの引き当て経路。area をダックタイピングで受ける契約の検証も兼ねる | 27 / 0.5s |
+| `experiments/no_space_100.yaml` | **pytest ではない。** 実験テスト共通のネットワーク設定 (N=100, `no_space`)。実験の config を借りると、実験の条件を変えるたびにテストが落ちる |
 
 **所要時間の 9 割が `test_axon_growth.py` 1 本**（107 秒。残り全部で 11 秒）。
 軸索・領域に触っていないなら `pytest test/ -q --ignore=test/test_axon_growth.py` で十分。
@@ -120,10 +125,9 @@ GeNN をビルドして実際にスパイクを出す。**自動テストがカ�
 | ファイル | 壊れたら何が起きるか | 件数 |
 |---|---|---|
 | `test_connection_probability.py` | 群間結合確率の分母が「ありうるペア数」でなくなる / 対角から自己ペアが抜けない / プールが単純平均になる | 15 |
-| `test_beggs_plenz.py` | べき指数・σ の推定量が既知の合成データを復元できなくなる | 19 |
+| `test_avalanche_criticality.py` | べき指数・σ の推定量が既知の合成データを復元できなくなる (Beggs & Plenz の 4 指標) | 24 |
 | `test_criticality_index.py` | ΔCr の符号・スケール（Tetzlaff の \|Δp\|=0.195 と同じ土俵）が崩れる | 12 |
-| `test_lesion_analysis.py` | `axons` / `graph` / `isi` と復元経路。area をダックタイピングで受ける契約の検証も兼ねる | 27 |
-| `test_plotting_ordering.py` | 表示用並べ替え軸（単軸=極性、多軸=外でブロック化・内でソート） | 13 |
+| `test_plotting_ordering.py` | 表示用並べ替え軸（単軸=極性、多軸=外でブロック化・内でソート）と、図が契約 `(view, out_path)` を取ること | 13 |
 | `test_spike_animation.py` | スパイクアニメーションの減衰強度 | 2 |
 | `test_spike_csv.py` | `export_spike_csv` の出力行 | 2 |
 

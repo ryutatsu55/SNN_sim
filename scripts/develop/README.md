@@ -8,7 +8,7 @@ Akita SoC Fig.2 相当の発達実験。ネットワークを長時間走らせ�
 ## 走らせる
 
 ```bash
-python -m scripts.develop --config axon_growth_grid --condition gmax25_baseline
+python -m scripts.develop --config axon_growth_hierarchy --condition <条件名>
 ```
 
 **引数はこの 2 つだけ。**
@@ -36,8 +36,8 @@ python -m scripts.develop --config axon_growth_grid --condition gmax25_baseline
 溜める必要がない。
 
 メイン config もこの実験の持ち物なので `scripts/develop/` に置く (1 実験 = 1 ディレクトリ)。
-`configs/` に残っているものを使いたいときは `--config configs/akita_soc.yaml` のように
-パスで渡す。
+`configs/` に残っているものを使いたいときは `--config configs/criticality_test.yaml` の
+ようにパスで渡す。
 
 > **注意: 複数の run を時間差で起動する最中に config を書き換えないこと。**
 > config が読まれるのは起動時の 1 回だけなので、走行中の run は後の編集に影響されない。
@@ -45,17 +45,20 @@ python -m scripts.develop --config axon_growth_grid --condition gmax25_baseline
 
 ### seed
 
-`simulation.seed` に**スカラーでも範囲でも**書ける。
+`simulation.seed` は**スカラー・並べ書き・範囲**のどれでも書ける。`record_hours` と
+同じ規則で、数値は 1 本、`START..STOP[:STEP]` は両端を含む範囲。混ぜられる。
 
 ```yaml
 simulation:
   seed: 5              # seed 5 の run を 1 本
-  seed: [1, 10]        # seed 1〜10 の run を 10 本 (両端を含む)
-  seed: [1, 10, 2]     # STEP 付き = 1, 3, 5, 7, 9
+  seed: [1, 5, 42]     # 並べた 3 本
+  seed: [1..10]        # seed 1〜10 の run を 10 本 (両端を含む)
+  seed: [1..10:2]      # 刻み付き = 1, 3, 5, 7, 9
+  seed: [1, 5..7, 42]  # 混在 = 1, 5, 6, 7, 42
   parallel: 8          # 同時に走らせる run の数
 ```
 
-**`[1, 10]` は「1 と 10 の 2 本」ではなく「1 から 10 まで」。**
+**`[1, 10]` は「1 から 10 まで」ではなく「1 と 10 の 2 本」。** 範囲は `[1..10]` と書く。
 
 seed が複数のときは seed ごとに子プロセスを立てて並列に走らせる。各 run の `config.yaml`
 には展開後の**スカラーの seed** が入り、範囲指定は `source_config.yaml` (入力の逐語コピー)
@@ -86,6 +89,21 @@ task: develop          # task.yaml のプロファイル名
 
 基本は `develop` の 1 つを手で書き換えて使う。記録プロトコルとして本質的に別物のとき
 (発達の追跡ではなく短時間のスモークなど) だけプロファイルを足し、config 側で選ぶ。
+
+記録時刻は数値なら 1 点、`START..STOP[:STEP]` なら両端を含む範囲。混ぜて書ける。
+
+```yaml
+record_hours: [0, 6, 72]      # 0 / 6 / 72 h の 3 点
+record_hours: [0..12]         # 0 h から 12 h まで 1 時間ごと (13 点)
+record_hours: [0..3:0.5]      # 0 h から 3 h まで 30 分ごと
+record_hours: [0, 1..6, 24]   # 混在
+```
+
+書き方は `simulation.seed` と同じ規則。**リストは書いたとおりに読む**ので、`[0, 6, 72]`
+は 3 点。範囲を書けるのは入力 YAML だけで、run の `config.yaml` には展開後の時刻が並ぶ。
+
+`duration` は記録として残るだけで run 長を決めないが、`record_hours` の最大値 +
+`record_window_ms` と食い違わせないこと (記録を読んだ人が run 長を誤読する)。
 
 ### 膜電位トレース
 
@@ -254,7 +272,7 @@ scripts/develop/
 | 新しい指標を `metrics.csv` に足す | `analysis/metrics.py` |
 | 指標の計算方法を変える | 同上。数式そのものは `src/utils/analysis/` |
 | 図の見た目を細かく変える | `figures/<その図>.py`。2 枚以上が一致すべき値なら `figures/style.py` |
-| 新しい図を足す | `figures/` に 1 ファイル + `report/<いつ出すか>.py` に 1 行 |
+| 新しい図を足す | `figures/` に 1 ファイル + `report/<いつ出すか>.py` の `FIGURES` に 1 行 |
 | 図を出すタイミングを変える | `report/` の 3 ファイル間で 1 行移す |
 | 出力先のディレクトリを変える | `store/paths.py` |
 
@@ -268,8 +286,33 @@ scripts/develop/
 | `panels.py` | 記録窓ごと | `Window` |
 | `overview.py` | run 終了後 | `Series` |
 
-1 出力 = 1 行で、図も表も同じ扱いです。`__init__.py` の `guard()` が 1 つずつ包み、
-**「この run はそのデータを持たない」(`MissingData`) と「バグで落ちた」を分けて**報告します。
+各ファイルは先頭に `FIGURES` という表を持ち、`emit()` は**その表を上から順に回すだけ**です。
+図を足すのは表に 1 行足すことで、`emit()` は触りません。`src/utils/runview.py` の `guard()`
+が 1 つずつ包み、**「この run はそのデータを持たない」(`MissingData`) と「バグで落ちた」を
+分けて**報告します。
+
+```python
+FIGURES = (
+    ("area", area_figure, "area.png"),
+    ("connection mask", connection_mask, "connection_mask_coarse.png"),
+    ...
+)
+
+def emit(built) -> None:
+    out = paths.fig_dir(built.run_dir, paths.STRUCTURE)
+    out.mkdir(parents=True, exist_ok=True)
+    for label, draw, name in FIGURES:
+        guard(label, draw, built, out / name)
+```
+
+**表に入らない出力もあります。** 置き場所が `figures/` ではないもの (結合確率の CSV) と、
+`(view, out_path)` の形をしていないもの (`metrics.csv` への 1 行追記) で、それらは
+`emit()` に明示行として残り、なぜ表に入らないかがその場に書いてあります。表は「出力の
+全部」ではなく「図の全部」です。
+
+`panels.py` の表だけは図の種類も持ちます (`(名前, 関数, 種類, ファイル名)`) ——
+ラスターとアバランチとトレースが**別のディレクトリ**へ出るためです。ファイル名の `{tag}`
+にはその窓を一意に指す短い文字列 (develop は記録時刻、lesion は probe 番号と phase) が入ります。
 
 **このパッケージは matplotlib も numpy も import しません。** 橋渡ししかしないので、
 計算も描画も入り込めません。破れていたら、その処理は `analysis/` か `figures/` のものです。
@@ -281,7 +324,10 @@ scripts/develop/
 | `paths.py` | run の内部構造。`data/` と `figures/` と引き継ぎファイル名を知るのはここだけ |
 | `records.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ。CSV は**書き出しだけ** (`MetricsWriter` / `write_table`) —— `metrics.csv` を読むのは `series.py` の `pd.read_csv` 1 か所、結合確率の 2 本は人間向けで誰も読み返さない |
 | `series.py` | `Window` (記録窓 1 つ) と `Series` (run 全体)。`open_run()` が入口 |
-| `built.py` | `Built` (build 直後のネットワーク)。構造図が `NetworkBuilder` を知らずに済むようにする |
+
+`Built` (build 直後のネットワーク) だけは実装まで全実験共通なので、契約の側
+(`src/utils/runview.py` の `BuiltNetwork`) にある。build 直後に手元にあるのはどの実験でも
+同じ `NetworkBuilder` 1 つしかなく、分岐する余地が無いため。
 
 **読み出しだけで、加工はしません。** 「run 全体を通した計算」(重み軌跡・発火レートの
 時系列) は、それを使う図のファイルにあります。
@@ -340,8 +386,8 @@ analysis/connectivity.py  def write_report(built, out_dir) -> None
 `total_neurons` も `order_axes` も `smax` も引数にありません。全部リーダーの
 `config` と `layout` から、その図・その指標が自分で導きます。
 
-リーダーの形は全実験共通の契約で、`scripts/tools/runview.py` にあります
-(`docs/runview_contract.md`)。この実験の `store/` はその実装です。
+リーダーの形は全実験共通の契約で、`src/utils/runview.py` にあります
+(`docs/architecture/runview_contract.md`)。この実験の `store/` はその実装です。
 
 ---
 
@@ -370,14 +416,15 @@ in-memory の値をそのまま渡すと本番と再解析で描画経路が 2 �
 | `src/core/` | ConfigManager / NetworkBuilder / GeNNSimulator / NetworkLayout。シミュレータ本体 |
 | `src/utils/analysis/` | 数式。matplotlib を import しない層 |
 
-このほかに `scripts/tools/runview.py` (読み出し契約) を見ます。実験に依存しない道具なので、
-**一方向に** import してよい層です。
+このほかに `src/utils/runview.py` (読み出し契約と `BuiltNetwork` / `guard`) を見ます。
+`src/utils/plotting/` がこの契約に対して書かれているので、契約は `src/` 側にあります。
 
 `src/utils/plotting/` は**使いません**。相当するものは `figures/` に複製してあります。
 共有せず複製してあるのは、どんな図をどんな形式で出すかが実験ごとに違ってくるからで、
 1 つの関数を全実験で共有すると、違いを吸収するための引数が際限なく増えるためです。
 **この実験の出力はこの実験が全部持つ** —— 線引きに迷う余地を無くすのが目的です。
 
-他の実験 (lesion など) も `scripts/` 直下のスクリプトも import しません。
+他の実験 (`scripts/akita_soc/` / `scripts/lesion/`) も `scripts/` 直下のスクリプトも
+import しません。
 
 テストは `test/experiments/develop/test_develop.py`。

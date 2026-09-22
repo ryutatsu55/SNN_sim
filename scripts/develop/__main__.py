@@ -69,7 +69,7 @@ def parse_args():
 
 
 def resolve_config_path(name: str) -> Path:
-    """`axon_growth_grid` / `axon_growth_grid.yaml` / `configs/akita_soc.yaml` を受ける。
+    """`axon_growth_grid` / `axon_growth_grid.yaml` / `configs/criticality_test.yaml` を受ける。
 
     名前だけを渡した場合は **`scripts/develop/` の中**を見る。パスを含む形で渡せば
     そのまま使うので、`configs/` に置いたままの config も指定できる。
@@ -90,10 +90,7 @@ def resolve_config_path(name: str) -> Path:
 
 
 def seed_dir_name(seed: int) -> str:
-    """`seed01`。ゼロ埋め 2 桁にするのは辞書順と数値順を一致させるため。
-
-    (旧 run の `seed1` … `seed11` は `seed1, seed10, seed11, seed2` と並んでいた)
-    """
+    """`seed01`。ゼロ埋め 2 桁なので辞書順と数値順が一致する。"""
     return f"seed{seed:02d}"
 
 
@@ -136,7 +133,10 @@ def launch(run_dir: Path) -> int:
     親がログの行き先を決めるので、シェル側のリダイレクトも EXIT トラップも要らない
     (run ディレクトリ名が起動前に決まっているからできること)。
     """
-    command = [sys.executable, "-m", "scripts.develop.run_one", str(run_dir)]
+    # `-u` で無バッファにする。子の stdout はファイルなので、既定ではブロック
+    # バッファされて**走り終えるまで run.log が空のまま**になる。長い run の進捗を
+    # 追えないうえ、途中で落ちたときに直前の出力ごと失われる。
+    command = [sys.executable, "-u", "-m", "scripts.develop.run_one", str(run_dir)]
     log_path = run_dir / RUN_LOG_NAME
     with open(log_path, "w", encoding="utf-8") as log:
         completed = subprocess.run(command, cwd=str(project_root), stdout=log,

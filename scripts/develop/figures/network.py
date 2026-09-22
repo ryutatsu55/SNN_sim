@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-from scripts.tools.runview import optional
+from src.utils.runview import optional
 from scripts.develop.figures import save
 from scripts.develop.figures.area import draw_area
 

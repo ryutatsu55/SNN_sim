@@ -27,15 +27,18 @@ from scripts.develop.store.records import METRICS_NAME, MS_PER_HOUR, SPIKES, WEI
     record_filename, save_spikes, save_weight_values
 from scripts.develop.replot import replot
 from scripts.develop.store.series import open_run
-from src.core.config_manager import ConfigManager, expand_seed_spec
+from src.core.config_manager import ConfigManager, expand_hours_spec, expand_seed_spec
 from src.core.layout import NetworkLayout
 from src.core.output_manager import CONFIG_NAME, CONNECTIVITY_NAME, DATA_SUBDIR
 
 TASK_PATH = root_path / "scripts" / "develop" / "task.yaml"
+# テスト用のネットワーク設定。**実験の config を借りない** ——
+# 借りると、実験の条件を変えるたびにテストが落ちる。
+FIXTURE_CONFIG = root_path / "test" / "experiments" / "no_space_100.yaml"
 
 
-def _resolved_config(path="configs/akita_soc.yaml"):
-    return ConfigManager().resolve(str(root_path / path), "develop", task_path=TASK_PATH)
+def _resolved_config(path=FIXTURE_CONFIG):
+    return ConfigManager().resolve(str(path), "develop", task_path=TASK_PATH)
 
 
 def _fake_coo(num_neurons: int = 100, fan_out: int = 3, seed: int = 1):
@@ -62,7 +65,7 @@ def _make_run(tmp_dir, hours=(0.0,)) -> Path:
     paths.prepare(run_dir)
 
     manager = ConfigManager()
-    config = manager.resolve(str(root_path / "configs" / "akita_soc.yaml"), "develop",
+    config = manager.resolve(str(FIXTURE_CONFIG), "develop",
                              task_path=TASK_PATH)
     config.task.record_window_ms = 30000.0
     # 本来 NetworkBuilder が build() 時に焼き込む値。ここはフィクスチャで
@@ -120,7 +123,7 @@ class OrderAxesFallbackTest(unittest.TestCase):
     """
 
     def test_drops_axis_the_layout_does_not_have(self):
-        # akita_soc.yaml は area: no_space なので module 軸を持たない
+        # フィクスチャは area: no_space なので module 軸を持たない
         layout = NetworkLayout.from_config(_resolved_config())
         self.assertFalse(layout.has_axis("module"))
         self.assertEqual(style.available_order_axes(layout), style.FALLBACK_ORDER_AXES)
@@ -150,7 +153,7 @@ class TaskSelectionTest(unittest.TestCase):
     def test_config_without_task_is_rejected(self):
         # `task:` を書いていない config は、既定を推測せず落ちる
         with self.assertRaises(ValueError):
-            ConfigManager().resolve(str(root_path / "configs" / "akita_soc.yaml"),
+            ConfigManager().resolve(str(FIXTURE_CONFIG),
                                     task_path=TASK_PATH)
 
     def test_explicit_argument_still_wins(self):
@@ -203,25 +206,119 @@ class TraceSettingTest(unittest.TestCase):
 
 
 class SeedSpecTest(unittest.TestCase):
-    """`seed: [1, 10]` は「1 と 10 の 2 本」ではなく「1 から 10 まで」。"""
+    """`seed` は数値なら 1 本、`1..10` なら範囲。**書き方は record_hours と同じ。**"""
 
     def test_scalar(self):
         self.assertEqual(expand_seed_spec(5), [5])
 
+    def test_plain_list_stays_literal(self):
+        self.assertEqual(expand_seed_spec([1, 5, 42]), [1, 5, 42])
+
     def test_inclusive_range(self):
-        self.assertEqual(expand_seed_spec([1, 10]), list(range(1, 11)))
+        self.assertEqual(expand_seed_spec(["1..10"]), list(range(1, 11)))
+
+    def test_bare_range_without_a_list(self):
+        self.assertEqual(expand_seed_spec("1..10"), list(range(1, 11)))
 
     def test_range_with_step(self):
-        self.assertEqual(expand_seed_spec([1, 10, 2]), [1, 3, 5, 7, 9])
+        self.assertEqual(expand_seed_spec(["1..10:2"]), [1, 3, 5, 7, 9])
 
-    def test_rejects_a_plain_list_of_seeds(self):
-        # 3 つ以上並べたものは範囲として読めないので、黙って別の意味に解釈しない
+    def test_mixed_and_deduplicated(self):
+        self.assertEqual(expand_seed_spec([42, "5..7", 1, 6]), [1, 5, 6, 7, 42])
+
+    def test_returns_ints(self):
+        # run ディレクトリ名 (seedNN) と config.yaml に入るので float では困る
+        self.assertTrue(all(isinstance(s, int) for s in expand_seed_spec(["1..3"])))
+
+    def test_rejects_a_non_integer_seed(self):
         with self.assertRaises(ValueError):
-            expand_seed_spec([1, 2, 3, 4])
+            expand_seed_spec([1.5])
+
+    def test_rejects_a_malformed_range(self):
+        with self.assertRaises(ValueError):
+            expand_seed_spec(["1-10"])
 
     def test_rejects_reversed_range(self):
         with self.assertRaises(ValueError):
-            expand_seed_spec([10, 1])
+            expand_seed_spec(["10..1"])
+
+    def test_rejects_non_positive_step(self):
+        with self.assertRaises(ValueError):
+            expand_seed_spec(["1..10:0"])
+
+
+class RecordHoursSpecTest(unittest.TestCase):
+    """`record_hours` は数値なら 1 点、`0..12` なら範囲。**リストは範囲にならない。**"""
+
+    def test_plain_list_stays_literal(self):
+        # seed と違ってここが範囲にならないことが、この記法の前提
+        self.assertEqual(expand_hours_spec([0, 6, 72]), [0.0, 6.0, 72.0])
+
+    def test_scalar(self):
+        self.assertEqual(expand_hours_spec(12), [12.0])
+
+    def test_inclusive_range(self):
+        self.assertEqual(expand_hours_spec(["0..12"]), [float(h) for h in range(13)])
+
+    def test_range_with_step(self):
+        self.assertEqual(expand_hours_spec(["0..3:0.5"]),
+                         [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0])
+
+    def test_bare_range_without_a_list(self):
+        self.assertEqual(expand_hours_spec("0..2"), [0.0, 1.0, 2.0])
+
+    def test_mixed_and_deduplicated(self):
+        self.assertEqual(expand_hours_spec([24, "1..3", 0, 2]), [0.0, 1.0, 2.0, 3.0, 24.0])
+
+    def test_step_does_not_accumulate_float_error(self):
+        # 0.1 刻みの足し算をそのまま返すと 0.30000000000000004 が出る
+        self.assertEqual(expand_hours_spec(["0..0.5:0.1"]),
+                         [0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+
+    def test_non_integer_literals_are_not_rounded(self):
+        # 5 s = 1/720 h。テスト config が使う値がそのまま通ること
+        self.assertEqual(expand_hours_spec([0, 0.0013888888888888889]),
+                         [0.0, 0.0013888888888888889])
+
+    def test_rejects_a_malformed_range(self):
+        with self.assertRaises(ValueError):
+            expand_hours_spec(["0-12"])
+
+    def test_rejects_reversed_range(self):
+        with self.assertRaises(ValueError):
+            expand_hours_spec(["12..0"])
+
+    def test_rejects_non_positive_step(self):
+        with self.assertRaises(ValueError):
+            expand_hours_spec(["0..12:0"])
+
+
+class TaskProfileTest(unittest.TestCase):
+    """範囲記法を展開するのは resolve()。読む側は展開後の時刻しか見ない。"""
+
+    def _resolve_with(self, record_hours: str):
+        # **実験の task.yaml を借りない** —— 借りると記録時刻を変えるたびにここが落ちる
+        with tempfile.TemporaryDirectory() as tmp:
+            task_path = Path(tmp) / "task.yaml"
+            task_path.write_text(
+                "develop:\n"
+                "  duration: 43800000.0\n"
+                f"  record_hours: {record_hours}\n"
+                "  record_window_ms: 600000.0\n"
+                "  record_buffer_ms: 10000.0\n"
+                "  trace_neuron: null\n"
+                "  trace_window_s: 10.0\n",
+                encoding="utf-8",
+            )
+            config = ConfigManager().resolve(str(FIXTURE_CONFIG), "develop",
+                                             task_path=task_path)
+            return list(config.task.record_hours)
+
+    def test_resolve_expands_the_range(self):
+        self.assertEqual(self._resolve_with("[0..12]"), [float(h) for h in range(13)])
+
+    def test_resolve_leaves_a_plain_list_alone(self):
+        self.assertEqual(self._resolve_with("[0, 6, 72]"), [0.0, 6.0, 72.0])
 
 
 class RunPathsTest(unittest.TestCase):

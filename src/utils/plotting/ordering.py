@@ -19,7 +19,14 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # 既定の並べ替え。興奮性 (excitatory) が抑制性 (inhibitory) より前に来る。
+# polarity は自動軸なので**どの layout にも必ずある**。最後の拠り所として使える。
 DEFAULT_ORDER_AXES: tuple[str, ...] = ("polarity",)
+
+# モジュール構造を持つ run で使いたい並べ替え。module でブロック化し、各モジュール内で E→I。
+# **ラスターと粗視化結合図が同じ並びになる**ようにここで 1 つに決める。
+# module 軸は `space: area_uniform` + 複合エリアの run にしか無いので、
+# `available_order_axes()` が layout を見て落とす。
+GROUPED_ORDER_AXES: tuple[str, ...] = ("module", "polarity")
 
 
 @dataclass(frozen=True)
@@ -47,9 +54,7 @@ class Ordering:
     def visible_boundaries(self, skip: tuple[str, ...] = ("polarity",)) -> list[tuple[int, int]]:
         """`skip` に挙げた軸の切り替わり位置を除いた境界。
 
-        「E/I は色で判別できるので線は引かない」という描画側の約束をここで表す。
-        `boundaries` の level は `axes` の添字なので、軸名で素直に落とせる。
-        境界そのものは `boundaries` に残るので、落とすのは描画対象からだけ。
+        落とすのは描画対象からだけで、境界そのものは `boundaries` に残る。
         """
         return [(pos, level) for pos, level in self.boundaries if self.axes[level] not in skip]
 
@@ -60,9 +65,7 @@ def resolve_ordering(layout, order_axes: tuple[str, ...] | None = DEFAULT_ORDER_
     Args:
         layout: NetworkLayout。None なら並べ替えなし。
         order_axes: 並べ替えに使う軸を外側から順に。None または空なら並べ替えなし。
-
-    軸が layout に無ければ `NetworkLayout` 側が送出する例外がそのまま伝わる
-    (`layer` 軸を持たない run に `order_axes=("layer",)` を指定した場合など)。
+            layout が持たない軸を渡すと `NetworkLayout` の例外がそのまま伝わる。
     """
     if layout is None or not order_axes:
         return Ordering()
@@ -93,3 +96,43 @@ def block_ticks(ordering: Ordering, size: int) -> list[int]:
     ticks.extend(pos - 1 for pos in ordering.positions(level=0))
     ticks.append(size - 1)
     return sorted({tick for tick in ticks if 0 <= tick < size})
+
+
+def available_order_axes(layout, axes: tuple[str, ...] = GROUPED_ORDER_AXES):
+    """layout が実際に持っている軸だけに絞った並べ替え軸を返す。
+
+    **「どの軸を使うか」を決めるのがここ**で、「その軸で並べ替える」のが
+    `resolve_ordering()`。持たない軸を落とすので、run の途中で例外にならない。
+    """
+    if layout is None or not axes:
+        return None
+    available = tuple(axis for axis in axes if layout.has_axis(axis))
+    if available != tuple(axes):
+        dropped = [axis for axis in axes if axis not in available]
+        print(f"  Note: layout に無い並べ替え軸を除外しました: {dropped}")
+    if not available:
+        available = DEFAULT_ORDER_AXES
+    return available
+
+
+def draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1.0,
+                          skip: tuple[str, ...] = ()) -> None:
+    """ブロック境界に縦横の線を引く。外側の軸ほど太く描く。
+
+    Args:
+        scale: 表示位置 (ニューロン単位) → 画像の画素の倍率。1 ニューロン 1 画素の
+            重み行列では 1.0、粗視化図では `grid / total_neurons`。
+        skip: 挙げた軸の切り替わりには線を引かない。E/I を色で示す図に使う。
+    """
+    for position, level in ordering.visible_boundaries(skip):
+        position = position * scale
+        if not 0 < position < size:
+            continue
+        # 白線の上に細い黒線を重ねると、明背景でも暗背景でも見える。
+        # 縦横それぞれ白 → 黒の順に引くこと (交点で黒が上に来る)。
+        white, black = (1.2, 0.4) if level == 0 else (0.8, 0.25)
+        offset = position - 0.5
+        ax.axhline(offset, color="white", linewidth=white)
+        ax.axvline(offset, color="white", linewidth=white)
+        ax.axhline(offset, color="black", linewidth=black)
+        ax.axvline(offset, color="black", linewidth=black)

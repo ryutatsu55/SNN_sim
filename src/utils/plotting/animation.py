@@ -1,6 +1,29 @@
-import numpy as np
+"""スパイク列を時間発展のアニメーション (MP4) にする。
+
+細胞体の位置に点を打ち、発火からの経過時間で明るさを減衰させる。座標を持たない run
+(`no_space`) では自動で正方格子に並べる —— 空間が無いこと自体は異常ではないので、
+ここだけは `MissingData` を投げずに落とす先を用意してある。
+
+ffmpeg が要る。無ければ `RuntimeError`。
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib import animation
+
+from src.utils.runview import optional
+
+# 見た目と書き出し。**引数にしない** —— 変えたくなったらここを直す。
+FPS = 30
+DECAY_TAU_MS = 20.0
+# 減衰が見えなくなる打ち切り。tau の 5 倍 (e^-5 ≈ 0.7%) で十分。
+DECAY_CUTOFF_SCALE = 5.0
+FIGSIZE = (6, 6)
+MARKER_SIZE = 80
+CMAP = "inferno"
 
 
 def _validate_spike_arrays(spike_time: np.ndarray, neuron_id: np.ndarray):
@@ -103,34 +126,24 @@ def _compute_decay_intensity(
     return intensity
 
 
-def spike_animation(
-    spike_time: np.ndarray,
-    neuron_id: np.ndarray,
-    coords: np.ndarray | None = None,
-    output_path: str = "spike_animation.mp4",
-    fps: int = 30,
-    decay_tau_ms: float = 20.0,
-    decay_cutoff_ms: float | None = None,
-    duration_ms: float | None = None,
-    title: str = "Spike Animation",
-) -> None:
-    """発火時刻とニューロンIDから神経発火イメージのMP4アニメーションを保存する関数"""
+def spike_animation(window, out_path) -> None:
+    """記録窓 1 つのスパイク列を MP4 アニメーションにする。
 
-    spike_time, neuron_id = _validate_spike_arrays(spike_time, neuron_id)
+    座標は**あれば**使い、無ければ正方格子へ並べる (`no_space` の run でも
+    「どのニューロンがいつ光ったか」は読める)。長さは記録窓の幅。
+    """
+    spikes = window.spikes()
+    spike_time, neuron_id = _validate_spike_arrays(spikes.times, spikes.ids)
+    coords = optional(window.coords)
+    fps = FPS
+    decay_tau_ms = DECAY_TAU_MS
+    decay_cutoff_ms = decay_tau_ms * DECAY_CUTOFF_SCALE
 
-    if fps <= 0:
-        raise ValueError("fps must be greater than 0.")
-    if decay_tau_ms <= 0:
-        raise ValueError("decay_tau_ms must be greater than 0.")
-    if decay_cutoff_ms is None:
-        decay_cutoff_ms = decay_tau_ms * 5.0
-    if decay_cutoff_ms <= 0:
-        raise ValueError("decay_cutoff_ms must be greater than 0.")
-
-    if duration_ms is None:
+    duration_ms = float(window.record_window_ms)
+    if duration_ms <= 0:
         duration_ms = float(np.max(spike_time))
     if duration_ms <= 0:
-        raise ValueError("duration_ms must be greater than 0.")
+        raise ValueError("記録窓の長さが 0 です。アニメーションにできません。")
 
     display_ids, display_coords = _resolve_animation_coords(neuron_id, coords)
     display_index = {int(neuron): idx for idx, neuron in enumerate(display_ids)}
@@ -145,20 +158,20 @@ def spike_animation(
     frame_count = max(2, int(np.ceil(duration_ms / 1000.0 * fps)) + 1)
     frame_times = np.linspace(0.0, duration_ms, frame_count)
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=FIGSIZE)
     scatter = ax.scatter(
         display_coords[:, 0],
         display_coords[:, 1],
-        s=80,
+        s=MARKER_SIZE,
         c=np.zeros(display_ids.size),
-        cmap="inferno",
+        cmap=CMAP,
         vmin=0.0,
         vmax=1.0,
         edgecolors="0.25",
         linewidths=0.4,
     )
 
-    ax.set_title(title)
+    ax.set_title(f"Spike animation {window.hour:g} h")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect("equal", adjustable="datalim")
@@ -201,8 +214,10 @@ def spike_animation(
         blit=True,
     )
 
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     writer = animation.FFMpegWriter(fps=fps)
     try:
-        anim.save(output_path, writer=writer)
+        anim.save(str(out_path), writer=writer)
     finally:
         plt.close(fig)

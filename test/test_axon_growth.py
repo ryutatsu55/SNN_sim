@@ -759,14 +759,18 @@ class TestAxonGeometryIO(unittest.TestCase):
         import matplotlib
         matplotlib.use("Agg")
         from src.utils.plotting.network import axon_network
+        from src.utils.runview import BuiltNetwork
 
         geometry, coords = self._geometry()
-        # axon_network が触るのは config.network.space だけ (test_area_plotting と同じ)。
-        config = _cfg(network=_cfg(space=_cfg()))
+        # 図が触るのは view の coords / geometry / config.network.space だけ。
+        config = _cfg(network=_cfg(space=_cfg(),
+                                   area=_cfg(profile_name="no_space"),
+                                   connection=_cfg(profile_name="axon_growth")))
         with tempfile.TemporaryDirectory() as tmp:
             restored = AxonGeometry.load(geometry.save(Path(tmp) / AXONS_NAME))
-            axon_network(restored, coords, config, Path(tmp) / "round_trip.png",
-                         title="round_trip", seed=0)
+            view = BuiltNetwork(run_dir=Path(tmp), config=config, layout=None, coo=None,
+                                coords=coords, geometry=restored)
+            axon_network(view, Path(tmp) / "round_trip.png")
             self.assertTrue((Path(tmp) / "round_trip.png").exists())
 
 

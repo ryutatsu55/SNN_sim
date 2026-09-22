@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from contextlib import contextmanager
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -21,18 +22,15 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.core.config_manager import ConfigManager  # noqa: E402
 from src.core.layout import NetworkLayout  # noqa: E402
 from src.core.output_manager import CONFIG_NAME  # noqa: E402
-from src.utils.analysis.weights import synapse_distances  # noqa: E402
 from src.utils.plotting.distributions import (  # noqa: E402
-    plot_delay_distribution,
-    plot_distance_distribution,
-    plot_synapse_value_distribution,
+    delay_distribution,
+    distance_distribution,
 )
-from src.utils.plotting.matrices import (  # noqa: E402
-    plot_connection_mask_coarse,
-    plot_single_weight_matrix,
-)
+from src.utils.plotting.matrices import connection_mask, weight_matrix  # noqa: E402
+from src.utils.plotting import ordering as ordering_module  # noqa: E402
 from src.utils.plotting.ordering import block_ticks, resolve_ordering  # noqa: E402
-from src.utils.plotting.raster import plot_raster  # noqa: E402
+from src.utils.plotting.raster import raster  # noqa: E402
+from src.utils.runview import BuiltNetwork, Coo, MemoryWindow, Spikes  # noqa: E402
 
 CONFIG_TEMPLATE = """
 simulation: {{N: {total}, dt: 0.1, seed: 1}}
@@ -51,6 +49,69 @@ network:
 task: {{profile_name: test}}
 meta: {{timestamp: test}}
 """
+
+
+@contextmanager
+def monkeypatched_axes(axes):
+    """`available_order_axes()` が返す軸を差し替える。
+
+    並べ替え軸は**図の引数ではなく layout から決まる** (`ordering.available_order_axes`)
+    のが新しい約束なので、軸ごとの振る舞いを見るテストはそこを差し替える。
+
+    各図のモジュールは名前で import しているので、**import 先を 1 つずつ**差し替える
+    (`ordering` 側だけ書き換えても効かない)。
+
+    `import src.utils.plotting.raster` ではモジュールを掴めない —— パッケージの
+    `__init__` が同名の*関数* `raster` を re-export しているので属性参照がそちらに
+    解決される。`importlib.import_module` なら確実にモジュール
+    (`src/utils/CLAUDE.md` の「落とし穴」)。
+    """
+    import importlib
+
+    targets = [ordering_module,
+               importlib.import_module("src.utils.plotting.matrices"),
+               importlib.import_module("src.utils.plotting.raster")]
+    saved = [module.available_order_axes for module in targets]
+    for module in targets:
+        module.available_order_axes = lambda layout, *a, **k: axes
+    try:
+        yield
+    finally:
+        for module, original in zip(targets, saved):
+            module.available_order_axes = original
+
+
+def full_coo(total: int, *, weights=None, delays=None, coords=None) -> Coo:
+    """全ペアの COO。密化は `matrices.py` が描画直前に自分で行う。"""
+    row, col = np.meshgrid(np.arange(total), np.arange(total), indexing="ij")
+    row, col = row.reshape(-1), col.reshape(-1)
+    if weights is None:
+        weights = np.random.default_rng(0).random(row.size)
+    return Coo(row=row, col=col, weights=weights, delays=delays, shape=(total, total))
+
+
+def built(layout, coo: Coo, *, coords=None) -> BuiltNetwork:
+    """契約 (`src/utils/runview.py`) を満たす最小の `Built`。
+
+    図は view からしかデータを取らないので、テストも view を組み立てて渡す。
+    """
+    from types import SimpleNamespace
+    config = SimpleNamespace(
+        simulation=SimpleNamespace(N=layout.total_neurons),
+        network=SimpleNamespace(area=SimpleNamespace(profile_name="no_space"),
+                                space=SimpleNamespace(),
+                                connection=SimpleNamespace(profile_name="constant_prob_full")))
+    return BuiltNetwork(run_dir=Path("."), config=config, layout=layout, coo=coo,
+                        coords=coords)
+
+
+def window(layout, times, ids) -> MemoryWindow:
+    """ラスター用の最小の `Window`。"""
+    from types import SimpleNamespace
+    config = SimpleNamespace(simulation=SimpleNamespace(N=layout.total_neurons),
+                             task=SimpleNamespace(duration=1000.0))
+    return MemoryWindow(Path("."), config, layout,
+                        spikes=Spikes(times=np.asarray(times), ids=np.asarray(ids)))
 
 
 def make_layout(num_exc: int, num_inh: int, assignment: str = "sequential") -> NetworkLayout:
@@ -126,14 +187,14 @@ def test_plots_accept_nested_axes(tmp_path):
     weights = np.random.default_rng(0).random(row.size)
 
     matrix_path = tmp_path / "matrix.png"
-    plot_single_weight_matrix(row, col, weights, layout, matrix_path, "W",
-                              order_axes=("layer", "polarity"))
-    assert matrix_path.stat().st_size > 0
+    with monkeypatched_axes(("layer", "polarity")):
+        weight_matrix(built(layout, Coo(row=row, col=col, weights=weights, delays=None,
+                                        shape=(10, 10))), matrix_path)
+        assert matrix_path.stat().st_size > 0
 
-    raster_path = tmp_path / "raster.png"
-    plot_raster(np.array([0.0, 100.0, 200.0]), np.array([0, 5, 9]), raster_path, "R",
-                layout=layout, order_axes=("layer", "polarity"))
-    assert raster_path.stat().st_size > 0
+        raster_path = tmp_path / "raster.png"
+        raster(window(layout, [0.0, 100.0, 200.0], [0, 5, 9]), raster_path)
+        assert raster_path.stat().st_size > 0
 
 
 def test_polarity_boundary_is_not_drawn():
@@ -164,10 +225,10 @@ def test_module_boundaries_survive_the_polarity_filter(tmp_path):
     assert [level for _, level in visible] == [0, 0]
     assert [pos for pos, _ in visible] == ordering.positions(level=0)
 
-    # 描画も通ること (モジュールでブロック化したラスター)
+    # 描画も通ること (モジュールでブロック化したラスター)。軸を選ぶのは図ではなく
+    # `available_order_axes()` なので、layout が module を持っていれば自動でこうなる。
     raster_path = tmp_path / "raster_module.png"
-    plot_raster(np.array([0.0, 100.0, 200.0]), np.array([0, 5, 9]), raster_path, "R",
-                layout=layout, order_axes=("module", "polarity"))
+    raster(window(layout, [0.0, 100.0, 200.0], [0, 5, 9]), raster_path)
     assert raster_path.stat().st_size > 0
 
 
@@ -183,13 +244,16 @@ def test_coarse_mask_groups_by_the_given_axis(tmp_path):
     row, col = np.meshgrid(np.arange(10), np.arange(10), indexing="ij")
     row, col = row.reshape(-1), col.reshape(-1)
 
+    view = built(layout, Coo(row=row, col=col, weights=np.ones(row.size), delays=None,
+                             shape=(10, 10)))
     paths = {}
     for name, axes in (("polarity", ("polarity",)),
                        ("module", ("module",)),
                        ("nested", ("module", "polarity")),
                        ("none", None)):
         paths[name] = tmp_path / f"coarse_{name}.png"
-        plot_connection_mask_coarse(row, col, layout, 10, paths[name], order_axes=axes)
+        with monkeypatched_axes(axes):
+            connection_mask(view, paths[name])
         assert paths[name].stat().st_size > 0
 
     # 軸が違えば並びが違うので、画像も違う
@@ -241,7 +305,10 @@ def test_coarse_mask_survives_more_blocks_than_ticks(tmp_path):
     row = col = np.arange(n)
 
     out = tmp_path / "many_blocks.png"
-    plot_connection_mask_coarse(row, col, layout, n, out, order_axes=("module",))
+    view = built(layout, Coo(row=row, col=col, weights=np.ones(row.size), delays=None,
+                             shape=(n, n)))
+    with monkeypatched_axes(("module",)):
+        connection_mask(view, out)
     assert out.stat().st_size > 0
 
 
@@ -252,34 +319,40 @@ def test_missing_axis_is_reported():
 
 
 def test_delay_and_distance_share_one_histogram(tmp_path):
-    """遅延版と距離版は `plot_synapse_value_distribution` の薄い包み。
+    """遅延版と距離版は `_synapse_value_distribution` の薄い包み。
 
-    骨格が 1 つであることの担保。距離は座標から導けるので、遅延に「距離/速度」を渡せば
-    2 枚は軸ラベル以外同じ図になるはず。
+    骨格が 1 つであることの担保。どちらも同じ view から値を取り、軸ラベルだけが違う。
     """
     layout = make_layout(6, 4, assignment="sequential")
     coords = np.random.default_rng(0).random((10, 3)) * 100.0
     row = np.array([0, 1, 2, 6, 7])
     col = np.array([1, 2, 7, 0, 8])
+    view = built(layout,
+                 Coo(row=row, col=col, weights=np.ones(row.size),
+                     delays=np.linspace(1.0, 5.0, row.size), shape=(10, 10)),
+                 coords=coords)
 
     distance_path = tmp_path / "distance.png"
-    plot_distance_distribution(coords, row, col, layout, 10, distance_path)
+    distance_distribution(view, distance_path)
     assert distance_path.stat().st_size > 0
 
-    # 同じ値を「遅延」として渡しても図は描ける (共通実装を通っている)
     delay_path = tmp_path / "delay.png"
-    plot_delay_distribution(synapse_distances(coords, row, col), row, col, layout, 10,
-                            delay_path)
+    delay_distribution(view, delay_path)
     assert delay_path.stat().st_size > 0
 
 
-def test_synapse_value_distribution_handles_no_synapses(tmp_path):
-    """結合ゼロでも落ちないこと (mean/max を空配列に対して呼ばない)。"""
+def test_synapse_value_distribution_rejects_no_synapses(tmp_path):
+    """結合ゼロは `MissingData`。**空配列の mean/max を呼ばない。**
+
+    「描けない」を例外で言うのが契約の形。図の中で分岐して空の図を出すと、
+    「結合が無かった」のか「描画に失敗した」のかが後から区別できない。
+    """
+    from src.utils.runview import MissingData
+
     layout = make_layout(6, 4, assignment="sequential")
     empty = np.array([], dtype=np.int64)
-    out_path = tmp_path / "empty.png"
+    view = built(layout, Coo(row=empty, col=empty, weights=np.array([]),
+                             delays=np.array([]), shape=(10, 10)))
 
-    plot_synapse_value_distribution(np.array([]), empty, empty, layout, 10, out_path,
-                                    xlabel="Distance [um]", title="empty")
-
-    assert out_path.stat().st_size > 0
+    with pytest.raises(MissingData):
+        delay_distribution(view, tmp_path / "empty.png")

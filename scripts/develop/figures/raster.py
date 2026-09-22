@@ -19,11 +19,11 @@ DPI = 200
 
 
 def raster(window, out_path: Path) -> None:
-    """記録窓 1 つのラスター図を描く。
+    """記録窓 1 つのラスター図。
 
-    y 軸は `style.available_order_axes()` の順に並べ替え (表示ID は 1 始まり)、
+    y 軸は `style.available_order_axes()` の順に並べ替え (表示 ID は 1 始まり)、
     興奮性=赤 / 抑制性=青で色分けし、**E/I 以外の**ブロックの境目に破線を引く。
-    並べ替え軸が 1 つも使えない layout では生のグローバルIDをそのまま y 軸に使う。
+    並べ替え軸が 1 つも使えない layout では生のグローバル ID をそのまま y 軸に使う。
     """
     spikes = window.spikes()
     times, ids = spikes.times, spikes.ids

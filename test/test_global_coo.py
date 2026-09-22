@@ -27,6 +27,7 @@ import src.models.network.weights  # noqa: F401,E402
 import src.models.neurons.akita_escape_lif  # noqa: F401,E402
 
 # 疎と密の両方を実装しているコンポーネントの組み合わせ (connection: beggs_plenz)。
+# task プロファイルはネットワーク生成に効かないので、汎用の smoke で足りる。
 _CONFIG = root_path / "configs" / "criticality_test2.yaml"
 _NUM_EXC = 48
 _NUM_INH = 12
@@ -39,7 +40,7 @@ _ORIG_R = 3000.0
 
 def _build(sparse_mode: str):
     """同じ seed で 1 度ビルドし、正規化済みの COO を返す。"""
-    config = ConfigManager().resolve(str(_CONFIG), "beggs_plenz_smoke")
+    config = ConfigManager().resolve(str(_CONFIG), "smoke")
     # 単体テストとして回る規模へ縮める。密経路が (N,N) を 3 本作るので N は小さく保つ。
     names = list(config.neurons)
     config.neurons[names[0]].num = _NUM_EXC
@@ -94,7 +95,7 @@ class GlobalCooTest(unittest.TestCase):
         self.assertEqual(self.dense.global_coo().num_synapses, mask_nnz)
 
     def test_global_coo_before_generation_raises(self):
-        config = ConfigManager().resolve(str(_CONFIG), "beggs_plenz_smoke")
+        config = ConfigManager().resolve(str(_CONFIG), "smoke")
         config.simulation.backend = "cpu"
         with self.assertRaises(RuntimeError):
             NetworkBuilder(config).global_coo()

@@ -1,0 +1,49 @@
+# akita_soc 実験の記録プロトコル。
+#
+# **この実験の持ち物なのでここに置いてある。** `configs/components/tasks.yaml` は
+# 「いつ記録するか」(記録プロトコル) と「どんなタスクか」(spatial_recognition などの
+# 入出力定義) という別物が同じ棚に載っている状態だった。
+#
+# **どのプロファイルで走るかはメイン config の `task:` が決める。**
+#
+#     # scripts/akita_soc/akita_soc.yaml
+#     task: akita_soc
+#
+# 記録条件は結果を変えるので、選択も config 側にある (CLI の引数にはしない)。
+
+akita_soc:
+  # 総シミュレーション時間 [ms]。
+  # **実際の run 長を決めるのは record_hours の最大値 + record_window_ms であって、
+  # この値ではない。** 記録として config.yaml に残るだけなので、record_hours と
+  # 食い違わせないこと。
+  duration: 259200000.0       # 72 h
+
+  # 記録する時刻 [h]。論文 Fig.2 は 0 / 6 / 72 h の 3 点。
+  # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲 (`[0..12]` / `[0..3:0.5]`)。
+  # **リストは範囲にならない。** 書き方は `config_manager.expand_hours_spec()` を参照。
+  record_hours: [0, 6, 72]
+
+  # 1 記録窓の長さ [ms]
+  record_window_ms: 600000.0  # 10 min
+
+  # GeNN のスパイク記録バッファ [ms]。窓をこの単位で刻んで回収する。
+  # **record_window_ms より小さくすること。**
+  record_buffer_ms: 10000.0
+
+  # --- 膜電位トレース -------------------------------------------------------
+  # 記録窓の先頭で、1 ニューロンの V と Isyn_rec を 1 ステップ刻みで採る。
+  # 同じ窓のラスターと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
+  # **null なら採らない (既定)。** 遅いので、採りたいときだけニューロン ID を書く。
+  trace_neuron: null
+  trace_window_s: 10.0
+
+akita_soc_stable_probe:
+  # 遷移の時刻を細かく追うためのプロファイル。記録点を 8 つに増やす。
+  # **記録プロトコルとして本質的に別物**なのでプロファイルを分けてある
+  # (条件を変えるだけなら config を書き換えればよく、プロファイルは増やさない)。
+  duration: 259200000.0       # 72 h
+  record_hours: [0, 1, 3, 6, 12, 24, 48, 72]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0

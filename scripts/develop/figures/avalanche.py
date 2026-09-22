@@ -29,9 +29,8 @@ def draw_discrete_distribution(
     Args:
         ax: 描画先。図の生成と保存は呼び出し側の責任。
         fit: `fit_distribution_curves` の結果。
-        xlabel: x 軸ラベル (「何の分布か」は実験によって違うので引数)。
-        reference_slope: 指定すると、その傾きの参照直線を経験分布の先頭に合わせて重ねる
-            (Beggs & Plenz のサイズ -3/2 / 寿命 -2 など)。None なら描かない。
+        xlabel: x 軸ラベル。
+        reference_slope: 指定すると、その傾きの参照直線を経験分布の先頭に合わせて重ねる。
     """
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Probability")
@@ -58,11 +57,10 @@ def draw_discrete_distribution(
               title_fontsize=6.5)
 
 def avalanche_distribution(window, out_path: Path) -> None:
-    """記録窓のスパイク列からアバランチを切り出し、サイズ分布を 1 枚の図にする。
+    """記録窓のスパイク列からアバランチを切り出し、サイズ分布を log-log で描く。
 
-    べき乗フィットの打ち切りは**系のサイズ N** (論文の [1, 100] は N=100 のこと。
-    理由は `analysis/metrics.py` の `resolve_avalanche_smax` に書いてある)。
-    config から直に読むので、指標側と食い違いようがない。
+    べき乗フィットの打ち切りは**系のサイズ N**。指標側と同じ値を config から直に読む
+    (`analysis/metrics.py` の `resolve_avalanche_smax`)。
     """
     smax = int(window.config.simulation.N)
     sizes = split_avalanches(np.asarray(window.spikes().times, dtype=np.float64)).sizes

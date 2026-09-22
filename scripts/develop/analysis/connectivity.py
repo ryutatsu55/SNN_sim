@@ -22,7 +22,7 @@ from src.utils.analysis.connectivity import (
     hop_connection_probability,
 )
 
-from scripts.tools.runview import optional
+from src.utils.runview import optional
 from scripts.develop.store.records import write_table
 # 群分けの軸は**粗視化図と同じもの**でなければ、絵と数値が別のことを言う。選び方を
 # 2 つ持たないよう `style` から借りる (`style.py` は matplotlib を持たないので、
@@ -36,11 +36,8 @@ HOPS_NAME = "bridge_hops.csv"
 def write_report(built, out_dir: Path) -> None:
     """群間結合確率を CSV に書き、整形した表を標準出力 (= run.log) へ出す。
 
-    軸は粗視化図と同じ最外軸 (`style.available_order_axes()[0]`) を使う。並べ替え軸を
-    持たない run では出しようがないので黙って飛ばす。
-
-    `out_dir` は CSV の置き場所 (= `data/`)。図と違って 2 本まとめて出すので、
-    ファイル名まではここが決める。
+    軸は粗視化図と同じ最外軸。並べ替え軸を持たない run では何も出さない。
+    `out_dir` は CSV の置き場所 (= `data/`)。2 本まとめて出すのでファイル名はここが決める。
     """
     order_axes = style.available_order_axes(built.layout)
     if not order_axes:

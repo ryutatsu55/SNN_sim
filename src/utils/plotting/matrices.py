@@ -1,12 +1,14 @@
 """**結合構造そのもの**の描画 — 誰と誰が、どれくらいの強さで繋がっているか。
 
-3 枚を持つ。いずれも座標を使わない (空間に置いた図は `network.py`):
+3 枚を持つ。いずれも `(view, out_path)` を取る (`src/utils/runview.py` の契約):
 
-- `plot_single_weight_matrix` / `plot_weight_panel` : 重み行列の imshow。
-- `plot_connection_mask_coarse` : 結合密度を K×K に粗視化した画像。N が大きすぎて
+- `weight_matrix` / `weight_panel` : 重み行列の imshow。前者はある 1 時点、後者は
+  `Series` の記録時刻を並べたもの。
+- `connection_mask` : 結合密度を K×K に粗視化した画像。N が大きすぎて
   1 ニューロン 1 ピクセルでは描けない規模のための、上の 2 つの縮約版。
-- `plot_empirical_connection_probability` : 同じ結合を **距離の関数** として見た図。
+- `empirical_connection_probability` : 同じ結合を **距離の関数** として見た図。
   行列を距離で周辺化したものなので、絵の形は曲線でも主題は結合構造そのもの。
+  座標が要るので、`no_space` の run では view が `MissingData` を投げる。
 
 **入力は COO** (row, col と index 整合の値の 1D 配列) — ビルド以降の受け渡しは COO 一本、
 という全体の規約に従う。ただし imshow は本質的に (N, N) の画像を要求するので、
@@ -15,10 +17,11 @@
 N が `DENSE_RENDER_LIMIT` を超えるとメモリに乗らないので、その場合は同じモジュールの
 粗視化図 (`plot_connection_mask_coarse`) へ誘導する。
 
-並べ替えは **3 枚とも同じ `order_axes`** で指定する (`src.utils.plotting.ordering` を参照)。
-既定の `("polarity",)` は興奮性を先頭ブロックに置く。`("module",)` ならモジュールごとの
-ブロックに、`("module", "polarity")` ならモジュールで切ったうえで各モジュール内が E→I に
-なる。粗視化図もこの仕組みに乗っているので、E/I 専用だった頃の `display_rank()` は無くなった。
+並べ替えは `src.utils.plotting.ordering` が一手に決める。**引数では受けない** ——
+ラスターと粗視化図が同じ並びであることが「2 枚を並べて読む」ことの前提なので、
+呼び出し側から片方だけ動かせてはいけない。`available_order_axes()` が layout を見て
+`("module", "polarity")` か `("polarity",)` を選ぶ。重み行列だけは N×N に module まで
+刻むと帯が細くなって読めないので、E/I だけでブロック化する (`WEIGHT_ORDER_AXES`)。
 
 **E/I の示し方は 2 枚で違う。** 重み行列は色を重みの値に使っているので E/I は線で示す。
 粗視化図は色そのものが空いているので E/I を **色** (EE/EI/IE/II) に割り当て、線は
@@ -45,18 +48,36 @@ from src.utils.plotting.common import BLOCK_COLORS, save_figure
 from src.utils.plotting.ordering import (
     DEFAULT_ORDER_AXES,
     Ordering,
+    available_order_axes,
     block_ticks,
+    draw_block_boundaries,
     resolve_ordering,
 )
+from src.utils.runview import MissingData
 
 # 密な (N, N) float64 を組んでよい N の上限 (20000^2 x 8B = 3.2 GiB)。
 DENSE_RENDER_LIMIT = 20000
 
+# 重み行列の並べ替え軸。**粗視化図やラスターとは別。** 行列は N×N なので、module まで
+# 刻むと帯が細くなって読めない。
+WEIGHT_ORDER_AXES = DEFAULT_ORDER_AXES
+
+# 見た目。**引数にしない** —— 変えたくなったらここを直す。
+SINGLE_FIGSIZE = (6, 5.4)
+PANEL_CELL = (4.2, 3.9)       # パネル 1 コマぶんの (幅, 高さ)
+VMIN, VMAX = 0.0, 1.0         # 重みは [0, 1] (可塑性の Wmax で正規化済み)
+CMAP = "viridis"
+DPI = 200
+GRID = 256                    # 粗視化の解像度 (K×K)
+PROB_N_SRC = 2000             # 距離ビンの分母に使う送信ニューロンのサンプル数
+PROB_NUM_BINS = 40
+PROB_SEED = 0
+
 
 def densify(row: np.ndarray, col: np.ndarray, values: np.ndarray, size: int) -> np.ndarray:
-    """COO を imshow 用の (size, size) 行列へ起こす。**描画直前のローカルな密化**。
+    """COO を imshow 用の (size, size) 行列へ起こす。**描画直前のローカルな密化。**
 
-    結合が無い箇所は 0 で埋まる。これは「絵として黒い」だけで統計には使わないこと
+    結合が無い箇所は 0 で埋まるので、**統計には使わないこと**
     (統計は COO のまま `analysis.weights.block_values` で取る)。
     """
     size = int(size)
@@ -64,7 +85,7 @@ def densify(row: np.ndarray, col: np.ndarray, values: np.ndarray, size: int) -> 
         raise MemoryError(
             f"N={size} の重み行列を画像にするには密な {size**2 * 8 / 2**30:.1f} GiB が"
             f" 必要です (上限 N={DENSE_RENDER_LIMIT})。"
-            " 粗視化図 (plot_connection_mask_coarse) を使ってください。"
+            " 粗視化図 (connection_mask) を使ってください。"
         )
     values = np.asarray(values).reshape(-1)
     row = np.asarray(row, dtype=np.int64)
@@ -76,135 +97,65 @@ def densify(row: np.ndarray, col: np.ndarray, values: np.ndarray, size: int) -> 
     return matrix
 
 
-def _draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1.0,
-                           skip: tuple[str, ...] = ()) -> None:
-    """ブロック境界に縦横の線を引く。外側の軸ほど太く描く。
+def weight_matrix(view, out_path: Path) -> None:
+    """ある 1 時点の重み行列。build 直後の初期重みでも記録窓の重みでも同じ呼び出し。"""
+    coo = view.coo()
+    layout = view.layout
+    ordering = resolve_ordering(layout, WEIGHT_ORDER_AXES)
+    ordered = ordering.apply(densify(coo.row, coo.col, coo.weights, layout.total_neurons))
 
-    `scale` は「表示位置 (ニューロン単位) → 画像の画素」の倍率。1 ニューロン 1 画素の
-    重み行列では 1.0、粗視化図では `grid / total_neurons` になる。
-
-    `skip` に軸名を挙げるとその軸の切り替わりには線を引かない。E/I を**色**で示す図
-    (粗視化図) は `skip=("polarity",)` を渡し、線の種類を 1 つに保つ。値そのものを色に
-    使っている図 (重み行列) は既定の `()` のままで、E/I 境界も線で示す。
-    """
-    for position, level in ordering.visible_boundaries(skip):
-        position = position * scale
-        if not 0 < position < size:
-            continue
-        # 白線の上に細い黒線を重ねると、明背景でも暗背景でも見える。
-        # 縦横それぞれ白 → 黒の順に引くこと (交点で黒が上に来る)。
-        white, black = (1.2, 0.4) if level == 0 else (0.8, 0.25)
-        offset = position - 0.5
-        ax.axhline(offset, color="white", linewidth=white)
-        ax.axvline(offset, color="white", linewidth=white)
-        ax.axhline(offset, color="black", linewidth=black)
-        ax.axvline(offset, color="black", linewidth=black)
-
-
-def plot_single_weight_matrix(
-    row: np.ndarray,
-    col: np.ndarray,
-    weights: np.ndarray,
-    layout,
-    out_path: Path,
-    title: str,
-    vmin: float = 0.0,
-    vmax: float = 1.0,
-    order_axes: tuple[str, ...] | None = DEFAULT_ORDER_AXES,
-) -> None:
-    """
-    重み行列を可視化する。
-
-    Args:
-        row, col: 各結合の送信/受信グローバルID (1D)
-        weights: 各結合の重み (1D, row/col と index 整合)
-        layout: NetworkLayout（並べ替え軸の値と行列サイズをここから取る）
-        out_path: 出力ファイルパス
-        title: グラフタイトル
-        vmin, vmax: カラーバーの範囲
-        order_axes: 並べ替えに使う軸を外側から順に。None ならグローバル ID の順のまま。
-    """
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    ordering = resolve_ordering(layout, order_axes)
-    ordered = ordering.apply(densify(row, col, weights, layout.total_neurons))
-
-    fig, ax = plt.subplots(figsize=(6, 5.4))
-    image = ax.imshow(ordered, origin="upper", interpolation="nearest", vmin=vmin, vmax=vmax, cmap="viridis")
+    fig, ax = plt.subplots(figsize=SINGLE_FIGSIZE)
+    image = ax.imshow(ordered, origin="upper", interpolation="nearest",
+                      vmin=VMIN, vmax=VMAX, cmap=CMAP)
 
     if ordering.enabled:
-        _draw_block_boundaries(ax, ordering, ordered.shape[0])
+        draw_block_boundaries(ax, ordering, ordered.shape[0])
         ticks = block_ticks(ordering, ordered.shape[0])
         ax.set_xticks(ticks)
         ax.set_yticks(ticks)
 
-    ax.set_title(title)
+    ax.set_title(f"Weight matrix {view.hour:g} h" if hasattr(view, "hour")
+                 else "Weight matrix")
     ax.set_xlabel("post neuron id")
     ax.set_ylabel("pre neuron id")
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label="weight")
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    save_figure(fig, out_path, dpi=DPI)
 
 
-def plot_weight_panel(
-    row: np.ndarray,
-    col: np.ndarray,
-    weight_items: list[tuple[float, np.ndarray]],
-    layout,
-    out_path: Path,
-    title: str,
-    vmin: float = 0.0,
-    vmax: float = 1.0,
-    cmap: str = "viridis",
-    order_axes: tuple[str, ...] | None = DEFAULT_ORDER_AXES,
-) -> None:
-    """
-    複数の重み行列をパネル表示する。
+def weight_panel(series, out_path: Path) -> None:
+    """記録時刻ごとの重み行列を時系列に並べたパネル。"""
+    items = [(window.hour, window.weights()) for window in series.windows]
+    if not items:
+        raise MissingData("windows", "記録窓が 1 つもありません")
 
-    結合構造は記録の間で変わらないので row/col は 1 組だけ受け取り、時刻ごとに変わる
-    値ベクトルを `weight_items` で渡す。
-
-    Args:
-        row, col: 各結合の送信/受信グローバルID (1D, 全時刻で共通)
-        weight_items: (時刻, 重みの値ベクトル) のタプルのリスト
-        layout: NetworkLayout（並べ替え軸の値をここから取る）
-        out_path: 出力ファイルパス
-        title: グラフタイトル
-        vmin, vmax: カラーバーの範囲
-        cmap: カラーマップ
-        order_axes: 並べ替えに使う軸を外側から順に。None ならグローバル ID の順のまま。
-    """
-    if not weight_items:
-        return
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    ordering = resolve_ordering(layout, order_axes)
-    n_items = len(weight_items)
-    n_cols = min(4, n_items)
-    n_rows = int(np.ceil(n_items / n_cols))
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 3.9 * n_rows), squeeze=False)
+    wiring = series.wiring()
+    layout = series.layout
+    ordering = resolve_ordering(layout, WEIGHT_ORDER_AXES)
+    n_cols = min(4, len(items))
+    n_rows = int(np.ceil(len(items) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(PANEL_CELL[0] * n_cols, PANEL_CELL[1] * n_rows),
+                             squeeze=False)
     last_image = None
     for ax in axes.flat:
         ax.axis("off")
 
-    for ax, (hour, weights) in zip(axes.flat, weight_items):
-        ordered = ordering.apply(densify(row, col, weights, layout.total_neurons))
-        last_image = ax.imshow(ordered, origin="upper", interpolation="nearest", vmin=vmin, vmax=vmax, cmap=cmap)
-
+    for ax, (hour, weights) in zip(axes.flat, items):
+        ordered = ordering.apply(densify(wiring.row, wiring.col, weights,
+                                         layout.total_neurons))
+        last_image = ax.imshow(ordered, origin="upper", interpolation="nearest",
+                               vmin=VMIN, vmax=VMAX, cmap=CMAP)
         if ordering.enabled:
-            _draw_block_boundaries(ax, ordering, ordered.shape[0])
-
+            draw_block_boundaries(ax, ordering, ordered.shape[0])
         ax.set_title(f"{hour:g} h")
         ax.set_xlabel("post")
         ax.set_ylabel("pre")
         ax.axis("on")
 
-    fig.suptitle(title)
+    fig.suptitle(f"Weight matrix timeline: {series.run_dir.name}")
     if last_image is not None:
         fig.colorbar(last_image, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+    save_figure(fig, out_path, tight_layout=False, dpi=DPI, bbox_inches="tight")
 
 
 # 最外ブロックの名前を目盛りに出す上限。これを超えると文字が潰れるので番号のままにする。
@@ -224,41 +175,30 @@ def _outer_block_labels(layout, ordering: Ordering, total: int) -> list[tuple[fl
             for i in range(len(edges) - 1)]
 
 
-def plot_connection_mask_coarse(
-    row: np.ndarray,
-    col: np.ndarray,
-    layout,
-    total_neurons: int,
-    out_path: Path,
-    title: str = "Connection mask (coarse-grained)",
-    grid: int = 256,
-    order_axes: tuple[str, ...] | None = DEFAULT_ORDER_AXES,
-) -> None:
+def connection_mask(view, out_path: Path) -> None:
     """結合マスクを K×K に粗視化した密度画像。
 
     (40000, 40000) の imshow は不可能かつ視覚的にも無意味なので、並べ替えた表示順位の
     軸上で K×K のセルに落とし、セルごとの結合密度 (実結合数 / セル内の全ペア数) を描く。
 
-    **並べ替え軸は `order_axes` で選ぶ** — 他の行列図やラスターと同じ
-    `src.utils.plotting.ordering` の仕組みに乗っているので、`("polarity",)` (既定、E/I
-    ブロック) でも `("module",)` (モジュールごとのブロック) でも
-    `("module", "polarity")` (モジュールで切って各モジュール内で E→I) でも同じ形で効く。
-    最外ブロックには軸の値 (`M0`, `M1`, …) が目盛りとして入る。
+    **並べ替え軸は layout が決める** (`available_order_axes()`)。module 軸を持つ run なら
+    「モジュールで切って各モジュール内で E→I」、持たなければ E/I ブロックだけ。
+    ラスターも同じ選び方をするので、2 枚の y 軸は必ず揃う。最外ブロックには軸の値
+    (`M0`, `M1`, …) が目盛りとして入る。
 
-    **色 = E/I ブロック (EE/EI/IE/II)、濃さ = 結合確率、線 = 最外ブロックの境界**。
-    E/I の切り替わりには線を引かない (色が既にそれを示しているので、線が 2 種類あると
-    格子が読めなくなる)。カラーバーは E/I と密度の 2 つを同時に表せないので出さず、
-    代わりに E/I ブロックの凡例を出して濃さのスケールをその見出しに書く。
+    **色 = E/I ブロック (EE/EI/IE/II)、濃さ = 結合確率、線 = 最外ブロックの境界。**
+    E/I の切り替わりには線を引かない (色が示しているため)。カラーバーの代わりに
+    E/I ブロックの凡例を出し、濃さのスケールをその見出しに書く。
 
-    Args:
-        row, col: 各結合の送信/受信グローバルID (1D)。
-        layout: NetworkLayout。並べ替えと軸ラベルに使う。
-        total_neurons: N。セルの大きさの換算に使う。
-        grid: 1 辺のセル数 K。N より大きくしても意味がないので N で頭打ちにする。
-        order_axes: 並べ替えに使う軸を外側から順に。None / 空ならグローバル ID の順。
+    セル数 K は `GRID` と N の小さい方。
     """
-    ordering = resolve_ordering(layout, order_axes)
-    grid = int(min(grid, total_neurons))
+    wiring = view.wiring()
+    row, col = wiring.row, wiring.col
+    layout = view.layout
+    total_neurons = view.total_neurons
+
+    ordering = resolve_ordering(layout, available_order_axes(layout))
+    grid = int(min(GRID, total_neurons))
     if grid < 1:
         raise ValueError("grid must be >= 1")
 
@@ -288,7 +228,7 @@ def plot_connection_mask_coarse(
     ax.imshow(rgb, origin="upper", interpolation="nearest")
     # 線は**モジュール等のブロック境界だけ**。E/I の切り替わりは色が示しているので、
     # 線の種類を増やさない (2 種類の線が混ざると格子が読めなくなる)。
-    _draw_block_boundaries(ax, ordering, grid, scale=scale, skip=("polarity",))
+    draw_block_boundaries(ax, ordering, grid, scale=scale, skip=("polarity",))
 
     # 最外ブロックの名前を目盛りに。多すぎると潰れるのでセル番号のままにする。
     blocks = _outer_block_labels(layout, ordering, total_neurons)
@@ -303,7 +243,8 @@ def plot_connection_mask_coarse(
     grouped = (" > ".join(ordering.axes) if ordering.enabled else "global ID order")
     ax.set_xlabel(f"Target (grouped by {grouped}, {grid} cells)")
     ax.set_ylabel(f"Source (grouped by {grouped}, {grid} cells)")
-    ax.set_title(f"{title}\n{np.asarray(row).size} synapses, {total_neurons} neurons")
+    ax.set_title("Connection mask (coarse-grained)\n"
+                 f"{np.asarray(row).size} synapses, {total_neurons} neurons")
     # カラーバーの代わりに凡例。連続量は「濃さ」1 次元しかないので、凡例のタイトルに
     # そのスケール (白 = 0、最も濃い色 = max) を書いておけば読み取れる。
     ax.legend(
@@ -313,17 +254,15 @@ def plot_connection_mask_coarse(
         loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8, title_fontsize=8,
         frameon=False,
     )
-    save_figure(fig, out_path)
+    save_figure(fig, out_path, dpi=DPI)
 
 
 def _block_colored_density(density: np.ndarray, cell_of_rank: np.ndarray,
                            per_cell: np.ndarray, is_exc: np.ndarray) -> tuple[np.ndarray, float]:
     """粗視化密度を「色 = E/I ブロック、濃さ = 密度」の RGB 画像にする。
 
-    セルは表示順の連続した塊なので、`("module", "polarity")` で並べていれば
-    ほぼ純粋に E か I のどちらかになる。境目をまたぐセルだけは多数決で決める。
-    白 (密度 0) から そのセルのブロック色 (密度が最大) への線形補間なので、
-    「どのブロックか」と「どれくらい繋がっているか」が 1 枚で両立する。
+    セルの E/I は多数決で決める (表示順に並んでいればセルはほぼ純粋に片側になる)。
+    色は白 (密度 0) からブロック色 (密度が最大) への線形補間。
 
     Returns:
         (RGB 画像 (K, K, 3), 濃さの上限として使った密度)
@@ -341,38 +280,32 @@ def _block_colored_density(density: np.ndarray, cell_of_rank: np.ndarray,
     return 1.0 - alpha[..., None] * (1.0 - palette[block_index]), max_density
 
 
-def plot_empirical_connection_probability(
-    coords: np.ndarray,
-    row: np.ndarray,
-    col: np.ndarray,
-    layout,
-    out_path: Path,
-    connection_config=None,
-    title: str = "Empirical connection probability",
-    n_src: int = 2000,
-    num_bins: int = 40,
-    seed: int = 0,
-) -> None:
-    """距離ビンごとの実測結合確率を E/I ブロック別に描き、理論曲線を重ねる。
+def empirical_connection_probability(view, out_path: Path) -> None:
+    """距離ビンごとの実測結合確率を E/I ブロック別に描く。距離依存の結合則の検算。
 
-    全ペアの距離分布 (分母) は N^2 なので、送信側を `n_src` 個サンプルして
-    そのサンプルに対してのみ `cdist` で分母のヒストグラムを作る。分子は同じサンプルの
-    実結合のみを数えるので、比は不偏な結合確率の推定になる。
+    送信側を `PROB_N_SRC` 個サンプルし、そのサンプルの中で分母 (使えるペア数) と
+    分子 (実結合) を数えるので、比は不偏な結合確率の推定になる。
 
-    `connection_config` に sigma_xy / p0_xy があれば理論曲線 p0*exp(-d^2/2σ^2) を重ねる。
+    config の connection プロファイルが sigma_xy / p0_xy を持てば、理論曲線
+    p0*exp(-d^2/2σ^2) を重ねる。
     """
-    coords = np.asarray(coords, dtype=np.float64)
+    coords = np.asarray(view.coords(), dtype=np.float64)
+    wiring = view.wiring()
+    row, col = wiring.row, wiring.col
+    layout = view.layout
+    connection_config = view.config.network.connection
+
     total = coords.shape[0]
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(PROB_SEED)
     is_exc = excitatory_flags(layout, total)
 
-    sources = np.sort(rng.choice(total, size=min(n_src, total), replace=False))
+    sources = np.sort(rng.choice(total, size=min(PROB_N_SRC, total), replace=False))
     selected = np.zeros(total, dtype=bool)
     selected[sources] = True
 
     distances = cdist(coords[sources, :2], coords[:, :2])
     max_distance = float(distances.max()) if distances.size else 1.0
-    edges = np.linspace(0.0, max_distance, num_bins + 1)
+    edges = np.linspace(0.0, max_distance, PROB_NUM_BINS + 1)
     centres = 0.5 * (edges[:-1] + edges[1:])
 
     src_exc_grid = is_exc[sources][:, None]
@@ -412,6 +345,7 @@ def plot_empirical_connection_probability(
     ax.plot([], [], color="gray", ls="--", lw=1.0, label="theory p0·exp(-d²/2σ²)")
     ax.set_xlabel("Distance [um]")
     ax.set_ylabel("Connection probability")
-    ax.set_title(f"{title}\n{sources.size} source neurons sampled")
+    ax.set_title("Empirical connection probability\n"
+                 f"{sources.size} source neurons sampled")
     ax.legend(fontsize=7)
-    save_figure(fig, out_path)
+    save_figure(fig, out_path, dpi=DPI)

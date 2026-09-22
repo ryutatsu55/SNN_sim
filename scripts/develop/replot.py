@@ -4,20 +4,18 @@
 
 **本番と同じ関数を通る。** 記録窓ごとの出力は `report.panels.emit()`、run 全体は
 `report.overview.emit()`、構造は `report.structure.emit()` で、どれも `run_one.py` が
-呼ぶものと同一。以前は「1 記録窓の指標を作る」実装が本番用と再解析用に分かれ、
-再解析側にだけ E/I 列と重みブロック列が無かった。
+呼ぶものと同一なので、列も値も図もバイト単位で一致する。
 
-**作り直すのは全部。** 構造図も窓ごとの図も run 全体の図も、指標も、例外なく上書きする。
-以前は再解析が `weight_matrix_*.png` を作り直さなかったので、同じ `data/` の中で
-`metrics.csv` だけ新しい、という状態が起きえた。
+**作り直すのは全部。** 構造図も窓ごとの図も run 全体の図も、指標も、例外なく上書きする
+(一部だけ新しい状態を作らないため)。
 
 **構造図のためにネットワークを再ビルドする。** 構造図は「構築されたネットワークそのもの」
 を見る図なので npz からは作れない。GeNN のコード生成とコンパイルは `sim.setup()` の側に
 あり、`builder.build()` は走らせないので安い。ネットワークの生成は
 `np.random.RandomState(config.simulation.seed)` だけに依存する (backend は GeNN の
 デバイス RNG = スパイク列にしか効かない) ので、cuda で走らせた run でも cpu で再ビルド
-できる —— そして**再ビルドが元の run と同じ結合を作ったことを毎回確かめる**
-(`Built.verify_against`)。
+できる。**再ビルドが元の run と同じ結合を作ったことは毎回確かめる**
+(`BuiltNetwork.verify_against`)。
 """
 import argparse
 import os
@@ -35,7 +33,7 @@ from src.core.output_manager import CONFIG_NAME, DATA_SUBDIR
 
 from scripts.develop.report import overview, panels, structure
 from scripts.develop.store import paths
-from scripts.develop.store.built import Built
+from src.utils.runview import BuiltNetwork as Built
 from scripts.develop.store.records import METRICS_NAME, MetricsWriter
 from scripts.develop.store.series import open_run
 

@@ -2,8 +2,8 @@
 
 個々のニューロンの発火レート推移を散布図で描く (興奮性=赤, 抑制性=青)。
 
-レートを組み立てる `_firing_rate_series()` は以前 `store/series.py` にあったが、
-**唯一の利用者がこの図**なのでここへ移した。
+レートを組み立てる `_firing_rate_series()` もここにある (run 全体を通した計算は、
+それを使う図が持つ)。
 """
 from __future__ import annotations
 

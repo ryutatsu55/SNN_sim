@@ -1,12 +1,12 @@
-"""ラスター図。
+"""ラスター図。スパイクを (時刻, ニューロン) の点として描く。
 
-`layout` を渡すと y 軸を `order_axes` の順に並べ替え、E/I で色分けして
-**E/I 以外の**ブロック境界に線を引く。並べ替えの指定は重み行列 (`plotting.matrices`) と
-共通なので、`order_axes=("layer", "polarity")` のような指定が両方の図に同じ意味で効く。
+y 軸はグローバル ID 順ではなく `ordering.available_order_axes()` の軸で並べ替え、
+E/I で色分けして**E/I 以外の**ブロック境界に線を引く。並べ替えの選び方は粗視化結合図
+(`matrices.connection_mask`) と共通なので、2 枚の軸は必ず揃う。
 
 E/I の切り替わりに線を引かないのは、赤/青の色分けが既にその位置を示しているから。
-`order_axes=("module", "polarity")` なら線はモジュール境界だけになり、各モジュール帯の
-中は色だけで E→I が読める。
+module 軸を持つ run なら線はモジュール境界だけになり、各モジュール帯の中は色だけで
+E→I が読める。
 """
 from __future__ import annotations
 
@@ -16,41 +16,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.utils.analysis.weights import excitatory_flags
-from src.utils.plotting.ordering import DEFAULT_ORDER_AXES, resolve_ordering
+from src.utils.plotting.common import save_figure
+from src.utils.plotting.ordering import available_order_axes, resolve_ordering
+
+# 論文 (Ikeda-Akita-Takahashi 2023) Fig.2 の時間軸。図を並べて比べるための固定値。
+# **引数にしない** —— 変えたくなったらここを直す。
+XLIM_S = (0.0, 30.0)
+MARKER_SIZE = 2.0
+FIGSIZE = (10, 4)
+DPI = 200
 
 
-def plot_raster(
-    times: np.ndarray,
-    ids: np.ndarray,
-    out_path: Path,
-    title: str,
-    xlim_s: tuple[float, float] | None = None,
-    ylim_neuron: tuple[float, float] | None = None,
-    layout=None,
-    order_axes: tuple[str, ...] | None = DEFAULT_ORDER_AXES,
-    marker_size: float = 2.0,
-) -> None:
-    """スパイク列のラスター図を描く。
+def raster(window, out_path: Path) -> None:
+    """記録窓 1 つのラスター図。
 
-    `layout` (NetworkLayout) を渡すと y 軸を `order_axes` の順に並べ替え (表示ID は
-    1 始まり)、興奮性=赤 / 抑制性=青で色分けし、**E/I 以外の**ブロックの境目に破線を
-    引く。省略時、または `order_axes=None` のときは生のグローバルIDをそのまま y 軸に使う。
-
-    Args:
-        times: スパイク時刻 [ms]
-        ids: スパイクを出したニューロンのグローバルID
-        out_path: 出力ファイルパス
-        title: グラフタイトル
-        xlim_s: 時間軸の範囲 [s]
-        ylim_neuron: y 軸の範囲。並べ替えを行う場合は無視される (全体を表示する)
-        layout: NetworkLayout
-        order_axes: 並べ替えに使う軸を外側から順に
-        marker_size: 点の大きさ
+    y 軸は `available_order_axes()` の順に並べ替え (表示 ID は 1 始まり)、
+    興奮性=赤 / 抑制性=青で色分けし、**E/I 以外の**ブロックの境目に破線を引く。
+    並べ替え軸が 1 つも使えない layout では生のグローバル ID をそのまま y 軸に使う。
     """
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(10, 4))
+    spikes = window.spikes()
+    times, ids = spikes.times, spikes.ids
+    layout = window.layout
+    total_neurons = window.total_neurons
 
-    ordering = resolve_ordering(layout, order_axes)
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+
+    ordering = resolve_ordering(layout, available_order_axes(layout))
     remapped = False
     if ordering.enabled and ordering.rank.size:
         # rank は「グローバルID -> 表示位置(0始まり)」。表示IDは 1 始まりにする。
@@ -69,8 +60,10 @@ def plot_raster(
         n_exc = int(np.count_nonzero(is_exc))
         n_inh = total - n_exc
 
-        ax.scatter(t_s[exc_mask], display[exc_mask], s=marker_size, color="tab:red", label="Excitatory")
-        ax.scatter(t_s[~exc_mask], display[~exc_mask], s=marker_size, color="tab:blue", label="Inhibitory")
+        ax.scatter(t_s[exc_mask], display[exc_mask], s=MARKER_SIZE, color="tab:red",
+                   label="Excitatory")
+        ax.scatter(t_s[~exc_mask], display[~exc_mask], s=MARKER_SIZE, color="tab:blue",
+                   label="Inhibitory")
         for position, level in ordering.visible_boundaries():
             if 0 < position < total:
                 ax.axhline(position + 0.5, color="gray",
@@ -81,11 +74,11 @@ def plot_raster(
         remapped = True
 
     if not remapped:
-        ax.scatter(times / 1000.0, ids, s=marker_size, color="black")
-        if ylim_neuron is not None:
-            ax.set_ylim(*ylim_neuron)
+        ax.scatter(times / 1000.0, ids, s=MARKER_SIZE, color="black")
+        # 論文の (0, 100) は N=100 のこと。系のサイズに追従させる。
+        ax.set_ylim(0.0, float(total_neurons))
 
-    ax.set_title(title)
+    ax.set_title(f"Raster {window.hour:g} h")
     ax.set_xlabel("Time [s]")
     if not remapped:
         ax.set_ylabel("Neuron ID")
@@ -93,8 +86,5 @@ def plot_raster(
         ax.set_ylabel("Neuron ID (excitatory 1..Nexc, inhibitory above)")
     else:
         ax.set_ylabel(f"Neuron ID (ordered by {' > '.join(ordering.axes)})")
-    if xlim_s is not None:
-        ax.set_xlim(*xlim_s)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    ax.set_xlim(*XLIM_S)
+    save_figure(fig, out_path, dpi=DPI)

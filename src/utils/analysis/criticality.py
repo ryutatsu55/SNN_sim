@@ -1,8 +1,8 @@
 """臨界性の指標。
 
 アバランシェサイズ分布や発火列から、系が臨界・劣臨界・超臨界のどこにいるかを
-測る量を計算する。論文ごとの合否判定 (許容幅つきのチェック) はここには置かず、
-`src/utils/experiments/` 側が持つ。
+測る量を計算する。Beggs & Plenz (2003) の合否判定 (許容幅つきのチェック) も、しきい値は
+判定であって図ではないので末尾に置いてある。
 """
 from __future__ import annotations
 
@@ -13,36 +13,17 @@ from scipy import signal
 def criticality_index_delta_cr(
     sizes: np.ndarray, smax: int = 100, smin: int = 1, min_points: int = 10
 ) -> float:
-    """臨界性指標 ΔCr(Ikeda-Akita-Takahashi 2023 supplementary 式 S21-S24)。
+    """臨界性指標 ΔCr (Ikeda-Akita-Takahashi 2023 supplementary 式 S21-S24)。
 
-    出自は Tetzlaff et al. 2010 の Δp。原著の定義は
-    「log-log プロット上で、分布の直線部分に引いた回帰直線を各データ点から引き、
-    **全データ点にわたる差の平均**を Δp とする」。
-    ずれを測る空間は **log-log プロットの縦軸**、つまり log10(pemp) − log10(pfit) であり、
-    値は **点数で割った平均**である。この 2 点が閾値 |Δp| < 0.195(Tetzlaff の
-    sub/critical/super 判定, Akita も踏襲) のスケールを与える。確率の生の差では
-    ±0.195 に届きえないし、和にすると点数だけで値が数倍動く。
+    log-log 上で分布に引いた回帰直線からの残差を、上振れ/下振れに分けて平均し、
+    大きい方の符号付き値の絶対値を返す。**正 = 超臨界、≈0 = 臨界、負 = 劣臨界**で、
+    判定閾値は |ΔCr| < 0.195 (Tetzlaff et al. 2010 の Δp と同じスケール)。
 
-    Akita の修正(S22-S24)は、対称な大きいずれを「臨界」と誤判定しないために、
-    平均を上振れ/下振れに分けて大きい方を採ること:
-        Aupper = mean(max(残差, 0)),  Alower = mean(min(残差, 0))
-        ΔCr    = |大きい方の符号付き値|。 正=超臨界, ≈0=臨界, 負=劣臨界。
+    **回帰は [smin, smax]、残差の評価は [1, smax] の全観測点。** 同じ範囲で評価すると
+    最小二乗の性質から Σ残差 = 0 になり、sub/super の符号情報が消える。
 
-    フィット範囲と評価範囲は別:
-      - 回帰は [smin, smax] の観測点に対して行う。
-      - 残差は **[1, smax] の全観測点**で評価する。回帰と同じ範囲だけで評価すると
-        最小二乗の性質から Σ残差 = 0、すなわち Aupper = |Alower| となって
-        sub/super の符号情報が消える。Tetzlaff の "all data points" もこちらを指す。
-
-    **`smin` は固定値で、0h の実測から較正してある。** 論文は「smin は線形フィットの
-    二乗誤差和を最小にするよう決めた」と書くが、その規準は再現しない —— こちらで
-    フィット範囲の SSE を最小化すると smin は上限へ張り付き(≈10)、全観測点で最小化すると
-    1 へ張り付く。どちらも ΔCr が論文と 2 倍ずれる。
-    そこで **0h(結合ゼロ = 100 個の独立ポアソン = パラメータ自由度ゼロ)を較正点に使う**:
-    93 run の 0h でスキャンすると **smin=3 で ΔCr = −0.236 ± 0.018**、論文 Fig 2(c) の
-    画素実測値 **−0.232** と一致する(自動選択は smin≈7 を選び −0.479 と 2 倍外していた)。
-    3h でも −0.209 vs 論文 −0.214 で一致する。
-    別の値を使いたいときは明示的に渡すこと(自動選択はしない)。
+    `smin` は 0h の実測から較正した固定値。**自動選択はしない** —— 別の値を使うときは
+    明示的に渡すこと。較正の経緯は `docs/technical/akita_soc_reproduction_memo.md`。
     """
     data = np.asarray(sizes, dtype=np.int64)
     data = data[(data >= 1) & (data <= smax)]
@@ -225,3 +206,40 @@ def correlation_decay_ms(
     if qualifying.size == 0:
         return float("inf")
     return float(pos_lags[int(qualifying[0])])
+
+
+# ======================================================================================
+# Beggs & Plenz (2003, J Neurosci 23(35):11167-11177) の合否判定
+#
+# 原著が確認した 4 つの臨界性の指標と、その許容幅。**数値そのものを測るのは上の関数群**
+# で、ここが持つのは「どこまでを合格とするか」という**しきい値だけ**。
+#
+# ここに置いてある理由: しきい値は図ではなく判定であり、判定は実験をまたいで同じ意味を
+# 持つ (損傷実験が「切断後に臨界から外れたか」を問うときも同じ基準を使う)。以前は
+# `src/utils/experiments/beggs_plenz.py` にあったが、そのモジュールは論文名を冠している
+# だけで実験の実体 (回すスクリプト) を持っていなかった。
+# ======================================================================================
+
+TARGET_SLOPE_SIZE = -1.5
+TARGET_SLOPE_LIFETIME = -2.0
+TARGET_SIGMA = 1.0
+TOLERANCE_SLOPE_SIZE = 0.3
+TOLERANCE_SLOPE_LIFETIME = 0.4
+TOLERANCE_SIGMA = 0.2
+TARGET_CORR_DECAY_MS = 200.0
+
+
+def criticality_checks(metrics: dict[str, float]) -> dict[str, bool]:
+    """4 つの臨界性判定を bool で返す。`metrics` は `avalanche.analyze_avalanches` の出力。"""
+    def near(value, target, tol):
+        return bool(np.isfinite(value) and abs(value - target) <= tol)
+
+    decay = metrics.get("corr_decay_ms", float("nan"))
+    return {
+        "check_slope_size": near(metrics.get("slope_size", np.nan),
+                                 TARGET_SLOPE_SIZE, TOLERANCE_SLOPE_SIZE),
+        "check_slope_lifetime": near(metrics.get("slope_lifetime", np.nan),
+                                     TARGET_SLOPE_LIFETIME, TOLERANCE_SLOPE_LIFETIME),
+        "check_sigma": near(metrics.get("sigma_bp", np.nan), TARGET_SIGMA, TOLERANCE_SIGMA),
+        "check_corr_decay": bool(np.isfinite(decay) and decay <= TARGET_CORR_DECAY_MS),
+    }

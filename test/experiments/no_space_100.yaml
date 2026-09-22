@@ -1,0 +1,68 @@
+# テスト用のネットワーク設定 (N=100, area: no_space, 全結合, 初期重み 0)。
+#
+# **実験の config ではない。** 実験のテストが「何か 1 つ解決できるネットワーク」を
+# 必要とするので置いてある。実験の config を借りると、実験側の条件を変えるたびに
+# 別の実験のテストが落ちる (実際にそうなっていた)。
+#
+# `task:` は書かない。使う記録プロトコルはテストが `active_task` で明示する。
+
+simulation:
+  N: 100
+  dt: 0.1
+  # スカラーなら 1 本、[1, 8] なら seed 1..8 の 8 本 (両端を含む)。
+  # 範囲を展開するのはランチャの仕事で、各 run の config.yaml には実値が書かれる。
+  seed: 1
+  backend: cpu       # GeNN バックエンド: cuda | cpu | auto
+  # 同時に走らせる run の数。backend: cuda では 1 にすること。
+  parallel: 1
+
+inputs:
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  Layer_Exc:
+    type: akita_escape_lif
+    mode: excitatory
+    polarity: excitatory
+    num: 80
+  Layer_Inh:
+    type: akita_escape_lif
+    mode: inhibitory
+    polarity: inhibitory
+    num: 20
+
+synapses:
+  from_Exc:
+    source: [Layer_Exc]
+    delay_by_target:
+      Layer_Exc: 1.5
+      Layer_Inh: 0.8
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: [Layer_Inh]
+    delay_by_target:
+      Layer_Exc: 0.8
+      Layer_Inh: 0.8
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp
+      pairing: nearest
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  area: no_space            # 領域の制約なし (確率ベースの結合なので領域を参照しない)
+  space: no_space
+  connection: constant_prob_full
+  weight: constant_zero
+  delay: constant
