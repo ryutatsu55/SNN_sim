@@ -40,12 +40,16 @@ class GeNNSimulator:
         # コード生成先。`<builder.code_gen_dir>/<model_name>_CODE` に集める。
         # 既定は `output_manager.GENN_CODE_DIR`。
         build_path = getattr(self.builder, "code_gen_dir", None)
+        # **always_rebuild=True は外さない。** コンパイルフラグ (NetworkBuilder の
+        # optimize_code) と GeNN 本体の変更は model.sha に入らないため、既定の増分ビルドだと
+        # Makefile だけ新しくなってオブジェクトは古いまま、という状態を黙って作る。
+        # コンパイル自体はこの規模で 1 秒未満なので、毎回作り直して構わない。
         if build_path:
             os.makedirs(build_path, exist_ok=True)
             print(f"  [Simulator] GeNN code dir: {build_path}/{self.model.name}_CODE")
-            self.model.build(path_to_model=build_path)
+            self.model.build(path_to_model=build_path, always_rebuild=True)
         else:
-            self.model.build()
+            self.model.build(always_rebuild=True)
 
         # 【重要】GPU上に記録用バッファを事前確保してロード
         # この時点で各変数の初期値がホスト側のメモリ(view)に展開されます

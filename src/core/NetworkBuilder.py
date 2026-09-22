@@ -114,7 +114,12 @@ class NetworkBuilder:
             )
         _backend = _GENN_BACKEND[backend]
         print(f"[NetworkBuilder] backend = {_backend}  [config.simulation.backend={backend!r}]")
-        self.genn_model = pygenn.GeNNModel("double", model_name, time_precision="double", backend=_backend)
+        # optimize_code=True は生成コードを -O3 -ffast-math でコンパイルさせる
+        # (GeNN の既定は最適化フラグ無し = -O0。この規模で約 7 倍の差になる)。
+        # **コンパイルフラグは model.sha に入らない。** ここを変えても再生成は走らないので、
+        # 辻褄合わせは `GeNNSimulator.setup()` の always_rebuild=True が担う。
+        self.genn_model = pygenn.GeNNModel("double", model_name, time_precision="double",
+                                           backend=_backend, optimize_code=True)
         self.genn_model.dt = self.config.simulation.dt
         # self.genn_model.batch_size = self.config.task.batch_size
 
