@@ -1,4 +1,4 @@
-"""重み行列の imshow。記録時刻 1 点ぶんの 1 枚。
+"""重み行列の imshow。probe 1 点ぶんの 1 枚。
 
 並べ替えは `style.py` の仕組みに乗り、**粗視化結合図と同じ module > polarity** で
 ブロック化する。COO を受け取り、描画の直前にだけ密へ戻す (`densify`)。
@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
-from scripts.develop.figures import save, style
+from scripts.lesion.figures import save, style
 
 # 並べ替え軸。**粗視化結合図 (connection_mask) と同じ** module > polarity。
 # 2 枚は同じブロック配置になるので、「どの群がどれだけ繋がっているか」(結合図) と
@@ -52,7 +52,11 @@ def densify(row: np.ndarray, col: np.ndarray, values: np.ndarray, size: int) -> 
 
 
 def weight_matrix(window, out_path: Path) -> None:
-    """1 記録時刻ぶんの重み行列を可視化する。"""
+    """probe 1 点ぶんの重み行列を可視化する。
+
+    **切断前の probe は切断前の結合、切断後は切断後の結合**を描く (`window.wiring()`
+    が phase で切り替える)。したがって baseline と post では行列に載る本数が違う。
+    """
     coo = window.coo()
     layout = window.layout
     ordering = style.resolve_ordering(layout, style.available_order_axes(layout, ORDER_AXES))
@@ -82,7 +86,7 @@ def weight_matrix(window, out_path: Path) -> None:
             ax.set_xticks(ticks)
             ax.set_yticks(ticks)
 
-    ax.set_title(f"Weight matrix {window.hour:g} h")
+    ax.set_title(f"Weight matrix {window.label}")
     ax.set_xlabel("post neuron id")
     ax.set_ylabel("pre neuron id")
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label="weight")

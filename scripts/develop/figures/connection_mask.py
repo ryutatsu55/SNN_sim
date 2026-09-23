@@ -15,13 +15,12 @@ from matplotlib.patches import Patch
 from scipy.spatial.distance import cdist
 from src.utils.analysis.weights import (
     BLOCK_ORDER,
-    block_masks,
     excitatory_flags,
     synapse_distances,
 )
 from src.utils.runview import MissingData
 from scripts.develop.figures import save, style
-from scripts.develop.figures.style import BLOCK_COLORS, Ordering
+from scripts.develop.figures.style import BLOCK_COLORS
 
 
 # 密な (N, N) float64 を組んでよい N の上限 (20000^2 x 8B = 3.2 GiB)。
@@ -39,18 +38,6 @@ PROB_SEED = 0
 MASK_TITLE = "Connection mask (coarse-grained)"
 PROB_TITLE = "Empirical connection probability"
 
-
-def _outer_block_labels(layout, ordering: Ordering, total: int) -> list[tuple[float, str]]:
-    """最外ブロック (order_axes の先頭の軸) の中心位置とラベル名。
-
-    位置は**表示位置** (ニューロン単位) なので、粗視化図では呼び出し側でセルへ換算する。
-    """
-    if layout is None or not ordering.enabled or not ordering.axes:
-        return []
-    values = layout.labels(ordering.axes[0])[ordering.order]
-    edges = [0, *ordering.positions(level=0), total]
-    return [(0.5 * (edges[i] + edges[i + 1]), str(values[edges[i]]))
-            for i in range(len(edges) - 1)]
 
 def connection_mask(built, out_path: Path) -> None:
     """結合マスクを K×K に粗視化した密度画像。
@@ -104,7 +91,7 @@ def connection_mask(built, out_path: Path) -> None:
     style.draw_block_boundaries(ax, ordering, cells, scale=scale, skip=("polarity",))
 
     # 最外ブロックの名前を目盛りに。多すぎると潰れるのでセル番号のままにする。
-    blocks = _outer_block_labels(layout, ordering, total_neurons)
+    blocks = style.outer_block_labels(layout, ordering, total_neurons)
     if blocks and len(blocks) <= MAX_BLOCK_TICKS:
         ticks = [center * scale - 0.5 for center, _ in blocks]
         names = [name for _, name in blocks]
@@ -153,26 +140,23 @@ def _block_colored_density(density: np.ndarray, cell_of_rank: np.ndarray,
     return 1.0 - alpha[..., None] * (1.0 - palette[block_index]), max_density
 
 def empirical_connection_probability(built, out_path: Path) -> None:
-    """距離ビンごとの実測結合確率を E/I ブロック別に描き、理論曲線を重ねる。
+    """距離ビンごとの実測結合確率を 1 本の曲線で描く。
 
     全ペアの距離分布 (分母) は N^2 なので、送信側を `PROB_N_SRC` 個サンプルして
     そのサンプルに対してのみ `cdist` で分母のヒストグラムを作る。分子は同じサンプルの
     実結合のみを数えるので、比は不偏な結合確率の推定になる。
 
-    `config.network.connection` に sigma_xy / p0_xy があれば理論曲線
-    p0*exp(-d^2/2σ^2) を重ねる。
+    **理論曲線は重ねず、E/I でも分けない。** この実験の結合は軸索が伸びて誰かの
+    樹状突起円を横切った結果であって、`p0*exp(-d^2/2σ^2)` のような距離の閉じた式から
+    引かれるものではない。見たいのは「実際に何割が繋がったか」の距離依存だけ。
     """
     wiring = built.wiring()
     if wiring.num_synapses == 0:
         raise MissingData("synapses", "結合が 1 本もありません")
-    row, col = wiring.row, wiring.col
-    layout = built.layout
-    connection_config = built.config.network.connection
 
     coords = np.asarray(built.coords(), dtype=np.float64)
     total = coords.shape[0]
     rng = np.random.default_rng(PROB_SEED)
-    is_exc = excitatory_flags(layout, total)
 
     sources = np.sort(rng.choice(total, size=min(PROB_N_SRC, total), replace=False))
     selected = np.zeros(total, dtype=bool)
@@ -183,43 +167,20 @@ def empirical_connection_probability(built, out_path: Path) -> None:
     edges = np.linspace(0.0, max_distance, PROB_NUM_BINS + 1)
     centres = 0.5 * (edges[:-1] + edges[1:])
 
-    src_exc_grid = is_exc[sources][:, None]
-    tgt_exc_grid = is_exc[None, :]
-    denominator_masks = {
-        "EE": src_exc_grid & tgt_exc_grid,
-        "EI": src_exc_grid & ~tgt_exc_grid,
-        "IE": ~src_exc_grid & tgt_exc_grid,
-        "II": ~src_exc_grid & ~tgt_exc_grid,
-    }
-
-    row = np.asarray(row, dtype=np.int64)
-    col = np.asarray(col, dtype=np.int64)
+    row = np.asarray(wiring.row, dtype=np.int64)
+    col = np.asarray(wiring.col, dtype=np.int64)
     keep = selected[row]
     connected_distance = synapse_distances(coords, row[keep], col[keep])
-    numerator_masks = block_masks(row[keep], col[keep], is_exc)
+
+    denominator = np.histogram(distances, bins=edges)[0]
+    numerator = np.histogram(connected_distance, bins=edges)[0]
+    valid = denominator > 0
+    probability = np.zeros_like(centres)
+    probability[valid] = numerator[valid] / denominator[valid]
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    for name in BLOCK_ORDER:
-        denominator = np.histogram(distances[denominator_masks[name]], bins=edges)[0]
-        numerator = np.histogram(connected_distance[numerator_masks[name]], bins=edges)[0]
-        valid = denominator > 0
-        if not valid.any():
-            continue
-        probability = np.zeros_like(centres)
-        probability[valid] = numerator[valid] / denominator[valid]
-        ax.plot(centres[valid], probability[valid], color=BLOCK_COLORS[name],
-                lw=1.4, marker="o", ms=2.5, label=f"{name} (measured)")
-
-        if connection_config is not None:
-            sigma = getattr(connection_config, f"sigma_{name.lower()}", None)
-            p0 = getattr(connection_config, f"p0_{name.lower()}", None)
-            if sigma is not None and p0 is not None:
-                theory = p0 * np.exp(-(centres ** 2) / (2.0 * float(sigma) ** 2))
-                ax.plot(centres, theory, color=BLOCK_COLORS[name], lw=1.0, ls="--", alpha=0.7)
-
-    ax.plot([], [], color="gray", ls="--", lw=1.0, label="theory p0·exp(-d²/2σ²)")
+    ax.plot(centres[valid], probability[valid], color="black", lw=1.4, marker="o", ms=2.5)
     ax.set_xlabel("Distance [um]")
     ax.set_ylabel("Connection probability")
     ax.set_title(f"{PROB_TITLE}\n{sources.size} source neurons sampled")
-    ax.legend(fontsize=7)
     save(fig, out_path, dpi=DPI)

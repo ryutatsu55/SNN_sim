@@ -79,7 +79,7 @@ scripts/develop/
 
 **1 ファイル = 1 種類の図。** 「1 枚」ではなく「1 種類」で、同じ描き方から 2〜3 枚出る
 ものは 1 ファイルにまとまる (`network.py` の直線版と軸索版、`synapse_hist.py` の
-遅延/距離/重み、`weight_matrix.py` の 1 枚版・時系列パネル・差分パネル)。
+遅延/距離/重み)。
 **片方だけ直すと壊れるものを同じファイルに置く**、というのが基準。
 
 ### 入口が 3 つある理由
@@ -190,8 +190,8 @@ def emit(window, *, metrics) -> None:
 | 段階 | 図 | 表 |
 |---|---|---|
 | `structure` | `area` `connection_mask_coarse` `network_sample` `axon_network` `connection_probability` `delay_distribution` `distance_distribution` `weight_distribution` | `connection_probability.csv` `bridge_hops.csv` |
-| `panels` | `raster_{h}h` `avalanche_{h}h` `neuron_trace_{h}h` | `metrics.csv` の 1 行 |
-| `overview` | `figure2c` `figure2d` `weight_matrix_{h}h` `weight_matrix_panel` `weight_delta_panel` | — |
+| `panels` | `raster_{h}h` `avalanche_{h}h` `weight_matrix_{h}h` `neuron_trace_{h}h` | `metrics.csv` の 1 行 |
+| `overview` | `figure2c` `figure2d` | — |
 
 ---
 
@@ -239,7 +239,7 @@ built.verify_against(series.wiring())     # 一致しなければ落とす
 
 いままでと同じ。**PNG のバイト一致**と `metrics.csv` のバイト一致。
 
-- 基準は `test/experiments/develop/reference_figures.md5`（21 枚）。手順は同ディレクトリの
+- 手順は `test/experiments/develop/README.md`（本番と `replot` の自己一致チェック。**図の md5 基準は廃止した** —— 図の定義を直すたびに基準も作り直すことになり、「意図して変えた」と「壊れた」を区別できなかったため）。続きは同ディレクトリの
   README.md。`scripts/akita_soc/`（15 枚）と `scripts/lesion/` にも同じ基準がある
 - 重みパネル 2 枚は `run_dir.name` をタイトルに埋めるので、run を `_ref` に改名して replot し、
   全 21 枚で比較する
@@ -256,7 +256,7 @@ built.verify_against(series.wiring())     # 一致しなければ落とす
 2. 出力を 3 つのタイミングに割り振って `report/` に登録する
 3. 図を `(view, out_path)` で書く（共有層から複製してよい）
 4. `run_one` を「書いてから読み直す」形にする
-5. **その実験にも図の md5 基準を作る**（`test/experiments/<実験>/reference_figures.md5`）。
+5. **その実験にも「本番と再解析が一致する」手順を書く**（`test/experiments/<実験>/README.md`）。
    develop はこれで全工程を検証できた。基準が無いと「変わっていないこと」を言えない
 6. テストは `test/experiments/<実験>/`。ネットワーク設定は
    `test/experiments/no_space_100.yaml` を使い、**実験の config を借りない**
@@ -280,7 +280,7 @@ built.verify_against(series.wiring())     # 一致しなければ落とす
 1. **`report/` という名前。** 「いつ何を出すか」の登録簿という中身に対して、
    もっと良い名前があるかもしれない（`stages/` / `emit/` / 直下に 3 ファイル平置き）
 2. **akita_soc と develop の図をどこまで揃えるか。** いまは複製で、片方だけ直したときに
-   気づく仕組みが `reference_figures.md5` しかない
+   気づく仕組みが `test/experiments/<実験>/README.md` の手動チェックしかない
 3. **seed 横断の `summary/` に何を置くか。** 時刻ごとの mean±SD だけでは足りない ——
    **遷移時刻が seed でばらつく量は、時刻ごとに平均すると遷移がなまって消える。**
    seed ごとのスカラー要約 (遷移時刻など) の分布も要る

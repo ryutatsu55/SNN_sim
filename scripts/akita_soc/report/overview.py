@@ -11,8 +11,6 @@ from scripts.akita_soc.report import guard
 from scripts.akita_soc.store import paths
 from scripts.akita_soc.figures.fig2c import fig2c
 from scripts.akita_soc.figures.fig2d import fig2d
-from scripts.akita_soc.figures.weight_matrix import (weight_delta_panel, weight_matrix,
-                                                   weight_panel)
 
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
@@ -22,17 +20,6 @@ from scripts.akita_soc.figures.weight_matrix import (weight_delta_panel, weight_
 FIGURES = (
     ("Figure 2c", fig2c, "figure2c_reproduction.png"),
     ("Figure 2d", fig2d, "figure2d_firing_rate_scatter.png"),
-    ("weight matrix panel", weight_panel, "weight_matrix_panel.png"),
-    ("weight delta panel", weight_delta_panel, "weight_delta_panel.png"),
-)
-
-# **記録時刻ごとに 1 枚ずつ**出るもの。渡す view が `Series` ではなく `Window` なので、
-# 上の表とは別に持つ。
-#
-# 重み行列を「1 時刻 1 枚」と「時系列を並べたパネル」の両方で出しているのは、前者が
-# 1 枚を拡大して読むため、後者が変化の向きを一目で見るため。
-PER_WINDOW_FIGURES = (
-    ("weight matrix", weight_matrix, "weight_matrix_{tag}.png"),
 )
 
 
@@ -43,8 +30,3 @@ def emit(series) -> None:
 
     for label, draw, name in FIGURES:
         guard(label, draw, series, out / name)
-
-    for window in series.windows:
-        tag = f"{window.hour:g}h"
-        for label, draw, template in PER_WINDOW_FIGURES:
-            guard(f"{label} {tag}", draw, window, out / template.format(tag=tag))

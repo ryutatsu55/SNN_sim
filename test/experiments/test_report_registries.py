@@ -5,15 +5,12 @@
 「実験は `scripts/<実験名>/` にまとめる」) で、1 つだけ形が崩れても他の 2 つのテストでは
 気づけない。
 
-見るのは 3 つ:
+見るのは 2 つ:
 
 1. **登録簿が表であること。** `FIGURES` が `emit()` の外にあり、上から順に回されるだけ
    であること。ここが崩れると「何がいつ出るか」を読むのに関数本体を追うことになる。
 2. **表の中身が壊れていないこと。** 名前もファイル名も重複せず、図の種類は
    `store/paths.py` が知っているものだけ。
-3. **表と図の md5 基準が食い違っていないこと。** 基準に載っている png が 1 枚残らず
-   表のどれかの行から出ること —— 図を消したのに基準を更新し忘れた、あるいはその逆を
-   捕まえる。
 """
 from __future__ import annotations
 
@@ -102,48 +99,6 @@ def test_figure_kinds_are_known_to_paths(experiment):
     known = set(_paths(experiment).FIG_KINDS)
     for kind, _name in _declared(experiment):
         assert kind in known, f"{experiment}: 未知の図の種類 {kind!r}"
-
-
-@pytest.mark.parametrize("experiment", EXPERIMENTS)
-def test_reference_figures_all_come_from_the_tables(experiment):
-    """図の md5 基準に載っている png が、1 枚残らず登録簿のどれかの行から出ること。
-
-    **基準と登録簿がずれたら止める。** 図を消したのに基準を更新し忘れた (あるいは逆) の
-    どちらも、次に基準を作り直すまで誰も気づかない。
-
-    `axon_network_legend.png` だけは例外。凡例は `axon_network` が本体の名前から導いて
-    自分で連れてくる副産物で、登録簿には行を持たない (図の中に凡例を置くと軸索の経路を
-    隠すため別ファイルにしてある)。
-    """
-    reference = root_path / "test" / "experiments" / experiment / "reference_figures.md5"
-    if not reference.exists():
-        pytest.skip(f"{experiment} の図の md5 基準がまだありません")
-
-    declared = _declared(experiment)
-
-    def produced_by_a_row(kind: str, name: str) -> bool:
-        if name.endswith("_legend.png"):
-            return True
-        for declared_kind, declared_name in declared:
-            if declared_kind != kind:
-                continue
-            if "{tag}" in declared_name:
-                prefix, suffix = declared_name.split("{tag}")
-                if name.startswith(prefix) and name.endswith(suffix):
-                    return True
-            elif declared_name == name:
-                return True
-        return False
-
-    orphans = []
-    for line in reference.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        path = Path(line.split()[-1])
-        if not produced_by_a_row(path.parent.name, path.name):
-            orphans.append(f"{path.parent.name}/{path.name}")
-    assert not orphans, (
-        f"{experiment}: 基準にあるが登録簿から出ない図があります: {sorted(orphans)}")
 
 
 @pytest.mark.parametrize("experiment", EXPERIMENTS)

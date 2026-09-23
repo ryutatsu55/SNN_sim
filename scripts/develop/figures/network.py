@@ -1,11 +1,18 @@
 """ネットワークを**空間に置いたグラフ**として描く。
 
 - `network` : 結合を細胞体どうしを結ぶ直線の矢印として描く。ニューロンとエッジを
-  サンプリングするので大規模でも破綻しない。
+  サンプリングするので大規模でも破綻しない。**描くのは結合の有無だけ**なので、
+  build 直後 (重みがまだ全部 0 でもよい) に 1 枚出す。
+- `weight_network` : 同じ絵を**その記録時刻の重み**で描いたもの。線の太さが重みの
+  大きさ、重み 0 の結合は描かない。可塑性が結合をどう選り分けたかが見える。
 - `axon_network` : 同じ配置を、結合を**軸索の折れ線**として描いたもの (`axon_growth` 専用)。
   `network` と同じ seed から同じ順に乱数を引くので、2 枚は同じニューロン・同じ結合を映す。
 
-入力は COO。E/I の分類は `layout.ids_by("polarity")` から得る。
+入力は `network` が結合マスク (`wiring()`)、`weight_network` が COO (`coo()`)。
+E/I の分類はどちらも `layout.ids_by("polarity")` から得る。
+
+`network` と `axon_network` は `Built` を、`weight_network` は記録窓の `Window` を取る。
+座標は run を通して不変なので、窓からも `coords()` で読める。
 """
 from __future__ import annotations
 from pathlib import Path
@@ -25,12 +32,18 @@ EDGE_COLOR_NO_LAYOUT = (0.4, 0.4, 0.4, 0.5)
 # 保存時の解像度。**引数にしない** —— 変えたくなったらここを直す。
 DPI = 300
 NODE_SIZE = 10
+# エッジの線幅。`network` は**一定**。重みで太さを変えると、可塑性が動く前の run
+# (初期重みが全部 0) で線が 1 本も見えなくなるため。
+EDGE_WIDTH = 0.8
+# `weight_network` が重みに比例させるときの上限。
+MAX_EDGE_WIDTH = 2.0
 # サンプリング数。**2 枚が同じ seed から同じ順に乱数を引く**ので、network と
 # axon_network に同じニューロン・同じ結合が出る。片方だけ変えないこと。
 N_SAMPLE = 500
 MAX_EDGES = 4000
 SAMPLE_SEED = 0
 NETWORK_TITLE = "network_sample"
+WEIGHT_NETWORK_TITLE = "weight_network"
 AXON_TITLE = "axon_network"
 # 結合を作らなかった軸索も薄い下敷きとして描くか。
 SHOW_ALL_AXONS = True
@@ -64,6 +77,32 @@ def _draw_nodes(ax, x, y, sample, is_exc, node_size) -> None:
                edgecolors='black', zorder=3, label='inhibitory')
     ax.legend(fontsize=9, markerscale=1.5)
 
+def _draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin) -> None:
+    """結合を矢印で描く。`widths` が None なら一定の太さ (`EDGE_WIDTH`)。
+
+    色は**送信元 (source) の極性**。layout が無ければノードと同じ灰色。
+    `annotate` を 1 本ずつ呼ぶので、呼び出し側で `MAX_EDGES` 本まで間引いておくこと。
+    """
+    for index, (source, target) in enumerate(zip(sources, targets)):
+        color = (EDGE_COLOR_NO_LAYOUT if is_exc is None
+                 else EDGE_COLORS[bool(is_exc[source])])
+        ax.annotate(
+            "",
+            xy=(x[target], y[target]),       # 終点 (Target)
+            xytext=(x[source], y[source]),   # 始点 (Source)
+            arrowprops=dict(
+                arrowstyle="->, head_length=0.4, head_width=0.2", # 矢印の形状
+                color=color,
+                linewidth=EDGE_WIDTH if widths is None else float(widths[index]),
+                shrinkA=node_margin,  # 始点側の隙間（ノードと重ならないように）
+                shrinkB=node_margin,  # 終点側の隙間（矢印の先がノードに隠れないように）
+                # 双方向の結合が重ならないよう、線を少しカーブさせる (rad=0.1)
+                connectionstyle="arc3,rad=0.1"
+            ),
+            zorder=1
+        )
+
+
 def _apply_axis_limits(ax, config, area_drawn: bool) -> None:
     """軸範囲の優先順位:
       1. エリアの境界箱 (draw_area が set_limits で設定済み)。領域が図の外に切れない
@@ -84,26 +123,28 @@ def _apply_axis_limits(ax, config, area_drawn: bool) -> None:
 
 def network(built, out_path):
     """
-    ニューロンの空間配置と結合 (COO) からネットワーク構造を可視化する。
+    ニューロンの空間配置と結合マスクからネットワーク構造を可視化する。
 
     空間ネットワーク図を担う唯一の関数。大規模ネットワークでも破綻しないよう、
     ニューロンを N_SAMPLE 個サンプリングし、両端がサンプルに含まれる結合だけを
-    描画する (さらに MAX_EDGES 本へ間引く)。エッジは矢印付きで、重みの符号で色分け
-    (正=興奮性=赤 / 負=抑制性=青)、絶対値に応じて線の太さを変える。
+    描画する (さらに MAX_EDGES 本へ間引く)。エッジは矢印付きで、**送信元の極性**で
+    色分け (興奮性=赤 / 抑制性=青)、線幅は一定。
+
+    **重みは見ない。** 描くのは結合マスク —— どこに線が張られたか。重みの値は
+    `weight_matrix.py` と `synapse_hist.py` が受け持つ。
 
     エリアは**あれば**境界線を背景に敷き、軸範囲もそこから取る。無くてもこの図は
     成立するので `optional()` で読む (座標は無いと描けないので `coords()` は素で呼ぶ)。
     """
-    coo = built.coo()
+    wiring = built.wiring()
     config, layout = built.config, built.layout
     area = optional(built.area)
 
     coords = np.asarray(built.coords())
-    row = np.asarray(coo.row, dtype=np.int64)
-    col = np.asarray(coo.col, dtype=np.int64)
-    weights = np.asarray(coo.weights).reshape(-1)
-    if not (row.size == col.size == weights.size):
-        raise ValueError("row / col / weights の長さが一致しません。")
+    row = np.asarray(wiring.row, dtype=np.int64)
+    col = np.asarray(wiring.col, dtype=np.int64)
+    if row.size != col.size:
+        raise ValueError("row / col の長さが一致しません。")
     N = coords.shape[0]
     rng = np.random.default_rng(SAMPLE_SEED)
 
@@ -127,48 +168,20 @@ def network(built, out_path):
     # --- ノード描画 (layout があれば E/I で色分け) ---
     _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
-    # 描画用のスケール計算（太さの正規化用）
-    abs_max = np.max(np.abs(weights)) if weights.size else 0.0
-    max_weight = abs_max if abs_max > 0 else 1.0
     # 結合（エッジ）を抽出し、両端がサンプルに含まれるものだけ残す。
-    # 重み 0 の結合を落とすのは「線幅 0 の矢印を描かない」ため。COO は実結合しか
-    # 持たないが、可塑性で 0 まで落ちた結合はここに含まれる。
-    keep = (np.abs(weights) != 0) & in_sample[row] & in_sample[col]
-    sources, targets, edge_w = row[keep], col[keep], weights[keep]
+    # **重みでは絞らない** —— マスクに載っている結合は、重みがいくつであれ 1 本の線。
+    keep = in_sample[row] & in_sample[col]
+    sources, targets = row[keep], col[keep]
     # エッジが多すぎる場合はさらに max_edges 本へ間引く (annotate は1本ずつ描くため)
     if sources.size > MAX_EDGES:
         pick = rng.choice(sources.size, size=MAX_EDGES, replace=False)
-        sources, targets, edge_w = sources[pick], targets[pick], edge_w[pick]
+        sources, targets = sources[pick], targets[pick]
 
     # 矢印がノードの中心に刺さるのを防ぐためのマージン計算
     # (scatterの s は面積なので、半径は平方根に比例)
     node_margin = np.sqrt(NODE_SIZE) * 0.8
 
-    for s, t, w in zip(sources, targets, edge_w):
-
-        # 重みの強さに応じて線の太さを変更 (最大2.0)
-        lw = (abs(w) / max_weight) * 2.0
-
-        # エッジ色は出力元ノード (source) の色に揃える。
-        # layout があれば興奮性=赤 / 抑制性=青、無ければノードと同じ灰色。
-        color = EDGE_COLOR_NO_LAYOUT if is_exc is None else EDGE_COLORS[bool(is_exc[s])]
-
-        # ax.annotate を用いて矢印を描画
-        ax.annotate(
-            "",
-            xy=(x[t], y[t]),       # 終点 (Target)
-            xytext=(x[s], y[s]),   # 始点 (Source)
-            arrowprops=dict(
-                arrowstyle="->, head_length=0.4, head_width=0.2", # 矢印の形状
-                color=color,
-                linewidth=lw,
-                shrinkA=node_margin,  # 始点側の隙間（ノードと重ならないように）
-                shrinkB=node_margin,  # 終点側の隙間（矢印の先がノードに隠れないように）
-                # 双方向の結合が重ならないよう、線を少しカーブさせる (rad=0.1)
-                connectionstyle="arc3,rad=0.1"
-            ),
-            zorder=1
-        )
+    _draw_edges(ax, x, y, sources, targets, None, is_exc, node_margin)
 
     ax.set_aspect('equal')
     ax.set_title(f"{NETWORK_TITLE}\n{sample.size} neurons sampled, "
@@ -179,6 +192,68 @@ def network(built, out_path):
 
     save(fig, out_path, dpi=DPI, bbox_inches='tight')
     print(f"Network visualization saved to {out_path}")
+
+def weight_network(window, out_path):
+    """**その記録時刻の重み**でネットワークを描く (`network` の時間つきの対)。
+
+    `network` と同じ配置・同じサンプリング (同じ `SAMPLE_SEED` から同じ順に乱数を引く)
+    なので、2 枚を並べると「張られた結合のうち、可塑性がどれを残したか」が読める。
+
+    線の太さは `|w| / max|w|` に比例し (最大 `MAX_EDGE_WIDTH`)、**重み 0 の結合は
+    描かない**。記録窓ごとに出るので、太い線が育っていく過程がそのまま見える。
+
+    エリアは窓からは読めないので境界線は敷かない (軸範囲は config から取る)。
+    座標を持たない run (`no_space`) では `coords()` が `MissingData` を投げる。
+    """
+    coo = window.coo()
+    config, layout = window.config, window.layout
+
+    coords = np.asarray(window.coords())
+    row = np.asarray(coo.row, dtype=np.int64)
+    col = np.asarray(coo.col, dtype=np.int64)
+    weights = np.asarray(coo.weights).reshape(-1)
+    if not (row.size == col.size == weights.size):
+        raise ValueError("row / col / weights の長さが一致しません。")
+    N = coords.shape[0]
+    rng = np.random.default_rng(SAMPLE_SEED)
+
+    x, y = coords[:, 0], coords[:, 1]
+
+    # --- network() と同一のサンプリング (乱数の消費順まで同じ) ---
+    sample = _sample_nodes(N, N_SAMPLE, rng)
+    in_sample = np.zeros(N, dtype=bool)
+    in_sample[sample] = True
+    is_exc = _excitatory_mask(layout, N)
+
+    fig, ax = plt.subplots(figsize=(12, 10))
+    _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
+
+    # 重み 0 の結合を落とすのは「線幅 0 の矢印を描かない」ため。COO は実結合しか
+    # 持たないが、可塑性で 0 まで落ちた結合はここに含まれる。
+    keep = (np.abs(weights) != 0) & in_sample[row] & in_sample[col]
+    sources, targets, edge_w = row[keep], col[keep], weights[keep]
+    if sources.size > MAX_EDGES:
+        pick = rng.choice(sources.size, size=MAX_EDGES, replace=False)
+        sources, targets, edge_w = sources[pick], targets[pick], edge_w[pick]
+
+    # 太さの基準は**その窓の中での最大値**。窓をまたいだ絶対比較はできないので、
+    # 重みの大きさそのものを追うときは weight_matrix / weight_distribution を見ること。
+    abs_max = float(np.max(np.abs(edge_w))) if edge_w.size else 0.0
+    max_weight = abs_max if abs_max > 0 else 1.0
+    widths = (np.abs(edge_w) / max_weight) * MAX_EDGE_WIDTH
+
+    node_margin = np.sqrt(NODE_SIZE) * 0.8
+    _draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin)
+
+    ax.set_aspect('equal')
+    ax.set_title(f"{WEIGHT_NETWORK_TITLE} {window.hour:g} h\n{sample.size} neurons sampled, "
+                 f"{sources.size} edges drawn, max|w|={abs_max:.3f}")
+    ax.set_xlabel("X Coordinate [um]")
+    ax.set_ylabel("Y Coordinate [um]")
+    _apply_axis_limits(ax, config, area_drawn=False)
+
+    save(fig, out_path, dpi=DPI, bbox_inches='tight')
+
 
 def _axon_polyline(geometry, neuron: int) -> np.ndarray:
     """ニューロン 1 本の軸索を頂点列 (V, 2) にする。軸索が無ければ空配列。

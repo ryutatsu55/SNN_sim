@@ -12,7 +12,9 @@ from scripts.akita_soc.store import paths
 from scripts.akita_soc.analysis.metrics import build_row
 from scripts.akita_soc.figures.avalanche import avalanche_distribution
 from scripts.akita_soc.figures.raster import raster
+from scripts.akita_soc.figures.synapse_hist import weight_distribution
 from scripts.akita_soc.figures.trace import neuron_trace
+from scripts.akita_soc.figures.weight_matrix import weight_matrix
 
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
@@ -23,6 +25,9 @@ from scripts.akita_soc.figures.trace import neuron_trace
 FIGURES = (
     ("raster", raster, paths.RASTER, "raster_{tag}.png"),
     ("avalanche plot", avalanche_distribution, paths.AVALANCHE, "avalanche_{tag}.png"),
+    ("weight matrix", weight_matrix, paths.WEIGHT, "weight_matrix_{tag}.png"),
+    ("weight distribution", weight_distribution, paths.WEIGHT_DIST,
+     "weight_distribution_{tag}.png"),
     # トレースを採っていない run では window.trace() が MissingData を投げるので、
     # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
     ("neuron trace", neuron_trace, paths.TRACE, "neuron_trace_{tag}.png"),

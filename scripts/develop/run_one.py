@@ -31,10 +31,12 @@ from scripts.develop.analysis import metrics
 from scripts.develop.report import overview, panels, structure
 from scripts.develop.store import paths
 from src.utils.runview import BuiltNetwork as Built
-from scripts.develop.store.records import (CONNECTIVITY_NAME, METRICS_NAME, MS_PER_HOUR,
+from scripts.develop.store.records import (CONNECTIVITY_NAME, COORDS_NAME, METRICS_NAME,
+                                           MS_PER_HOUR,
                                            SPIKES, TRACE, WEIGHTS,
                                            MetricsWriter, record_filename,
-                                           save_connectivity, save_spikes, save_trace,
+                                           save_connectivity, save_coords,
+                                           save_spikes, save_trace,
                                            save_weight_values)
 from scripts.develop.store.series import open_run
 
@@ -262,6 +264,12 @@ def main():
     # 外部軸 (layer / module など) は config だけからは復元できないので保存しておく。
     # 解析側は config.yaml から自動軸を再構築し、これを load_axes_file() で読み戻す。
     layout.save_axes(paths.data_path(run_dir, AXES_NAME))
+
+    # 座標も config だけからは復元できない。**`no_space` では書かない** ——
+    # 「ファイルが無い = 空間を持たない run」を読む側の判定にしているため。
+    coords = builder.global_coords
+    if coords is not None and np.all(np.isfinite(coords)):
+        save_coords(paths.data_path(run_dir, COORDS_NAME), coords)
 
     # 軸索の折れ線は「どの軸索がどのブリッジを通ったか」= 損傷実験に要る記録。
     # 幾何を残すのは axon_growth 系のコネクタだけなので、持たないものは素通りさせる。

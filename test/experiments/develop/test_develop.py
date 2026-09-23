@@ -27,7 +27,8 @@ from scripts.develop.store.records import METRICS_NAME, MS_PER_HOUR, SPIKES, WEI
     record_filename, save_spikes, save_weight_values
 from scripts.develop.replot import replot
 from scripts.develop.store.series import open_run
-from src.core.config_manager import ConfigManager, expand_hours_spec, expand_seed_spec
+from src.core.config_manager import (ConfigManager, expand_hours_spec,
+                                     expand_seed_spec, load_yaml)
 from src.core.layout import NetworkLayout
 from src.core.config_manager import CONFIG_NAME
 from scripts.develop.store.paths import DATA_SUBDIR
@@ -147,10 +148,15 @@ class TaskSelectionTest(unittest.TestCase):
     """
 
     def test_task_comes_from_the_main_config(self):
-        config = ConfigManager().resolve(
-            str(root_path / "scripts" / "develop" / "axon_growth_hierarchy.yaml"),
-            task_path=TASK_PATH)
-        self.assertEqual(config.task.profile_name, "develop")
+        """解決されたプロファイルが、メイン config の `task:` が名指したものであること。
+
+        **名前を決め打ちしない。** どのプロファイルで走らせるかは実験条件で動かす値で、
+        ここが守るのは「選んでいるのが config であって呼び出し側ではない」こと。
+        """
+        main_config = root_path / "scripts" / "develop" / "axon_growth_hierarchy.yaml"
+        declared = load_yaml(main_config)["task"]
+        config = ConfigManager().resolve(str(main_config), task_path=TASK_PATH)
+        self.assertEqual(config.task.profile_name, declared)
 
     def test_config_without_task_is_rejected(self):
         # `task:` を書いていない config は、既定を推測せず落ちる

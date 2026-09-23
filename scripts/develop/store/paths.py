@@ -9,12 +9,17 @@
     ├── source_config.yaml   … 入力 YAML の逐語コピー (seed の範囲指定はここに残る)
     ├── run.log              … ランチャが子プロセスの出力を流し込む先
     ├── data/                … npz と csv。**最初からここに書く**
+    │                          (座標は coords.npz。`no_space` の run には無い)
     └── figures/
         ├── structure/       … area / connection_mask / network_sample / 各種分布
-        ├── raster/
-        ├── avalanche/
-        ├── trace/           … task.trace_neuron を指定した run のみ
-        └── overview/        … figure2c / figure2d / weight_track
+        ├── panels/          … **記録窓ごと**の図。窓の数だけ増えるものはここへ
+        │   ├── raster/
+        │   ├── avalanche/
+        │   ├── weight/      … 重み行列
+        │   ├── weight_distribution/ … 重み分布
+        │   ├── weight_network/ … 重みで描いたネットワーク図
+        │   └── trace/       … task.trace_neuron を指定した run のみ
+        └── overview/        … figure2c / figure2d
 
 **最初から正しい場所へ書く。** 走り終えてから `data/` へ移すような後処理は無いので、
 完走したか否かで run の形が変わらない。
@@ -43,17 +48,26 @@ FIGURES_SUBDIR = "figures"
 # 「途中で死んだ」ことがディレクトリを見れば分かる。
 PENDING_CONFIG_NAME = "pending_config.yaml"
 
-# 図の種類。ここに無い種類を fig_path() に渡すと弾かれる (タイポで図が迷子になるのを防ぐ)。
+# 図の種類 = `figures/` から見た相対パス。ここに無い種類を fig_path() に渡すと弾かれる
+# (タイポで図が迷子になるのを防ぐ)。
+#
+# **記録窓ごとに出るものは `panels/` の下にまとめる。** run に 1 枚しか出ないもの
+# (structure / overview) と同じ階層に並べると、窓の数だけ中身が増えるディレクトリに
+# 埋もれて「run 全体の図」がどれか読めなくなる。
 STRUCTURE = "structure"
-RASTER = "raster"
-AVALANCHE = "avalanche"
-TRACE = "trace"
+PANELS = "panels"
+RASTER = f"{PANELS}/raster"
+AVALANCHE = f"{PANELS}/avalanche"
+WEIGHT = f"{PANELS}/weight"
+WEIGHT_DIST = f"{PANELS}/weight_distribution"
+WEIGHT_NETWORK = f"{PANELS}/weight_network"
+TRACE = f"{PANELS}/trace"
 OVERVIEW = "overview"
-FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, TRACE, OVERVIEW)
+FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK, TRACE, OVERVIEW)
 
 # run を走らせる前に必ず作るディレクトリ。trace は task.trace_neuron を指定したときだけ作る
 # (空ディレクトリが残ると「採取したのに空だった」のか「採取していない」のか読めなくなる)。
-DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, OVERVIEW)
+DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK, OVERVIEW)
 
 
 def data_dir(run_dir: str | Path) -> Path:

@@ -7,11 +7,13 @@
     ├── pending_config.yaml  … ランチャ → run 本体の**引き継ぎ**。まだ記録ではない
     ├── config.yaml          … run の**記録** (親 run・切断 spec・タイムラインが全部入る)
     ├── run.log              … ランチャが子プロセスの出力を流し込む先
-    ├── data/                … npz と csv と lesion.json
+    ├── data/                … npz と csv と lesion.json (座標は coords.npz)
     └── figures/
         ├── structure/       … 切断**後**のネットワークの形
-        ├── raster/
-        ├── avalanche/
+        ├── panels/          … **probe ごと**の図。probe の数だけ増えるものはここへ
+        │   ├── raster/
+        │   ├── avalanche/
+        │   └── weight/      … その probe の重み行列
         └── overview/        … 重み軌跡 / 重み分布の変化 / 発火レート散布
 
 `scripts/develop/store/paths.py` と同じ形だが、**別のファイルとして持つ**。
@@ -37,12 +39,19 @@ FIGURES_SUBDIR = "figures"
 # それを `config.yaml` の名前で置くと、記録の不変条件が崩れる。
 PENDING_CONFIG_NAME = "pending_config.yaml"
 
-# 図の種類。ここに無い種類を fig_path() に渡すと弾かれる (タイポで図が迷子になるのを防ぐ)。
+# 図の種類 = `figures/` から見た相対パス。ここに無い種類を fig_path() に渡すと弾かれる
+# (タイポで図が迷子になるのを防ぐ)。
+#
+# **probe ごとに出るものは `panels/` の下にまとめる。** run に 1 枚しか出ないもの
+# (structure / overview) と同じ階層に並べると、probe の数だけ中身が増えるディレクトリに
+# 埋もれて「run 全体の図」がどれか読めなくなる。
 STRUCTURE = "structure"
-RASTER = "raster"
-AVALANCHE = "avalanche"
+PANELS = "panels"
+RASTER = f"{PANELS}/raster"
+AVALANCHE = f"{PANELS}/avalanche"
+WEIGHT = f"{PANELS}/weight"
 OVERVIEW = "overview"
-FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, OVERVIEW)
+FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, OVERVIEW)
 
 # run を走らせる前に必ず作るディレクトリ。lesion は全種類を必ず出す。
 DEFAULT_FIG_KINDS = FIG_KINDS

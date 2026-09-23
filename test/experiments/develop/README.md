@@ -1,14 +1,18 @@
-# develop の図の回帰チェック
+# develop: 本番と再解析が一致することを確かめる
 
-`scripts/develop/figures/` は `src/utils/plotting/` の複製なので、**共有層のテスト
-(`test/utils/test_plotting_ordering.py` など) は develop の図を守りません。**
-代わりに「同じ run から同じ png が出ること」をバイト単位で確かめます。
+`scripts/develop/figures/` は共有層の複製なので、**`test/utils/` のテストは develop の図を
+守りません。** 代わりに確かめられるのは「**同じ run から 2 通りの経路 (本番 / `replot`) で
+同じ png が出ること**」で、これは run の中で完結するので基準ファイルを持ちません。
 
-`reference_figures.md5` がその基準 (21 枚)。**リファクタで図が意図せず変わったかどうかは
-これで分かります** —— 図の内容を変える変更をしたときだけ、意図を確認したうえで更新して
-ください。
+> **図の md5 基準 (`reference_figures.md5`) は廃止した。** 指標や図の定義を直すたびに
+> 基準の方も作り直すことになり、「意図して変えた」と「壊れた」を区別できなかったため。
+> 残すのは下の自己一致チェックだけ。
 
-## 作り直し方
+**構造図のために再ビルドするので、一致すれば「再ビルドが元の run と同じ結合を作った」
+証拠**にもなる (`connectivity.npz` との照合は `replot` 自身も毎回やるが、図の一致はより
+強い検査)。
+
+## 手順
 
 `scripts/develop/task.yaml` の末尾に一時的なプロファイルを足します。
 
@@ -28,27 +32,11 @@ smoke:
 
 ```bash
 python -m scripts.develop --config _smoke --condition _ref
-find outputs/develop/_ref -name "*.png" | sort | xargs md5sum \
-  | sed 's|/_ref/|/RUN/|' > test/experiments/develop/reference_figures.md5
-```
+find outputs/develop/_ref -name "*.png" | sort | xargs md5sum > /tmp/develop_before.md5
 
-比較するときは条件名を `_ref` にすること。`weight_matrix_panel.png` と
-`weight_delta_panel.png` は**タイトルに run ディレクトリ名が入る**ので、別名で走らせると
-この 2 枚だけ必ず食い違います。
-
-## 本番と再解析が一致することも見る
-
-`replot` は構造図のために**再ビルド**するので、同じ run に対して 2 通りの経路で
-21 枚が作られることになります。作り直しても md5 が動かないことを確かめてください。
-
-```bash
 python -m scripts.develop.replot outputs/develop/_ref
-find outputs/develop/_ref -name "*.png" | sort | xargs md5sum | sed 's|/_ref/|/RUN/|' \
-  | diff - test/experiments/develop/reference_figures.md5
+find outputs/develop/_ref -name "*.png" | sort | xargs md5sum | diff - /tmp/develop_before.md5
 ```
-
-構造図まで一致すれば、**再ビルドが元の run と同じネットワークを作った**証拠になります
-(`connectivity.npz` との照合は `replot` 自身も毎回やりますが、図の一致はより強い検査です)。
 
 `metrics.csv` も本番と再解析で同じ関数を通るので、バイト単位で一致します。
 

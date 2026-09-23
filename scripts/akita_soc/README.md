@@ -37,6 +37,21 @@ python -m scripts.akita_soc.run_one outputs/akita_soc/<条件>/seed03
 python -m scripts.akita_soc.replot <run ディレクトリ> [--no-structure]
 ```
 
+### 条件ディレクトリを丸ごと作り直す
+
+`replot.py` が取るのは**run ディレクトリ 1 つ** (`config.yaml` と `data/` を持つ階層) です。
+sweep の条件ディレクトリはその下に `seed01`…`seedNN` を束ねたものなので、シェルの
+ループで回します。**暫定の手順で、専用の入口はまだありません。**
+
+```bash
+for d in outputs/akita_soc/<条件>/seed*; do
+    python -m scripts.akita_soc.replot "$d"
+done
+```
+
+`no_space` の確率結合なので再ビルドは一瞬で、N=100・記録窓 73 個の条件で
+**1 run あたり約 45 秒**でした (CPU)。
+
 **引数・出力ディレクトリ・seed の書き方・並列度・`pending_config.yaml` の意味は
 `scripts/develop/README.md` と同じ。** そちらに詳しく書いてある。
 
@@ -83,8 +98,8 @@ scripts/akita_soc/
 │
 ├── report/         いつ何を出すか  ← ここを見れば出力が一覧できる
 │   ├── structure.py   build 直後: 初期重み行列 / 重み・遅延の分布 / 結合確率の表
-│   ├── panels.py      記録窓ごと: ラスター / アバランチ / トレース / metrics 1 行
-│   └── overview.py    run 終了後: fig2c / fig2d / 重み行列 (1 枚・パネル・差分)
+│   ├── panels.py      記録窓ごと: ラスター / アバランチ / 重み行列 / トレース / metrics 1 行
+│   └── overview.py    run 終了後: fig2c / fig2d
 ├── store/          どこに何があり、どう読み書きするか
 ├── analysis/       何を測るか (表)
 └── figures/        どう描くか (図)

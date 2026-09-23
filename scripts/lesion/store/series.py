@@ -38,12 +38,12 @@ from src.utils import runview
 from src.utils.runview import Coo, MissingData, Spikes, Wiring
 
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import (METRICS_NAME, MS_PER_HOUR, PHASE_BASELINE,
-                                          SPIKES, WEIGHTS, discover_probes, load_cut,
-                                          load_connectivity, load_manifest, load_spikes,
-                                          load_weight_values, post_connectivity_path,
-                                          pre_connectivity_path, probe_filename,
-                                          read_window_meta)
+from scripts.lesion.store.records import (COORDS_NAME, METRICS_NAME, MS_PER_HOUR,
+                                          PHASE_BASELINE, SPIKES, WEIGHTS, discover_probes,
+                                          load_coords, load_cut, load_connectivity,
+                                          load_manifest, load_spikes, load_weight_values,
+                                          post_connectivity_path, pre_connectivity_path,
+                                          probe_filename, read_window_meta)
 
 
 class Window(runview.Window):
@@ -88,6 +88,10 @@ class Window(runview.Window):
         """**この窓の時点の**結合。切断前と切断後で違う。"""
         return (self._series.wiring_pre() if self.is_baseline
                 else self._series.wiring())
+
+    def coords(self) -> np.ndarray:
+        """soma の座標。**切断で動かない**ので series が持つものをそのまま返す。"""
+        return self._series.coords()
 
     def weights(self) -> np.ndarray:
         """重みの値ベクトル。**wiring と本数が合うことをここで確かめる。**
@@ -134,6 +138,17 @@ class Series(runview.Series):
     def wiring_pre(self) -> Wiring:
         """切断**前** (Phase 1) の結合。baseline の probe だけがこれを使う。"""
         return self._wiring_pre
+
+    def coords(self) -> np.ndarray:
+        """soma の座標。**`no_space` の run は持たない** (ファイルごと無い)。
+
+        結合と違って切断の前後で 1 つしかない。切るのはシナプスであって
+        ニューロンの位置ではないため。
+        """
+        path = paths.data_path(self.run_dir, COORDS_NAME)
+        if not path.exists():
+            raise MissingData("coords", "空間を持たない config です")
+        return load_coords(path)
 
     def metrics(self) -> pd.DataFrame:
         """`metrics.csv` を読む。**呼ばれた時点で読む** (開いた時点ではない)。

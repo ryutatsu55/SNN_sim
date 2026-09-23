@@ -57,11 +57,12 @@ from scripts.lesion.analysis.selectors import LesionContext, combine, parse_cut_
 from scripts.lesion.store.parent import load_parent
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import (METRICS_NAME, MS_PER_HOUR, PHASE_BASELINE,
-                                          PHASE_POST, SPIKES, WEIGHTS, CUT_PROFILE_NAME,
-                                          MetricsWriter, probe_filename, save_connectivity,
-                                          save_cut, save_manifest, save_spikes,
-                                          save_weight_values, write_table)
+from scripts.lesion.store.records import (COORDS_NAME, METRICS_NAME, MS_PER_HOUR,
+                                          PHASE_BASELINE, PHASE_POST, SPIKES, WEIGHTS,
+                                          CUT_PROFILE_NAME, MetricsWriter, probe_filename,
+                                          save_connectivity, save_coords, save_cut,
+                                          save_manifest, save_spikes, save_weight_values,
+                                          write_table)
 from scripts.lesion.store.records import POST_CONNECTIVITY_NAME, pre_connectivity_path
 from scripts.lesion.store.series import open_run
 
@@ -348,6 +349,12 @@ def main():
     manager.save_config(config, save_dir=run_dir)
     (run_dir / paths.PENDING_CONFIG_NAME).unlink(missing_ok=True)
     layout1.save_axes(paths.data_path(run_dir, AXES_NAME))
+
+    # 座標も config だけからは復元できない。**`no_space` では書かない** ——
+    # 「ファイルが無い = 空間を持たない run」を読む側の判定にしているため。
+    coords = b1.global_coords
+    if coords is not None and np.all(np.isfinite(coords)):
+        save_coords(paths.data_path(run_dir, COORDS_NAME), coords)
 
     sim1 = GeNNSimulator(model1, config, b1)
     sim1.setup(backup_initial_states=False)   # 復元前の重みを initial_states に残さない

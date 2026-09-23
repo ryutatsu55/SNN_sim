@@ -21,7 +21,7 @@ from src.utils.analysis.weights import (
 )
 from src.utils.runview import MissingData
 from scripts.lesion.figures import save, style
-from scripts.lesion.figures.style import BLOCK_COLORS, Ordering
+from scripts.lesion.figures.style import BLOCK_COLORS
 
 
 # 密な (N, N) float64 を組んでよい N の上限 (20000^2 x 8B = 3.2 GiB)。
@@ -39,18 +39,6 @@ PROB_SEED = 0
 MASK_TITLE = "Connection mask (coarse-grained)"
 PROB_TITLE = "Empirical connection probability"
 
-
-def _outer_block_labels(layout, ordering: Ordering, total: int) -> list[tuple[float, str]]:
-    """最外ブロック (order_axes の先頭の軸) の中心位置とラベル名。
-
-    位置は**表示位置** (ニューロン単位) なので、粗視化図では呼び出し側でセルへ換算する。
-    """
-    if layout is None or not ordering.enabled or not ordering.axes:
-        return []
-    values = layout.labels(ordering.axes[0])[ordering.order]
-    edges = [0, *ordering.positions(level=0), total]
-    return [(0.5 * (edges[i] + edges[i + 1]), str(values[edges[i]]))
-            for i in range(len(edges) - 1)]
 
 def connection_mask(built, out_path: Path) -> None:
     """結合マスクを K×K に粗視化した密度画像。
@@ -104,7 +92,7 @@ def connection_mask(built, out_path: Path) -> None:
     style.draw_block_boundaries(ax, ordering, cells, scale=scale, skip=("polarity",))
 
     # 最外ブロックの名前を目盛りに。多すぎると潰れるのでセル番号のままにする。
-    blocks = _outer_block_labels(layout, ordering, total_neurons)
+    blocks = style.outer_block_labels(layout, ordering, total_neurons)
     if blocks and len(blocks) <= MAX_BLOCK_TICKS:
         ticks = [center * scale - 0.5 for center, _ in blocks]
         names = [name for _, name in blocks]

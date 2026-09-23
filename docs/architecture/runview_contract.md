@@ -108,8 +108,13 @@ def guard(label, fn, *args):
 | view | いつ | 持つもの |
 |---|---|---|
 | `Built` | build 直後。まだ回していない | `wiring` `coo` `coords` `area` `geometry` |
-| `Window` | 記録窓 1 つ | `hour` `record_start_ms` `wiring` `coo` `weights` `spikes` `trace` |
-| `Series` | run 全体 | `windows` `wiring` `metrics` |
+| `Window` | 記録窓 1 つ | `hour` `record_start_ms` `wiring` `coo` `weights` `coords` `spikes` `trace` |
+| `Series` | run 全体 | `windows` `wiring` `coords` `metrics` |
+
+`coords` は **run を通して不変**なので `Series` が持ち、`Window` はそれを借りる。
+`data/coords.npz` として記録する (config だけからは復元できないため)。`no_space` の
+run はファイルごと持たないので `MissingData` になる —— `area` や `geometry` と同じく、
+**それは正常な状態**。
 
 ```python
 class Built(RunView):   ...
@@ -214,7 +219,7 @@ develop の内部事情ではなく **develop と lesion の契約**だった
 図が配列ではなく view を受け取るので、**合成配列での単体テストはできなくなる。**
 小さい npz を書いた run ディレクトリを作るフィクスチャ方式になる。
 
-主な守りは `test/experiments/develop/reference_figures.md5`（PNG のバイト一致）なので
+主な守りは `test/experiments/develop/README.md` の手動チェック（本番と `replot` の PNG バイト一致）なので
 実害は小さい。各実験のテストが `_make_run()` で小さな run を組み立てる。
 
 **共通フィクスチャへは上げなかった。** 記録ファイル名の規約が実験ごとに違う以上、

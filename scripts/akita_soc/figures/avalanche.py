@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from src.utils.analysis.avalanche import split_avalanches
 from src.utils.analysis.powerlaw import DistributionFit, fit_distribution_curves
+from src.utils.analysis.criticality import DeltaCrFit, delta_cr_fit
 from scripts.akita_soc.figures import save
 
 # 論文 (Ikeda-Akita-Takahashi 2023) Fig.2 の軸。図を並べて比べるための固定値。
@@ -23,14 +24,22 @@ def draw_discrete_distribution(
     fit: DistributionFit,
     xlabel: str,
     reference_slope: float | None = None,
+    regression: DeltaCrFit | None = None,
 ) -> None:
-    """経験 PMF に power-law / exponential の最尤フィットを重ねて log-log で描く。
+    """経験 PMF に理論曲線を重ねて log-log で描く。
+
+    重なる線は 2 系統ある。**別物なので線種も凡例も分けてある。**
+
+    - 最尤フィット (赤 = power-law, 青の点線 = exponential)。LLR が比べているのはこの 2 本。
+    - ΔCr の回帰直線 (緑の破線)。観測個数で重み付けた log-log 最小二乗で、
+      ΔCr はこの直線と経験 PMF の**確率の差**を上振れ/下振れに分けて足したもの。
 
     Args:
         ax: 描画先。図の生成と保存は呼び出し側の責任。
         fit: `fit_distribution_curves` の結果。
         xlabel: x 軸ラベル。
         reference_slope: 指定すると、その傾きの参照直線を経験分布の先頭に合わせて重ねる。
+        regression: `delta_cr_fit()` の結果。渡すと ΔCr の回帰直線を重ね、凡例に値を出す。
     """
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Probability")
@@ -52,9 +61,17 @@ def draw_discrete_distribution(
             ax.plot(fit.fit_support, reference, color="gray", lw=1.2, ls="--", zorder=1,
                     label=f"reference slope {reference_slope}")
 
-    ax.legend(fontsize=6.5, loc="lower left",
-              title=f"fit slope={fit.slope_loglog:.2f}  LLR={fit.llr:.0f}",
-              title_fontsize=6.5)
+    # **傾きは凡例の各行が持つ。** 最尤の α と ΔCr 回帰の傾きは別物なので、
+    # どちらとも読める "fit slope" をここに出さない。
+    title = f"LLR={fit.llr:.0f}"
+    if regression is not None:
+        keep = regression.grid >= regression.smin
+        ax.plot(regression.grid[keep], regression.fit[keep], color="tab:green", lw=1.2,
+                ls="--", zorder=2,
+                label=f"ΔCr regression (slope={regression.slope:.2f})")
+        title += f"  ΔCr={regression.delta_cr:+.3f}"
+
+    ax.legend(fontsize=6.5, loc="lower left", title=title, title_fontsize=6.5)
 
 def avalanche_distribution(window, out_path: Path) -> None:
     """記録窓のスパイク列からアバランチを切り出し、サイズ分布を log-log で描く。
@@ -67,7 +84,8 @@ def avalanche_distribution(window, out_path: Path) -> None:
     fit = fit_distribution_curves(sizes, fit_max=smax)
 
     fig, ax = plt.subplots(figsize=FIGSIZE)
-    draw_discrete_distribution(ax, fit, xlabel="Avalanche size")
+    draw_discrete_distribution(ax, fit, xlabel="Avalanche size",
+                               regression=delta_cr_fit(sizes, smax=smax))
     if fit.support.size == 0:
         # データが無くても log 軸の枠だけは描いておく。
         ax.set_xscale("log")

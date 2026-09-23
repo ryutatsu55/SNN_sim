@@ -12,6 +12,7 @@ from scripts.lesion.store import paths
 from scripts.lesion.analysis.metrics import build_row
 from scripts.lesion.figures.avalanche import avalanche_distribution
 from scripts.lesion.figures.raster import raster
+from scripts.lesion.figures.weight_matrix import weight_matrix
 
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
@@ -22,6 +23,7 @@ from scripts.lesion.figures.raster import raster
 FIGURES = (
     ("raster", raster, paths.RASTER, "raster_{tag}.png"),
     ("avalanche plot", avalanche_distribution, paths.AVALANCHE, "avalanche_{tag}.png"),
+    ("weight matrix", weight_matrix, paths.WEIGHT, "weight_matrix_{tag}.png"),
 )
 
 

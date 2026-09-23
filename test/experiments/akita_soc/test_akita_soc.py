@@ -78,10 +78,16 @@ class TaskProfileTest(unittest.TestCase):
         self.assertEqual(config.task.profile_name, "akita_soc")
         self.assertEqual(list(config.task.record_hours), [0, 6, 72])
 
-    def test_stable_probe_profile_records_more_points(self):
-        config = ConfigManager().resolve(str(CONFIG_PATH), "akita_soc_stable_probe",
-                                         task_path=TASK_PATH)
-        self.assertEqual(len(config.task.record_hours), 8)
+    def test_sequential_probe_profile_records_more_points(self):
+        """遷移を細かく追うプロファイルが、既定より多くの点を記録すること。
+
+        **点数そのものは決め打ちしない。** 何点採るかは実験条件で動かす値で、
+        ここが守るのは「別プロファイルとして分けてある」ことの方。
+        """
+        default = ConfigManager().resolve(str(CONFIG_PATH), task_path=TASK_PATH)
+        probe = ConfigManager().resolve(str(CONFIG_PATH), "akita_soc_sequential_probe",
+                                        task_path=TASK_PATH)
+        self.assertGreater(len(probe.task.record_hours), len(default.task.record_hours))
 
 
 class RecordNamingTest(unittest.TestCase):

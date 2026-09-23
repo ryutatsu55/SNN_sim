@@ -111,8 +111,7 @@ def _draw_llr_ceiling(ax, hours, df) -> None:
     論文 Fig.2(c) の絶対値はこの線を超えており (72h で 1.65 倍)、**LLR の絶対値は論文と
     比較できない**。自分の値が天井の何割かで読むこと。詳細は `powerlaw.py` の docstring。
 
-    注意: `metrics.csv` の `llr` は**打ち切らずに**評価した値なので、この線と厳密に
-    同じ土俵ではない (打ち切り版が要るなら別列を持たせること)。
+    `metrics.csv` の `llr` も同じ [1, smax] で評価してあるので、線と縦軸は同じ土俵。
     """
     if 'avalanche_smax' not in df.columns or 'num_avalanches' not in df.columns:
         return

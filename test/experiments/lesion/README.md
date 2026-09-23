@@ -1,13 +1,16 @@
-# lesion の図の回帰チェック
+# lesion: 本番と再解析が一致することを確かめる
 
 `scripts/lesion/figures/` は実験固有の複製なので、**共有層のテスト
 (`test/utils/test_plotting_ordering.py` など) は lesion の図を守りません。**
-代わりに「同じ run から同じ png が出ること」をバイト単位で確かめます。
+代わりに確かめられるのは「**同じ run から 2 通りの経路 (本番 / `replot`) で同じ png が
+出ること**」で、これは run の中で完結するので基準ファイルを持ちません。
 
-`reference_figures.md5` がその基準。develop / akita_soc と同じ仕組みですが、
-**親 run が要る**のがこの実験だけの事情です。
+> **図の md5 基準 (`reference_figures.md5`) は廃止した。** 理由は
+> `test/experiments/develop/README.md` と同じ。
 
-## 作り直し方
+develop / akita_soc と同じ手順ですが、**親 run が要る**のがこの実験だけの事情です。
+
+## 手順
 
 ### 1. 親 run を作る
 
@@ -44,13 +47,10 @@ smoke:
 
 ```bash
 python -m scripts.lesion --parent outputs/develop/_parent --condition _ref --task smoke
-find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum \
-  | sed 's|/_ref/|/RUN/|' > test/experiments/lesion/reference_figures.md5
+find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum > /tmp/lesion_before.md5
 ```
 
-比較するときは条件名を `_ref` にすること。
-
-### 3. 本番と再解析が一致することも見る
+### 3. 再解析して突き合わせる
 
 `replot` は構造図のために**再ビルドして切り直す**ので、同じ run に対して 2 通りの経路で
 図が作られることになります。切断マスクは `lesion_cut.npz` の (row, col) から引き当てる
@@ -59,8 +59,7 @@ find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum \
 
 ```bash
 python -m scripts.lesion.replot outputs/lesion/_ref
-find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum | sed 's|/_ref/|/RUN/|' \
-  | diff - test/experiments/lesion/reference_figures.md5
+find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum | diff - /tmp/lesion_before.md5
 ```
 
 ## 後片付け
@@ -72,4 +71,4 @@ find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum | sed 's|/_ref/|/RU
 
 **GeNN のコンパイルが run につき 2 回**走り、そのうえ `_generate_global_matrices()` が
 3 回 (切断対象の決定 / Phase 1 / Phase 2) 走ります。`axon_growth` 系の config では
-ここが支配的なので、基準の作り直しは数十分見ておくこと。
+ここが支配的なので、このチェックは数十分見ておくこと。

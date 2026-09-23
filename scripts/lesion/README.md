@@ -39,6 +39,21 @@ python -m scripts.lesion.run_one outputs/lesion/<条件>/seed03
 python -m scripts.lesion.replot  outputs/lesion/<条件>/seed03 [--no-structure]
 ```
 
+### 条件ディレクトリを丸ごと作り直す
+
+`replot.py` が取るのは**run ディレクトリ 1 つ** (`config.yaml` と `data/` を持つ階層) です。
+sweep の条件ディレクトリはその下に `seed01`…`seedNN` を束ねたものなので、シェルの
+ループで回します。**暫定の手順で、専用の入口はまだありません。**
+
+```bash
+for d in outputs/lesion/<条件>/seed*; do
+    python -m scripts.lesion.replot "$d"
+done
+```
+
+1 run あたりの時間は再ビルドが支配します。lesion は親と同じネットワークを組んでから
+切り直すので、親の `connection` プロファイルの重さがそのまま効きます。
+
 ---
 
 ## 損傷プロトコル (`task.yaml`)
@@ -123,6 +138,7 @@ outputs/lesion/<条件>/seed01/     親が複数   -> ここが run ディレク
 │   ├── connectivity_pre.npz  Phase 1 (切断前) の結合
 │   ├── connectivity.npz      Phase 2 (切断後) の結合
 │   ├── layout_axes.npz
+│   ├── coords.npz            soma の座標 (`no_space` の run には無い)。切断で動かない
 │   ├── lesion.json           **切断で何が起きたかの記録**
 │   ├── lesion_cut.npz        切断されたシナプス 1 本ごとの素性
 │   ├── cut_profile.csv       属性ごとの「切断群 vs 残存群」
@@ -133,8 +149,10 @@ outputs/lesion/<条件>/seed01/     親が複数   -> ここが run ディレク
 │   └── spikes_p{NNN}.npz     スパイク + 窓の原点 / 窓幅 / phase
 └── figures/
     ├── structure/        切断**後**のネットワークの形
-    ├── raster/
-    ├── avalanche/
+    ├── panels/           **probe ごと**の図。probe の数だけ増えるものはここへ
+    │   ├── raster/
+    │   ├── avalanche/
+    │   └── weight/       その probe の重み行列
     └── overview/         weight_trajectories / weight_distribution_shift / firing_rate_scatter
 ```
 

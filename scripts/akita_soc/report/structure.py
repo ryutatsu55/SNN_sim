@@ -26,8 +26,11 @@ from scripts.akita_soc.figures.weight_matrix import weight_matrix
 # 表には持たせない。`emit()` は**この表を上から順に回すだけ**。
 FIGURES = (
     ("delay distribution", delay_distribution, "delay_distribution.png"),
-    ("weight distribution", weight_distribution, "weight_distribution.png"),
-    # 初期重みの行列。記録時刻ごとの同じ図は overview が出すので、**ここは 0 h の前**
+    # build 直後 = **可塑性が 1 ステップも走る前**の重み。記録時刻ごとの同じ図は
+    # panels が出すので、ここは 0 h の手前を残すためにある。
+    ("initial weight distribution", weight_distribution,
+     "weight_distribution_initial.png"),
+    # 初期重みの行列。記録時刻ごとの同じ図は panels が出すので、**ここは 0 h の前**
     # (可塑性が 1 ステップも走っていない状態) を残すためにある。
     ("initial weight matrix", weight_matrix, "weight_matrix_initial.png"),
 )

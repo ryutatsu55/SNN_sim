@@ -11,8 +11,11 @@ from scripts.develop.report import guard
 from scripts.develop.store import paths
 from scripts.develop.analysis.metrics import build_row
 from scripts.develop.figures.avalanche import avalanche_distribution
+from scripts.develop.figures.network import weight_network
 from scripts.develop.figures.raster import raster
+from scripts.develop.figures.synapse_hist import weight_distribution
 from scripts.develop.figures.trace import neuron_trace
+from scripts.develop.figures.weight_matrix import weight_matrix
 
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
@@ -23,6 +26,12 @@ from scripts.develop.figures.trace import neuron_trace
 FIGURES = (
     ("raster", raster, paths.RASTER, "raster_{tag}.png"),
     ("avalanche plot", avalanche_distribution, paths.AVALANCHE, "avalanche_{tag}.png"),
+    ("weight matrix", weight_matrix, paths.WEIGHT, "weight_matrix_{tag}.png"),
+    ("weight distribution", weight_distribution, paths.WEIGHT_DIST,
+     "weight_distribution_{tag}.png"),
+    # 座標を持たない run (`no_space`) では window.coords() が MissingData を投げるので、
+    # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
+    ("weight network", weight_network, paths.WEIGHT_NETWORK, "weight_network_{tag}.png"),
     # トレースを採っていない run では window.trace() が MissingData を投げるので、
     # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
     ("neuron trace", neuron_trace, paths.TRACE, "neuron_trace_{tag}.png"),

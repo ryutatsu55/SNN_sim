@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.utils.runview import Spikes, Trace, Wiring
+from src.utils.runview import MissingData, Spikes, Trace, Wiring
 
 # 記録ファイル名 `<種別>_<時刻>h.npz`。種別に数字を含めない前提で時刻と切り分ける。
 RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
@@ -41,6 +41,13 @@ TRACE = "trace"
 
 # 結合構造。シミュレーション中に変わらないので run につき 1 回だけ書く。
 CONNECTIVITY_NAME = "connectivity.npz"
+
+# soma の座標。結合構造と同じく run を通して不変なので 1 回だけ書く。
+#
+# **`no_space` の run は持たない。** config だけからは復元できない (空間コンポーネントが
+# RNG を引く) ので、axes と同じ理由でここに残す。これがあると記録窓の view からも
+# 空間の図が描ける —— 無ければ座標を要する図は再ビルドしないと出せない。
+COORDS_NAME = "coords.npz"
 
 # 記録時刻ごとの指標。本番の run も再解析も**同じこのファイル**に書く
 # (どちらも metrics.build_row() を通るので列も値も一致する)。
@@ -191,6 +198,24 @@ def write_table(rows: list[dict], out_path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def save_coords(path: Path, coords) -> None:
+    """soma の座標を書く。キー名を知っているのは読み書きのこの対だけ。
+
+    `no_space` の run では呼ばないこと (座標が無いことと、`inf` で埋めた座標を
+    保存したことを読む側から区別できなくなる)。
+    """
+    np.savez_compressed(path, data=np.asarray(coords, dtype=np.float64))
+
+
+def load_coords(path: Path) -> np.ndarray:
+    """`save_coords()` が書いた座標を読む。非有限値は「座標が無い」として扱う。"""
+    with np.load(path) as data:
+        coords = np.asarray(data["data"], dtype=np.float64)
+    if not np.all(np.isfinite(coords)):
+        raise MissingData("coords", "座標に有限でない値があります (no_space)")
+    return coords
 
 
 def save_weight_values(path: Path, values: np.ndarray) -> None:

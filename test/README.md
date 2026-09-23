@@ -50,7 +50,7 @@ test/
 | `test_axon_growth.py` | 軸索が領域外へ出る・接していない部分領域が結合する・area が RNG を消費する・`DiskArea` の draw 順が `RandomCircle2DSpace` とずれる | 93 / **107s** |
 | `test_area_plotting.py` | `plot_area()` が境界を閉じない / bbox 全体を塗る / 座標の有無で誤判定する。SDF 実装で踏んだ罠 3 つを固定 | 13 / 3.5s |
 |  `test_akita_model.py` | Akita モデルの素の数式（escape noise / conductance LIF / STDP kernel / STP）とべき乗フィット・E/I ブロック統計 | 21 / 0.5s |
-| `experiments/test_report_registries.py` | **実験をまたぐ不変条件。** 出力の登録簿が表であること / 名前とファイル名が重複しないこと / 図の種類が `store/paths.py` に登録されていること / 図の md5 基準に載っている png が全部どれかの行から出ること / `report/` が matplotlib も numpy も import しないこと | 18 / 0.8s |
+| `experiments/test_report_registries.py` | **実験をまたぐ不変条件。** 出力の登録簿が表であること / 名前とファイル名が重複しないこと / 図の種類が `store/paths.py` に登録されていること / `report/` が matplotlib も numpy も import しないこと | 15 / 0.8s |
 | `experiments/develop/test_develop.py` | develop 実験。「論文の 100」が N に追従すること / task プロファイルを config が選ぶこと / seed 範囲の展開 / `config.yaml` が build を通った記録に限られること / 本番と再解析が同じ列を作ること | 39 / 6.5s |
 | `experiments/akita_soc/test_akita_soc.py` | akita_soc 実験。記録ファイル名の往復 / 時刻の正が npz にあること / 並べ替えが E/I だけであること / report が matplotlib を持たないこと | 12 / 1.4s |
 | `experiments/lesion/test_lesion.py` | 損傷実験。`replace_global_coo()`（構造的除去の土台）/ 切断 spec の選択 / probe の命名が develop と衝突しないこと / 窓幅が probe ごとに読まれること | 33 / 1.5s |

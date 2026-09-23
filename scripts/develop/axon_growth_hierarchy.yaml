@@ -9,7 +9,7 @@
 # modular_grid に soma_in_bridge: false を入れる。
 
 # 使う記録プロトコル (task.yaml のプロファイル名)。
-task: develop
+task: develop20h
 
 simulation:
   N: 256  # 面積より算出 (0.64 mm^2 x 400 neurons/mm^2 = 256)

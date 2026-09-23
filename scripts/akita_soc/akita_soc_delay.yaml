@@ -1,8 +1,11 @@
 simulation:
   N: 100
   dt: 0.1
-  seed: 1
+  seed: [1..8]
   backend: cpu       # GeNN バックエンド: cuda | cpu | auto
+  parallel: 8
+
+task: akita_soc_sequential_probe
 
 inputs:
   GaussianNoise:
@@ -30,7 +33,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: e-stdp_gmax25
+      mode: e-stdp
       pairing: trace
     synapse:
       type: ExpCond
@@ -42,7 +45,7 @@ synapses:
       Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
-      mode: i-stdp_gmax25
+      mode: i-stdp
       pairing: trace
     synapse:
       type: ExpCond

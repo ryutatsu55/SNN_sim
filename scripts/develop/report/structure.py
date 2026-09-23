@@ -29,7 +29,10 @@ FIGURES = (
     ("area", area_figure, "area.png"),
     ("connection mask", connection_mask, "connection_mask_coarse.png"),
     ("delay distribution", delay_distribution, "delay_distribution.png"),
-    ("weight distribution", weight_distribution, "weight_distribution.png"),
+    # build 直後 = **可塑性が 1 ステップも走る前**の重み。記録時刻ごとの同じ図は
+    # panels が出すので、ここは 0 h の手前を残すためにある。
+    ("initial weight distribution", weight_distribution,
+     "weight_distribution_initial.png"),
     ("network sample", network, "network_sample.png"),
     ("axon network", axon_network, "axon_network.png"),
     # 「その距離のペアのうち何割が繋がったか」(確率) と「実際に張られた結合の長さが

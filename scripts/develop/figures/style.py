@@ -148,6 +148,23 @@ def block_ticks(ordering: Ordering, size: int) -> list[int]:
     return sorted({tick for tick in ticks if 0 <= tick < size})
 
 
+def outer_block_labels(layout, ordering: Ordering, total: int) -> list[tuple[float, str]]:
+    """最外ブロック (order_axes の先頭の軸) の中心位置とラベル名。
+
+    位置は**表示位置** (ニューロン単位)。粗視化図のように画素へ縮める図は、
+    呼び出し側で `scale` を掛けること。
+
+    `draw_block_boundaries()` と同じく、**重み行列と粗視化結合図の 2 枚が同じ名前を
+    同じ位置に出す**ためにここにある。
+    """
+    if layout is None or not ordering.enabled or not ordering.axes:
+        return []
+    values = layout.labels(ordering.axes[0])[ordering.order]
+    edges = [0, *ordering.positions(level=0), total]
+    return [(0.5 * (edges[i] + edges[i + 1]), str(values[edges[i]]))
+            for i in range(len(edges) - 1)]
+
+
 def draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1.0,
                            skip: tuple[str, ...] = ()) -> None:
     """ブロック境界に縦横の線を引く。外側の軸ほど太く描く。
@@ -155,9 +172,9 @@ def draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1
     `scale` は「表示位置 (ニューロン単位) → 画像の画素」の倍率。1 ニューロン 1 画素の
     重み行列では 1.0、粗視化図では `grid / total_neurons` になる。
 
-    `skip` に軸名を挙げるとその軸の切り替わりには線を引かない。E/I を**色**で示す図
-    (粗視化図) は `skip=("polarity",)` を渡し、線の種類を 1 つに保つ。値そのものを色に
-    使っている図 (重み行列) は既定の `()` のままで、E/I 境界も線で示す。
+    `skip` に軸名を挙げるとその軸の切り替わりには線を引かない。**粗視化結合図も
+    重み行列も `skip=("polarity",)` を渡す** —— 2 枚が同じ格子に見えること自体が
+    並べて読むための条件で、線の種類が増えると格子が読めなくなる。
     """
     for position, level in ordering.visible_boundaries(skip):
         position = position * scale

@@ -146,15 +146,18 @@ run ディレクトリの中身:
 │   ├── metrics.csv           記録時刻ごとの指標。**1 行ずつ追記される**
 │   ├── connection_probability.csv  群間の結合確率 (build 直後に 1 回)
 │   ├── bridge_hops.csv       ブリッジのホップ数別の結合確率 (複合エリアの run のみ)
+│   ├── coords.npz            soma の座標 (`no_space` の run には無い)
 │   ├── weights_{h}h.npz      重みの値ベクトル (connectivity と index 整合)
 │   ├── spikes_{h}h.npz       スパイク (絶対時刻 ms)
 │   └── trace_{h}h.npz        膜電位トレース (task.trace_neuron を指定した run のみ)
 └── figures/
-    ├── structure/        area / connection_mask / network_sample / 各種分布
-    ├── raster/
-    ├── avalanche/
-    ├── trace/            task.trace_neuron を指定した run のみ
-    └── overview/         figure2c / figure2d / weight_matrix_*
+    ├── structure/        area / connection_mask / network_sample / 各種分布 (build 直後に 1 枚ずつ)
+    ├── panels/           **記録窓ごと**の図。窓の数だけ増えるものはここへ
+    │   ├── raster/
+    │   ├── avalanche/
+    │   ├── weight/       重み行列 / 重み分布 / 重みで描いたネットワーク図
+    │   └── trace/        task.trace_neuron を指定した run のみ
+    └── overview/         figure2c / figure2d
 ```
 
 **ディレクトリ名からは何も読み取らないこと。** seed も条件も `config.yaml` の中にある。
@@ -243,6 +246,22 @@ run 全体の図 (fig2c / fig2d / 重み行列) も、例外なく上書きし�
 持たない run (密形式)、記録窓の原点を持たない run はエラーで止まります。列や図を減らして
 続行はしません —— 欠けた `metrics.csv` で上書きすると、あとで図と突き合わせたときに
 原因が追えなくなります。読みたければ再実行してください。
+
+### 条件ディレクトリを丸ごと作り直す
+
+`replot.py` が取るのは**run ディレクトリ 1 つ** (`config.yaml` と `data/` を持つ階層) です。
+sweep の条件ディレクトリはその下に `seed01`…`seedNN` を束ねたものなので、シェルの
+ループで回します。**暫定の手順で、専用の入口はまだありません。**
+
+```bash
+for d in outputs/develop/<条件>/seed*; do
+    python -m scripts.develop.replot "$d"
+done
+```
+
+1 run あたりの時間は再ビルドが支配します。`axon_growth` 系は軸索を伸ばし直すので
+重く、`segment_length: 1.0` / N=256 の条件で **1 run あたり約 5 分**でした
+(記録窓 13 個・CPU)。大きい sweep で構造図が要らないなら `--no-structure`。
 
 ---
 
@@ -350,9 +369,8 @@ def emit(built) -> None:
 
 「1 種類」であって「1 枚」ではありません。同じ描き方から 2〜3 枚出るものは 1 ファイルに
 まとまります —— `network.py` は直線版と軸索版 (2 枚は**同じ乱数を同じ順に消費**するので
-同じニューロンが映る)、`synapse_hist.py` は遅延/距離/重みの 3 枚 (骨格が 1 つ)、
-`weight_matrix.py` は 1 枚版・時系列パネル・差分パネル。**片方だけ直すと壊れるものを
-同じファイルに置く**、というのが分け方の基準です。
+同じニューロンが映る)、`synapse_hist.py` は遅延/距離/重みの 3 枚 (骨格が 1 つ)。
+**片方だけ直すと壊れるものを同じファイルに置く**、というのが分け方の基準です。
 
 | ファイル | 役割 |
 |---|---|
@@ -367,7 +385,7 @@ def emit(built) -> None:
 変えられないうえ、変更のたびに呼び出し側も直すことになります。関数が受け取るのは
 **リーダー 1 つと出力先 1 つ**だけで、見た目 (軸範囲・色・点の大きさ・dpi・figsize) は
 モジュール先頭の名前付き定数です。2 通りの見た目で使う図は、引数で切り替えず**関数を
-2 つに割ります** (`weight_panel` と `weight_delta_panel`)。
+2 つに割ります**。
 
 ---
 

@@ -6,6 +6,21 @@
 描画用の曲線もここで作る (`fit_distribution_curves`)。matplotlib を持ち込まずに
 「経験分布に重ねる 2 本の理論曲線」まで確定させておくことで、描画側は線種と凡例だけを
 決めればよくなる。
+
+記号
+----
+s               アバランシェサイズ (スパイク数、1 以上の整数)。
+[smin, smax]    フィットに使うサイズの範囲。**確率の台でもある** —— 2 つのモデルは
+                どちらもこの範囲で正規化されるので、範囲を変えると尤度の絶対値が動く。
+                アバランシェでは smin=1 / smax=N (系のニューロン数)。
+α (alpha)       べき乗モデルの**指数**。p(s) = s^-α / Σ_{k=smin}^{smax} k^-α。
+                正の値で、大きいほど裾が速く落ちる。臨界系では 1.5 付近。
+                `alpha_mle` は最尤推定、`slope_loglog` は log-log 回帰の傾き (= -α)。
+λ (lam)         指数モデルの**減衰率**。p(s) = e^(-λs) / Σ_{k=smin}^{smax} e^(-λk)。
+                単位は 1/サイズで、特徴サイズ 1/λ を超えるとほぼ出なくなる。
+                λ が大きいほど小さいアバランシェしか出ない = 劣臨界的。
+LLR             Σ_i [ln p_pow(s_i) − ln p_exp(s_i)]。正ならべき乗モデルの方が
+                その標本をよく説明する。**平均ではなく和**なのでアバランシェ数に比例する。
 """
 from __future__ import annotations
 
@@ -30,7 +45,10 @@ def discrete_distribution(values: np.ndarray, xmax: int | None = None) -> tuple[
 
 
 def _fit_discrete_powerlaw_alpha(x: np.ndarray, smin: int = 1, smax: int = 100) -> float:
-    """離散打ち切りpower-law p(s)=s^-alpha / sum_{k=smin}^{smax} k^-alpha のMLE指数。"""
+    """離散打ち切り power-law p(s) = s^-α / Σ_{k=smin}^{smax} k^-α の α を最尤推定する。
+
+    α は分布の**指数** (正値、大きいほど裾が速く落ちる)。探索範囲は [1.01, 6.0]。
+    """
     support = np.arange(smin, smax + 1, dtype=np.float64)
     sum_log = float(np.sum(np.log(x)))
     n = x.size
@@ -44,7 +62,11 @@ def _fit_discrete_powerlaw_alpha(x: np.ndarray, smin: int = 1, smax: int = 100) 
 
 
 def _fit_discrete_exponential_lambda(x: np.ndarray, smin: int = 1, smax: int = 100) -> float:
-    """離散打ち切り指数分布 p(s)=e^-lambda*s / sum_{k=smin}^{smax} e^-lambda*k のMLE率。"""
+    """離散打ち切り指数分布 p(s) = e^(-λs) / Σ_{k=smin}^{smax} e^(-λk) の λ を最尤推定する。
+
+    λ は**減衰率** [1/サイズ] で、特徴サイズ 1/λ を超えるとほぼ出なくなる。
+    探索範囲は [1e-6, 5.0]。
+    """
     support = np.arange(smin, smax + 1, dtype=np.float64)
     sum_x = float(np.sum(x))
     n = x.size
@@ -58,7 +80,7 @@ def _fit_discrete_exponential_lambda(x: np.ndarray, smin: int = 1, smax: int = 1
 
 
 def log_likelihood_ratio_power_vs_exponential(
-    sizes: np.ndarray, smax: int | None = None
+    sizes: np.ndarray, smax: int | None = 100
 ) -> float:
     """power-law vs exponential の対数尤度比 (正 → power-law 優位)。
 
@@ -66,14 +88,16 @@ def log_likelihood_ratio_power_vs_exponential(
     LLR = Σ_i [ln p_power(s_i) − ln p_exp(s_i)] を返す。Clauset et al. (2009) /
     Yada et al. (2017) と同じ離散打ち切り MLE。
 
-    **`smax=None` (既定) は観測最大サイズまで使う = 打ち切らない。** 打ち切ると LLR に
-    天井ができ (べき乗である限り 1 アバランシェあたり 0.48 が上限)、論文の値に原理的に
-    届かなくなる。
+    **打ち切り範囲はフィット範囲そのもの。** Ikeda-Akita-Takahashi 2023 supplementary
+    II.B は「系が 100 ニューロンなので、サイズ 1〜100 のアバランシェを fitting に使った」
+    と書く。既定の `smax=100` はこれで、アバランシェ側の系サイズ N を渡すのが本筋。
 
-    打ち切りを外した値は**裾の数個の巨大アバランチに強く依存する**ので、[1, 100] の中
-    だけを安定に見たいときは `smax=100` を明示すること。
+    `smax=None` は打ち切らない (観測最大まで)。**論文の手順ではない**うえ、裾の数個の
+    巨大アバランチに値が強く依存する。
 
-    実測による裏取りは `docs/technical/akita_soc_reproduction_memo.md`。
+    打ち切った LLR には天井がある —— 分布がべき乗である限り 1 アバランシェあたり
+    `llr_ceiling_per_avalanche(smax)` (smax=100 で 0.48) を超えない。絶対値を他所の
+    数字と比べる前に、まず天井の何割かを見ること。
     """
     smin = 1
     x = np.asarray(sizes, dtype=np.float64)
@@ -100,15 +124,31 @@ def log_likelihood_ratio_power_vs_exponential(
 def llr_ceiling_per_avalanche(smax: int = 100, alpha_grid: np.ndarray | None = None) -> float:
     """[1, smax] のデータがべき乗であるとき、LLR が 1 アバランシェあたり取りうる最大値。
 
+    Args:
+        smax: 確率の台の上限。天井はこれに依存する (台が広いほどべき乗と指数の差が出る)。
+        alpha_grid: 最大値を探す**べき指数 α の候補**。フィットではなく走査で、
+            「どの α のべき乗が指数分布から最も遠いか」を探すためのもの。
+            既定は 1.05〜3.0 を 0.01 刻み。λ 側も内部で 1e-4〜2.0 を走査する。
+
     LLR/N は大数の法則で
         min_λ KL(q ‖ Exp_λ) − min_α KL(q ‖ PL_α)
     に収束する。データが真にべき乗 (q = PL_α) なら第2項は 0 なので、上限は
         max_α [ min_λ KL(PL_α ‖ Exp_λ) ]
     で、smax=100 では **α≈1.6 の 0.49 nats** になる。標本を作らず決定論的に計算する。
 
-    これが要るのは、論文 Fig 2(c) の LLR の絶対値がこの天井を超えているため
-    (72h: 19862/24459 = 0.81 = 天井の 1.65 倍)。LLR の絶対値を論文と比べる前に、
-    自分の値が天井の何割かを見ること。
+    **これは 1 アバランシェあたりの量。** LLR は和なので、比べる相手は
+    `天井 × アバランシェ数`。したがって「LLR が大きい」だけでは何も言えない ——
+    アバランシェ数が多い run はそれだけで大きな LLR を出すし、smax が広いほど
+    天井自体も上がる (smax=100 で 0.480、256 で 0.756、500 で 0.986)。
+    **見るべきは `LLR / アバランシェ数` が天井の何割か。**
+
+    これが要るのは、論文 Fig 2(c) の LLR が [1,100] の天井を超えて見えるため。
+    72h の 19862 が天井の内側に収まるにはアバランシェ数が 41353 個以上必要だが、
+    **論文はアバランシェ数を書いていない** ——
+    こちらの 72h (発火率 1.12/3.31 Hz は論文の ~1.2/~3.0 とほぼ同じ) は
+    93373 spikes / 23839 アバランシェなので、同じ発火率なら 41353 には届かない
+    (1.7 倍の発火が要る)。**分母は推定値**であることを承知で読むこと。
+    打ち切りを外せば台が広がって天井も上がるので、この矛盾は消える。
     """
     support = np.arange(1, smax + 1, dtype=np.float64)
     if alpha_grid is None:
@@ -135,8 +175,7 @@ def fit_exponent(values: np.ndarray, xmin: int = 1, xmax: int = 100) -> dict[str
         alpha_mle   : 離散打ち切り MLE の指数 (正値。p(x) ∝ x^-alpha)
         slope_loglog: log-log 平面での最小二乗回帰の傾き (負値。論文の α に対応)
         llr         : power-law vs exponential の対数尤度比 (正 → power-law 優位)。
-                      **これだけは [xmin, xmax] に切らず `values` 全体で計算する**
-                      (理由は log_likelihood_ratio_power_vs_exponential の docstring)。
+                      指数と同じ [xmin, xmax] で評価する。
         num_samples : 指数の推定に使ったサンプル数 ([xmin, xmax] 内)
     """
     data = np.asarray(values, dtype=np.float64)
@@ -151,9 +190,9 @@ def fit_exponent(values: np.ndarray, xmin: int = 1, xmax: int = 100) -> dict[str
         return out
 
     out["alpha_mle"] = _fit_discrete_powerlaw_alpha(data, xmin, xmax)
-    # 指数と回帰傾きは描画レンジ [xmin, xmax] のもの。LLR だけは打ち切らない値を返す
-    # (metrics.csv と図の凡例で同じ数字が出るように。理由は LLR の docstring)。
-    out["llr"] = log_likelihood_ratio_power_vs_exponential(values)
+    # 指数・回帰傾き・LLR のすべてが同じ [xmin, xmax] のもの。論文はフィット範囲を
+    # 系サイズで切ると書いており、尤度だけ別範囲で評価する理由が無い。
+    out["llr"] = log_likelihood_ratio_power_vs_exponential(values, smax=xmax)
 
     support, prob = discrete_distribution(data.astype(np.int64), xmax=xmax)
     if support.size >= 2:
@@ -199,8 +238,8 @@ def fit_distribution_curves(
     fit_support = np.arange(1, fit_max + 1, dtype=np.float64)
     empty = np.array([], dtype=np.float64)
 
-    # fit_exponent には**切っていない** values を渡す。指数と回帰傾きは内部で [1, fit_max] に
-    # 切って推定されるが、LLR は全サイズで評価されるので図の凡例と metrics.csv が一致する。
+    # fit_exponent には**切っていない** values を渡す。指数・回帰傾き・LLR はどれも内部で
+    # [1, fit_max] に切って評価されるので、図の凡例と metrics.csv が一致する。
     fit = fit_exponent(values, xmin=1, xmax=fit_max)
     data = np.asarray(values, dtype=np.float64)
     data = data[(data >= 1) & (data <= fit_max)]

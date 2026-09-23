@@ -16,7 +16,7 @@ akita_soc:
   # **実際の run 長を決めるのは record_hours の最大値 + record_window_ms であって、
   # この値ではない。** 記録として config.yaml に残るだけなので、record_hours と
   # 食い違わせないこと。
-  duration: 259200000.0       # 72 h
+  duration: 259800000.0       # 72 h
 
   # 記録する時刻 [h]。論文 Fig.2 は 0 / 6 / 72 h の 3 点。
   # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲 (`[0..12]` / `[0..3:0.5]`)。
@@ -37,12 +37,12 @@ akita_soc:
   trace_neuron: null
   trace_window_s: 10.0
 
-akita_soc_stable_probe:
-  # 遷移の時刻を細かく追うためのプロファイル。記録点を 8 つに増やす。
+akita_soc_sequential_probe:
+  # 遷移の時刻を細かく追うためのプロファイル。
   # **記録プロトコルとして本質的に別物**なのでプロファイルを分けてある
   # (条件を変えるだけなら config を書き換えればよく、プロファイルは増やさない)。
-  duration: 259200000.0       # 72 h
-  record_hours: [0, 1, 3, 6, 12, 24, 48, 72]
+  duration: 259800000.0       # 72 h
+  record_hours: [0..72]
   record_window_ms: 600000.0  # 10 min
   record_buffer_ms: 10000.0
   trace_neuron: null

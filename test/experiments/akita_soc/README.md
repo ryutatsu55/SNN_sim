@@ -1,15 +1,16 @@
-# akita_soc の図の回帰チェック
+# akita_soc: 本番と再解析が一致することを確かめる
 
-`scripts/akita_soc/figures/` は実験固有の複製なので、**共有層のテスト
-(`test/utils/test_plotting_ordering.py` など) は akita_soc の図を守りません。**
-代わりに「同じ run から同じ png が出ること」をバイト単位で確かめます。
+`scripts/akita_soc/figures/` は実験固有の複製なので、**共有層のテストは akita_soc の図を
+守りません。** 代わりに確かめられるのは「**同じ run から 2 通りの経路 (本番 / `replot`) で
+同じ png が出ること**」で、これは run の中で完結するので基準ファイルを持ちません。
 
-`reference_figures.md5` がその基準 (15 枚)。`scripts/develop/` と同じ仕組みで、
-違うのは figure の顔ぶれだけ —— akita_soc は `area: no_space` なので空間の図
-(area / network_sample / axon_network / connection_probability / distance_distribution)
-を持ちません。
+> **図の md5 基準 (`reference_figures.md5`) は廃止した。** 理由は
+> `test/experiments/develop/README.md` と同じ。
 
-## 作り直し方
+akita_soc は `area: no_space` なので、空間の図 (area / network_sample / axon_network /
+connection_probability / distance_distribution) は最初から出ません。
+
+## 手順
 
 `scripts/akita_soc/task.yaml` の末尾に一時的なプロファイルを足します。
 
@@ -23,25 +24,15 @@ smoke:
   trace_window_s: 1.0
 ```
 
-`scripts/akita_soc/akita_soc.yaml` を `_smoke.yaml` として複製し、`task: smoke` に
-変えて走らせます。
+`scripts/akita_soc/akita_soc.yaml` を `_smoke.yaml` として複製し、`task: smoke` に変えて
+走らせます。
 
 ```bash
 python -m scripts.akita_soc --config _smoke --condition _ref
-find outputs/akita_soc/_ref -name "*.png" | sort | xargs md5sum \
-  | sed 's|/_ref/|/RUN/|' > test/experiments/akita_soc/reference_figures.md5
-```
+find outputs/akita_soc/_ref -name "*.png" | sort | xargs md5sum > /tmp/akita_before.md5
 
-比較するときは条件名を `_ref` にすること。`weight_matrix_panel.png` と
-`weight_delta_panel.png` は**タイトルに run ディレクトリ名が入る**ので、別名で走らせると
-この 2 枚だけ必ず食い違います。
-
-## 本番と再解析が一致することも見る
-
-```bash
 python -m scripts.akita_soc.replot outputs/akita_soc/_ref
-find outputs/akita_soc/_ref -name "*.png" | sort | xargs md5sum | sed 's|/_ref/|/RUN/|' \
-  | diff - test/experiments/akita_soc/reference_figures.md5
+find outputs/akita_soc/_ref -name "*.png" | sort | xargs md5sum | diff - /tmp/akita_before.md5
 ```
 
 `metrics.csv` も本番と再解析で同じ関数を通るので、バイト単位で一致します。

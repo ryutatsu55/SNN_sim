@@ -24,10 +24,11 @@ from src.utils import runview
 from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
 
 from scripts.develop.store import paths
-from scripts.develop.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
-                                           discover_records, load_connectivity, load_spikes,
-                                           load_trace, load_weight_values,
-                                           read_record_start_ms, record_filename)
+from scripts.develop.store.records import (COORDS_NAME, METRICS_NAME, MS_PER_HOUR, SPIKES,
+                                           TRACE, WEIGHTS, discover_records, load_connectivity,
+                                           load_coords, load_spikes, load_trace,
+                                           load_weight_values, read_record_start_ms,
+                                           record_filename)
 
 
 class Window(runview.Window):
@@ -52,6 +53,10 @@ class Window(runview.Window):
 
     def wiring(self) -> Wiring:
         return self._series.wiring()
+
+    def coords(self) -> np.ndarray:
+        """soma の座標。run を通して不変なので series が持つものをそのまま返す。"""
+        return self._series.coords()
 
     def weights(self) -> np.ndarray:
         """重みの値ベクトル。**wiring と本数が合うことをここで確かめる。**
@@ -97,6 +102,16 @@ class Series(runview.Series):
 
     def wiring(self) -> Wiring:
         return self._wiring
+
+    def coords(self) -> np.ndarray:
+        """soma の座標。**`no_space` の run は持たない** (ファイルごと無い)。
+
+        結合構造と同じく run を通して不変なので、窓はこれを借りる。
+        """
+        path = paths.data_path(self.run_dir, COORDS_NAME)
+        if not path.exists():
+            raise MissingData("coords", "空間を持たない config です")
+        return load_coords(path)
 
     def metrics(self) -> pd.DataFrame:
         """`metrics.csv` を読む。**呼ばれた時点で読む** (開いた時点ではない)。
