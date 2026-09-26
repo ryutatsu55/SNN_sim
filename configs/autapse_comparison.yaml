@@ -1,0 +1,27 @@
+# LIFと浮動小数点PQNの単一細胞比較。振幅はモデル固有単位。
+dt_ms: 0.1
+warmup_ms: 500.0
+post_ms: 1000.0
+short_ms: 20.0
+long_ms: 500.0
+tau_syn_ms: 2.0
+tail_ms: 100.0
+burst_isi_ms: 10.0
+burst_min_spikes: 3
+threshold_points: 48
+stimulus_factor: 1.2
+weight_factors: [0.0, 0.5, 1.0, 1.5, 2.0]
+delays_ms: [1.0, 2.0, 5.0, 10.0, 20.0]
+recovery_gaps_ms: [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0]
+models:
+  LIF:
+    type: LIF
+    mode: excitatory
+    amplitude_min: 0.02
+    amplitude_max: 20.0
+  PQN:
+    type: PQN_float
+    mode: RSexci
+    amplitude_min: 0.0005
+    amplitude_max: 1.0
+    psc_amplitude_max: 10.0
