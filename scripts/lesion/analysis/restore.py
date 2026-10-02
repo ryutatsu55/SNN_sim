@@ -47,7 +47,7 @@ def verify_axon_geometry(rebuilt, saved) -> dict[str, bool]:
 def verify_geometry_alignment(geometry, coo) -> None:
     """軸索幾何の pre/post が COO と**位置一致**していることを確認する。
 
-    `AxonGrowthTopology.generate_sparse()` は (pre, post) 昇順で返し、`global_coo()` も
+    `AxonGrowthTopology.generate()` は (pre, post) 昇順で返し、`global_coo()` も
     行優先ソート済みなので、両者は位置一致するはず。破れているとブリッジ通過判定が
     黙って別のシナプスに付くので、ここで止める。
     """

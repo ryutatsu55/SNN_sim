@@ -286,7 +286,7 @@ def align_saved_to_coo(saved_row, saved_col, saved_values, coo) -> np.ndarray:
         raise WeightRestoreError(
             f"シナプス本数が違います: 保存 {saved_size} 本 / 再ビルド {target_size} 本。"
             " 親 run の config.yaml をそのまま渡していますか"
-            " (seed / backend / layout.assignment / network.sparse のどれかが変わると"
+            " (seed / backend / layout.assignment のどれかが変わると"
             " 別のネットワーク実現になります)。"
         )
     # 長さ一致 + 保存側に重複なし + 全キーが見つかる、で集合として同一が従う。

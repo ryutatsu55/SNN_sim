@@ -98,8 +98,8 @@ def prepare_runs(manager: ConfigManager, config, config_path: Path, condition: s
     """`<条件>/` と各 run ディレクトリを作り、seed を実値にした引き継ぎ config を置く。
 
     置くのは `config.yaml` ではなく `pending_config.yaml`。**ここで書けるのは記録ではなく
-    引き継ぎだから** —— `network.sparse` の実値は build 時にしか決まらないので、この時点の
-    config を `config.yaml` の名前で置くと「run の記録」の不変条件を破る。
+    引き継ぎだから** —— まだ build を通っていない config を `config.yaml` の名前で置くと
+    「run の記録」の不変条件を破る。
     `config.yaml` を書くのは build を通した run 本体の仕事 (`run_one.py`)。
     """
     condition_dir = OUTPUT_ROOT / EXPERIMENT / condition

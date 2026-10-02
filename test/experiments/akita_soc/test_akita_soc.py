@@ -51,8 +51,6 @@ def _make_run(tmp_dir, hours=(0.0, 6.0)) -> Path:
     manager = ConfigManager()
     config = manager.resolve(str(CONFIG_PATH), task_path=TASK_PATH)
     config.task.record_window_ms = 30000.0
-    # 本来 NetworkBuilder が build() 時に焼き込む値。ビルドを通さないので実値を入れておく。
-    config.network.sparse = "off"
     manager.save_config(config, save_dir=run_dir)
 
     row, col, weights = _fake_coo()

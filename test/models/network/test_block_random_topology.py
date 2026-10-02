@@ -104,7 +104,8 @@ def test_generate_accepts_num_modules_equal_to_num_neurons():
         rng=np.random.RandomState(0),
     )
 
-    mask = topology.generate()
+    rows, cols = topology.generate()
 
-    assert mask.shape == (4, 4)
-    assert np.all(np.diag(mask) == 0)
+    # 1 ニューロン 1 モジュールなので、モジュール内結合は自己結合だけ = 全部落ちる
+    assert rows.size == cols.size
+    assert np.all(rows != cols)

@@ -289,24 +289,6 @@ class NetworkConfig(BaseModel):
     connection: ComponentConfig
     weight: ComponentConfig
     delay: ComponentConfig
-    # **ホスト側の生成経路**であって、GeNN のデバイス側格納形式ではない。
-    # GeNN へは常に (pre, post) のペア列を渡す (`matrix_type="SPARSE"` 固定) ので、
-    # この設定を変えても GeNN に渡るものも計算されるネットワークも同一になる。
-    # 変わるのは「numpy で N×N 行列を作るか、COO のリストを作るか」だけ。
-    #
-    # 入力値と記録値で意味が違う。seed / backend / layout.assignment と同じく、
-    # **実際にどちらで走ったか**を記録へ焼き込むため、NetworkBuilder が生成時に
-    # 実値 ("on" | "off") で上書きする。入力の "auto" / "force" が保存済み config.yaml に
-    # 残ることはない (元の指示は source_config.yaml に逐語で残る)。
-    sparse: Literal["auto", "force", "off", "on"] = Field(
-        default="auto",
-        description=(
-            "結合行列の**生成経路** (GeNN の格納形式ではない)。"
-            '入力値: "auto"=結合/重み/遅延の3段すべてが疎対応なら疎生成、'
-            '"force"=疎生成を必須(非対応ならエラー)、"off"=常に密生成。'
-            '記録値: "on"=疎生成で走った / "off"=密生成で走った'
-        ),
-    )
 
 class LayoutConfig(BaseModel):
     """NetworkLayout の構成: population のグローバルID割当方式。
@@ -552,9 +534,6 @@ class ConfigManager:
             profile_data["profile_name"] = profile_name
             resolved["network"][key_name] = profile_data
 
-        # 疎/密の生成経路の選択 (未指定なら "auto")
-        resolved["network"]["sparse"] = network.get("sparse", "auto")
-
         # タスク設定の読み込み (task_path が渡されればそちらを見る)
         tasks_path = Path(task_path) if task_path else components_dir / "tasks.yaml"
         tasks_data = self._load_yaml(tasks_path)
@@ -716,20 +695,6 @@ class ConfigManager:
         Returns:
             書き出した config.yaml のパス。
         """
-        # network.sparse は NetworkBuilder が生成時に実値 ("on"/"off") へ焼き込む。
-        # 未解決のまま保存されるのは save_config() を build() より **前** に呼んだとき
-        # (判定と保存の順序が反転している)。この記録からは「どちらの経路で走ったか」が
-        # 復元できず、そのまま再実行しても同じ経路になる保証がない。
-        if resolved_config.network.sparse not in ("on", "off"):
-            warnings.warn(
-                f"network.sparse が未解決のまま保存されます"
-                f" ({resolved_config.network.sparse!r})。"
-                " 疎/密の決定は NetworkBuilder の生成時に行われるので、save_config() は"
-                " build() の **後** に呼んでください。このままでは、どちらの経路で走ったかが"
-                " config.yaml に残りません。",
-                stacklevel=2,
-            )
-
         out_dir = Path(save_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = self.dump_config(resolved_config, out_dir / CONFIG_NAME)

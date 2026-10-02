@@ -254,8 +254,7 @@ def main():
     builder = NetworkBuilder(config, model_name=_model_name(run_dir, seed))
     genn_model, layout = builder.build(rec_spike=True)
 
-    # **ここが「run の記録」を書く唯一の場所。** build() を通ったので network.sparse は
-    # 実値 ("on"/"off") になっており、save_config() の不変条件を満たす。
+    # **ここが「run の記録」を書く唯一の場所。** build() を通った後なので記録になる。
     # 記録を書いたら引き継ぎファイルは役目を終えるので消す。以降この run ディレクトリには
     # config.yaml しか無く、それは「build を通った run の記録」であることが保証される。
     manager.save_config(config, save_dir=run_dir)

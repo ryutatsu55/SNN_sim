@@ -646,3 +646,19 @@ overlap 50) では、ブリッジ矩形 300 um のうち 100 um = 1/3 がモジ�
 
 **既存 run の `metrics.csv` と相関の図は `replot.py` を通すと値が変わる。** 新旧を
 並べないこと (図のタイトルにビン幅が出るので、そこで見分けられる)。
+
+
+---
+
+## 結合生成を COO に一本化 (`network.sparse` 削除)。実現値は変わらない
+
+- 結合・重み・遅延の全コンポーネントが COO を直接返すようになり、密な (N, N) で生成する経路と
+  `network.sparse` (`auto` / `force` / `off` / `on`) を削除した。コンポーネントの API は
+  `generate()` → `(rows, cols)` / `generate(rows, cols)` → 1 結合 1 値 (`generate_sparse` と
+  `mask` 引数は無くなった)。
+- **同じ config.yaml から同じネットワークができる。** 旧実装 (密経路を強制) と新実装の
+  `GlobalCOO` (row / col / weights / delays) と生成後の rng 状態が、`outputs/` と `configs/` の
+  seed 固定の 35 config でビット単位で一致した (Akita, axon_growth / axon_growth_fine,
+  develop の seed 掃引, distance_based, beggs_plenz, C.elegans, akita_soc 遅延)。全クラス単体でも
+  旧密版との一致を確認済みで、`test/models/network/test_coo_generation.py` がその実現値を固定している。
+- 保存済み config.yaml にある `network.sparse` は読み込み時に無視される (どちらの値でも結果は同じ)。

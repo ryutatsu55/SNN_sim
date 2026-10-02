@@ -75,7 +75,8 @@ E/I も、この意味では対等な軸である。
 連番でも散在でも、population のグローバルID集合は昇順で保たれる（`ids_by` が
 `np.nonzero` で返すので構造的に保証される）。population ローカル index `i` は
 「その集合の i 番目に小さいグローバルID」。**GeNN が発信ニューロン順にシナプスを格納する**
-ため、`local_to_global` と NetworkBuilder の疎/密経路の一致がこれに依存している。
+ため、`local_to_global` と NetworkBuilder の `_pair_coo()` (グローバル COO から集団ごとに
+切り出した並びがそのまま GeNN の並びになること) がこれに依存している。
 
 ---
 
@@ -214,7 +215,7 @@ order = layout.order_by("module", "polarity")     # → [0,1,3,6 | 4,7 | 2,5]
 
 `BaseSpace` / `BaseConnection` / `BaseWeight` / `BaseDelay` は任意フック
 `describe_axes() -> {軸名: 長さ N の配列}` を持つ（既定は空 dict）。`NetworkBuilder` が
-`generate()` / `generate_sparse()` の**直後**に呼ぶので、自分が今計算した座標・マスク・
+`generate()` の**直後**に呼ぶので、自分が今計算した座標・結合・
 重みから軸を導出してよい。
 
 **`BaseArea` にはこのフックが無い。** 座標が存在する前に構築されるので、ニューロンごとに

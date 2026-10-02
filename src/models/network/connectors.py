@@ -6,18 +6,13 @@ from types import SimpleNamespace
 from typing import Optional, Dict, Any
 from pathlib import Path
 from scipy.spatial import cKDTree
-from scipy.spatial.distance import cdist, pdist, squareform
+from scipy.spatial.distance import cdist
 from src.core.registry import CONNECTION_MODELS
 
 from .area import BaseArea
 
 class BaseConnection(ABC):
-    """シナプス結合の有無(マスク)を決定する基底クラス"""
-
-    # 密な (N,N) マスクを作らずに COO を直接生成できるか。True を宣言したクラスは
-    # generate_sparse() を実装しなければならない。NetworkBuilder は結合/重み/遅延の
-    # 3 段すべてが True のときだけ疎生成経路を選ぶ。
-    supports_sparse: bool = False
+    """シナプス結合の有無を COO (行優先ソート済みの (rows, cols)) で決定する基底クラス"""
 
     def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState, layout=None,
                  area: Optional[BaseArea] = None):
@@ -35,7 +30,7 @@ class BaseConnection(ABC):
     def describe_axes(self) -> Dict[str, Any]:
         """任意フック: このコンポーネントが定義するカテゴリ/ソート軸を宣言する。
 
-        NetworkBuilder が `generate()` / `generate_sparse()` の**直後**に呼び、戻り値を
+        NetworkBuilder が `generate()` の**直後**に呼び、戻り値を
         `NetworkLayout.add_axis()` へ注入する。生成後に呼ばれるので、自身が計算した
         座標・マスク等から軸を導出してよい(例: コミュニティ検出、次数によるランク付け)。
 
@@ -46,33 +41,57 @@ class BaseConnection(ABC):
         return {}
 
     @abstractmethod
-    def generate(self) -> np.ndarray:
-        """
-        Returns:
-            np.ndarray: 形状 (num_neurons, num_neurons) の結合マスク (0 or 1の np.int8 配列など)
-        """
-        pass
+    def generate(self) -> tuple[np.ndarray, np.ndarray]:
+        """結合を COO (rows, cols) で返す。行優先ソート済み・重複なしであること。
 
-    def generate_sparse(self) -> tuple[np.ndarray, np.ndarray]:
-        """結合を COO (rows, cols) で返す。行優先ソート済みであること。
+        密な (N, N) を作らないこと。全ペアに乱数を引くモデルは行ブロックに分けて引く
+        (`_row_block_coo()`)。
 
         Returns:
             (rows, cols): それぞれ int32 のグローバル pre/post ID
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} は疎生成に対応していません (supports_sparse=False)。"
-        )
+
+
+# 全ペアに乱数を引くモデルが、1 行ブロックあたりに作る一時配列 (float64) の目安 [bytes]。
+_ROW_BLOCK_BYTES = 128 << 20
+
+
+def _row_block_coo(num_neurons, rng, prob_rows, allow_self):
+    """(N, N) の一様乱数を行ブロックに分けて引き、`rand < prob` の COO を返す。
+
+    `prob_rows(start, stop)` は行 [start, stop) の結合確率 ((stop-start, N) かスカラー)。
+    乱数は全ペアぶん無条件に消費するので、`rng.random((N, N))` を一括で引いたときと
+    同じ値が同じ (i, j) に対応し、生成後の rng 状態も一致する。自己結合の除去は
+    比較の後に行う (対角のドローも消費する)。
+    """
+    n = int(num_neurons)
+    block = max(1, min(n, _ROW_BLOCK_BYTES // max(1, 8 * n)))
+    out_rows: list[np.ndarray] = []
+    out_cols: list[np.ndarray] = []
+    for start in range(0, n, block):
+        stop = min(start + block, n)
+        hit = rng.random((stop - start, n)) < prob_rows(start, stop)
+        if not allow_self:
+            hit[np.arange(stop - start), np.arange(start, stop)] = False
+        rows, cols = np.nonzero(hit)
+        if rows.size:
+            out_rows.append((rows + start).astype(np.int32))
+            out_cols.append(cols.astype(np.int32))
+    if not out_rows:
+        empty = np.array([], dtype=np.int32)
+        return empty, empty.copy()
+    return np.concatenate(out_rows), np.concatenate(out_cols)
+
 
 @CONNECTION_MODELS.register("constant_prob")
 class ConstantProbabilityTopology(BaseConnection):
     def generate(self):
-        """空間配置を無視し、純粋な確率で結合マスクを生成"""
+        """全ペアを確率 p で独立に結ぶ。"""
         prob = self.config.p
-        
-        mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob
-        if not self.config.allow_self_connections:
-            np.fill_diagonal(mask, 0) # 自己結合（自分自身へのシナプス）を排除
-        return mask.astype(np.int8)
+        return _row_block_coo(
+            self.num_neurons, self.rng, lambda start, stop: prob,
+            allow_self=bool(self.config.allow_self_connections),
+        )
 
 @CONNECTION_MODELS.register("constant_prob_full")
 class FullProbabilityTopology(ConstantProbabilityTopology):
@@ -92,54 +111,51 @@ class SparseProbabilityTopology(ConstantProbabilityTopology):
 @CONNECTION_MODELS.register("optional_connect")
 class OptionalConnection(BaseConnection):
     def generate(self):
-        """任意の結合を指定する"""        
-        mask = np.zeros((self.num_neurons, self.num_neurons))
-        mask[self.config.src_ID, self.config.tgt_ID] = 1
-        return mask.astype(np.int8)
+        """`src_ID` と `tgt_ID` を対にした結合 (broadcast 可、重複は 1 本にまとめる)。"""
+        n = self.num_neurons
+        src, tgt = np.broadcast_arrays(
+            np.asarray(self.config.src_ID, dtype=np.int64),
+            np.asarray(self.config.tgt_ID, dtype=np.int64),
+        )
+        src = np.where(src < 0, src + n, src).ravel()
+        tgt = np.where(tgt < 0, tgt + n, tgt).ravel()
+        if np.any((src < 0) | (src >= n) | (tgt < 0) | (tgt >= n)):
+            raise IndexError(f"optional_connect の src_ID / tgt_ID が範囲外です (N={n})。")
+        keys = np.unique(src * n + tgt)
+        return (keys // n).astype(np.int32), (keys % n).astype(np.int32)
     
 @CONNECTION_MODELS.register("C.elegans")
 class C_elegansConnection(BaseConnection):
     def generate(self):
-        """synapse_mask.csvから接続マスクを読み込む。
-        元データにおいては0以外はすべて接続（1）として定義する。
-        """
+        """synapse_mask.csv の非ゼロ要素を結合とする。"""
         csv_path = Path(__file__).parent / "data" / "c_elegans" / "synapse_mask.csv"
-
         if not csv_path.exists():
             raise FileNotFoundError(f"synapse_mask.csv not found at {csv_path}")
 
-        # synapse_mask.csvを読み込む
         mask_data = np.loadtxt(csv_path, delimiter=",", dtype=np.int8)
-
-        # 形状チェック
         if mask_data.shape != (self.num_neurons, self.num_neurons):
             raise ValueError(
                 f"synapse_mask shape {mask_data.shape} does not match "
                 f"expected ({self.num_neurons}, {self.num_neurons})"
             )
-
-        # 0以外をすべて1に変換
-        mask = (mask_data != 0).astype(np.int8)
-
-        return mask
+        rows, cols = np.nonzero(mask_data)
+        return rows.astype(np.int32), cols.astype(np.int32)
 
 @CONNECTION_MODELS.register("distance_based")
 class DistanceBasedTopology(BaseConnection):
     def generate(self):
-        """空間座標間の距離に基づき、ガウス分布で減衰する確率結合を生成"""
+        """距離 d のペアを確率 max_prob·exp(-d²/2σ²) で結ぶ。自己結合 (d=0) も除かない。"""
         if self.coords is None:
             raise ValueError("DistanceBasedTopology requires spatial coordinates (coords cannot be None).")
+        coords = np.ascontiguousarray(self.coords, dtype=np.float64)
+        max_prob = self.config.max_prob
+        sigma = self.config.sigma
 
-        # N x N の距離行列を一括計算
-        dist_matrix = squareform(pdist(self.coords))
-        
-        # 距離に応じた結合確率を計算
-        prob_matrix = self.config.max_prob * np.exp(-(dist_matrix**2) / (2 * self.config.sigma**2))
-        
-        # 確率に基づいてマスクを生成
-        mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob_matrix
-        
-        return mask.astype(np.int8)
+        def prob_rows(start, stop):
+            dist = cdist(coords[start:stop], coords)
+            return max_prob * np.exp(-(dist ** 2) / (2 * sigma ** 2))
+
+        return _row_block_coo(self.num_neurons, self.rng, prob_rows, allow_self=True)
 
 @CONNECTION_MODELS.register("gaussian_distance_type")
 class GaussianDistanceTypeTopology(BaseConnection):
@@ -154,15 +170,7 @@ class GaussianDistanceTypeTopology(BaseConnection):
     config(フラットなスカラーフィールド):
         sigma_ee/p0_ee, sigma_ei/p0_ei, sigma_ie/p0_ie, sigma_ii/p0_ii  … [um] と確率
         allow_self_connections (bool, 既定 False) … False で対角(オートシナプス)を除去
-
-    大規模ネットワーク向けに generate_sparse() を実装しており、密な (N,N) を作らずに
-    COO を直接生成する。乱数ストリームの消費順は密版と完全に一致する(下記参照)。
     """
-
-    supports_sparse = True
-
-    # 疎生成時の 1 行ブロックあたりの一時配列サイズの目安 [bytes]。
-    _ROW_BLOCK_BYTES = 128 << 20
 
     def _validate_inputs(self):
         if self.coords is None:
@@ -174,46 +182,27 @@ class GaussianDistanceTypeTopology(BaseConnection):
                 "GaussianDistanceTypeTopology requires a NetworkLayout to resolve E/I populations."
             )
 
-    def generate_sparse(self):
-        """行ブロックごとに距離・確率・乱数を作って COO を組み立てる。
+    def generate(self):
+        """行ブロックごとに距離・確率・乱数を作って COO を組み立てる (`_row_block_coo()`)。
 
-        乱数ストリームの同一性:
-            RandomState.random_sample は指定形状ぶんの double を Mersenne ストリームから
-            逐次消費して C 順に reshape する。よって連続した行ブロック [0,nb), [nb,2nb), ...
-            に対して (nb, N) を順に引くことは、(N, N) を一括で引くのとビット単位で同一の
-            値が同一の (i, j) に対応する。これを壊さないため:
-              - prob == 0 のペアでもドローを省略しない(ブロック全体を無条件にドロー)
-              - 自己結合の除去は比較の「後」に行う(密版の fill_diagonal と同じく
-                対角のドローは消費して捨てる)
-              - 空の id 集合に対する continue は確率の埋め込みだけをスキップし、
-                ドローはスキップしない
+        確率が 0 のペアや空の E/I 集合でも、乱数は全ペアぶん消費する。
         """
         self._validate_inputs()
 
         ids = self.layout.ids_by("polarity")
-        exc = ids["excitatory"]
-        inh = ids["inhibitory"]
         n = self.num_neurons
         coords = np.ascontiguousarray(self.coords, dtype=np.float64)
 
         is_exc = np.zeros(n, dtype=bool)
-        is_exc[exc] = True
+        is_exc[ids["excitatory"]] = True
         is_inh = np.zeros(n, dtype=bool)
-        is_inh[inh] = True
+        is_inh[ids["inhibitory"]] = True
         cols_e = np.nonzero(is_exc)[0]
         cols_i = np.nonzero(is_inh)[0]
 
-        block = max(1, min(n, self._ROW_BLOCK_BYTES // max(1, 8 * n)))
-        allow_self = getattr(self.config, "allow_self_connections", False)
-
-        out_rows: list[np.ndarray] = []
-        out_cols: list[np.ndarray] = []
-
-        for start in range(0, n, block):
-            stop = min(start + block, n)
+        def prob_rows(start, stop):
             dist = cdist(coords[start:stop], coords)
             prob = np.zeros((stop - start, n), dtype=np.float64)
-
             local_e = np.nonzero(is_exc[start:stop])[0]
             local_i = np.nonzero(is_inh[start:stop])[0]
             for src_local, tgt_global, sigma, p0 in (
@@ -227,54 +216,12 @@ class GaussianDistanceTypeTopology(BaseConnection):
                 block_idx = np.ix_(src_local, tgt_global)
                 d = dist[block_idx]
                 prob[block_idx] = p0 * np.exp(-(d ** 2) / (2.0 * sigma ** 2))
+            return prob
 
-            hit = self.rng.random((stop - start, n)) < prob
-            if not allow_self:
-                # 密版の np.fill_diagonal(mask, 0) と等価。ドローは既に消費済み。
-                hit[np.arange(stop - start), np.arange(start, stop)] = False
-
-            rows, cols = np.nonzero(hit)
-            if rows.size:
-                out_rows.append((rows + start).astype(np.int32))
-                out_cols.append(cols.astype(np.int32))
-
-        if not out_rows:
-            empty = np.array([], dtype=np.int32)
-            return empty, empty
-        return np.concatenate(out_rows), np.concatenate(out_cols)
-
-    def generate(self):
-        self._validate_inputs()
-
-        ids = self.layout.ids_by("polarity")
-        exc = ids["excitatory"]
-        inh = ids["inhibitory"]
-
-        # N x N の距離行列を一括計算(DistanceBasedTopology と同手法)
-        dist_matrix = squareform(pdist(self.coords))
-
-        prob_matrix = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float64)
-
-        # 送信種別(行) × 受信種別(列)の 4 ブロックにそれぞれの (sigma, p0) を適用
-        blocks = (
-            (exc, exc, self.config.sigma_ee, self.config.p0_ee),
-            (exc, inh, self.config.sigma_ei, self.config.p0_ei),
-            (inh, exc, self.config.sigma_ie, self.config.p0_ie),
-            (inh, inh, self.config.sigma_ii, self.config.p0_ii),
+        return _row_block_coo(
+            n, self.rng, prob_rows,
+            allow_self=bool(getattr(self.config, "allow_self_connections", False)),
         )
-        for src_ids, tgt_ids, sigma, p0 in blocks:
-            if len(src_ids) == 0 or len(tgt_ids) == 0:
-                continue
-            block_idx = np.ix_(src_ids, tgt_ids)
-            d = dist_matrix[block_idx]
-            prob_matrix[block_idx] = p0 * np.exp(-(d ** 2) / (2.0 * sigma ** 2))
-
-        mask = self.rng.random((self.num_neurons, self.num_neurons)) < prob_matrix
-
-        if not getattr(self.config, "allow_self_connections", False):
-            np.fill_diagonal(mask, 0)  # オートシナプス禁止 (MD §8)
-
-        return mask.astype(np.int8)
 
 @CONNECTION_MODELS.register("beggs_plenz")
 class BeggsPlenzGaussianTopology(GaussianDistanceTypeTopology):
@@ -303,7 +250,7 @@ class AxonGeometry:
         seg_start, seg_end: (S, 2) セグメントの両端 [um]
         seg_owner:          (S,)   セグメントの持ち主 (pre ニューロンのグローバル ID)
         offsets:            (N+1,) owner ごとのセグメント範囲。軸索を持たない owner は空区間
-        pre, post:          (M,)   結合ペア。generate_sparse() の戻り値と同一・同順
+        pre, post:          (M,)   結合ペア。generate() の戻り値と同一・同順
         contact_seg:        (M,)   その結合を作ったセグメントの**グローバル** index
         contact_t:          (M,)   接触点のセグメント上パラメータ [0, 1]
     """
@@ -374,19 +321,14 @@ class AxonGrowthTopology(BaseConnection):
        滑り直しの打ち切りは回数ではなく**状態が不変になったこと**で判定する
     5. セグメントと細胞体の距離が `dendrite_radius` 以下で、**かつ接触点から細胞体まで
        領域内を見通せる**なら結合の候補。抽選は**樹状突起円への侵入 1 回につき 1 回**で、
-       確率は `connection_prob` (論文の規則。詳細は `generate_sparse`)
+       確率は `connection_prob` (論文の規則。詳細は `generate`)
 
     config:
         mean_axon_length, segment_length, angle_sigma, dendrite_radius [um]
         connection_prob                         … 樹状突起円への侵入 1 回あたりの結合確率
         boundary: deflect | reflect | stop      … 領域境界に当たったときの挙動
         allow_self_connections (bool, 既定 False)
-
-    `generate()` は `generate_sparse()` に委譲して散布するだけなので、密と疎は定義上一致する
-    (`GaussianDistanceTypeTopology` が乱数ストリームを手で揃えているのとは対照的)。
     """
-
-    supports_sparse = True
 
     # 交差判定を何セグメントずつ処理するか。1 セグメントあたりの候補が ~50 なので、
     # 8192 で 1 ブロック ~40 万行。
@@ -642,7 +584,7 @@ class AxonGrowthTopology(BaseConnection):
         ).astype(np.float64)
         return seg_start, seg_end, seg_owner, arc_length
 
-    def generate_sparse(self):
+    def generate(self):
         """軸索を伸ばし、樹状突起円への**侵入 1 回につき 1 回**抽選して COO を返す。
 
         抽選の単位が「侵入」であることが要点 (Sumi et al. 2025 §2.8 "whenever the axon of
@@ -708,8 +650,7 @@ class AxonGrowthTopology(BaseConnection):
             perp = ap - t[:, None] * ab
             hit = np.einsum("ij,ij->i", perp, perp) <= p.dendrite_radius ** 2
 
-            # 自己結合は**抽選の前に**落とす。密版が疎版に委譲する構成なので、
-            # GaussianDistanceTypeTopology のように対角のドローを消費して捨てる必要がない。
+            # 自己結合は**抽選の前に**落とす (対角のドローを消費して捨てる必要がない)。
             if not p.allow_self:
                 hit &= own[seg_idx] != flat_j
             if not hit.any():
@@ -815,13 +756,6 @@ class AxonGrowthTopology(BaseConnection):
         """
         return getattr(self, "_geometry", None)
 
-    def generate(self):
-        """密な (N, N) マスク。疎版を呼んで散布するだけなので、密と疎は定義上一致する。"""
-        rows, cols = self.generate_sparse()
-        mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
-        mask[rows, cols] = 1
-        return mask
-
     def describe_axes(self) -> Dict[str, Any]:
         """実際に伸びた軸索の長さ [um] を数値軸として宣言する (generate 後に有効)。
 
@@ -857,13 +791,44 @@ class AxonGrowthFineTopology(AxonGrowthTopology):
 @CONNECTION_MODELS.register("prob_based_block")
 class BlockRandomTopology(BaseConnection):
     def generate(self):
-        """ブロック分割ベースの確率結合を生成する。
+        """モジュール内とリング状に隣接するモジュール間を、ブロックごとの確率で結ぶ。
 
-        モジュール境界は、NetworkLayout に `module` 軸があればそれを用いる(空間モデルが
-        `describe_axes()` で宣言したもの)。無ければ config.num_modules で等分する。
-        num_modules=1(または単一モジュール)では単一ブロックのランダム結合として振る舞う。
-        モジュールのIDが連続か散在かは問わない。
+        ブロックは「モジュール内 (m, m)」→「モジュール間 (m, m+1), (m+1, m)」の順に引き、
+        同じ (送信, 受信) モジュール対が複数回現れたら (num_modules が 1 か 2 のとき)
+        **最後に引いたものが残る**。乱数は上書きされるブロックのぶんも消費する。
         """
+        within, between, allow_self = self._validated_params()
+        module_ids = self._module_partition()
+        num_modules = len(module_ids)
+
+        blocks: dict[tuple[int, int], np.ndarray] = {}
+
+        def draw(src_idx: int, tgt_idx: int, prob: float) -> None:
+            hit = self.rng.rand(len(module_ids[src_idx]), len(module_ids[tgt_idx])) < prob
+            blocks[(src_idx, tgt_idx)] = hit
+
+        for module_idx in range(num_modules):
+            draw(module_idx, module_idx, within)
+        for module_idx in range(num_modules):
+            next_idx = (module_idx + 1) % num_modules
+            draw(module_idx, next_idx, between)
+            draw(next_idx, module_idx, between)
+
+        rows_parts: list[np.ndarray] = []
+        cols_parts: list[np.ndarray] = []
+        for (src_idx, tgt_idx), hit in blocks.items():
+            r, c = np.nonzero(hit)
+            rows_parts.append(np.asarray(module_ids[src_idx], dtype=np.int64)[r])
+            cols_parts.append(np.asarray(module_ids[tgt_idx], dtype=np.int64)[c])
+        rows = np.concatenate(rows_parts) if rows_parts else np.array([], dtype=np.int64)
+        cols = np.concatenate(cols_parts) if cols_parts else np.array([], dtype=np.int64)
+        if not allow_self:
+            keep = rows != cols
+            rows, cols = rows[keep], cols[keep]
+        order = np.argsort(rows * self.num_neurons + cols, kind="stable")
+        return rows[order].astype(np.int32), cols[order].astype(np.int32)
+
+    def _validated_params(self) -> tuple[float, float, bool]:
         within_module_connection_prob = self.config.within_module_connection_prob
         between_module_connection_prob = self.config.between_module_connection_prob
         allow_self_connections = self.config.allow_self_connections
@@ -879,36 +844,7 @@ class BlockRandomTopology(BaseConnection):
 
         if not isinstance(allow_self_connections, bool):
             raise ValueError("allow_self_connections must be a boolean.")
-
-        module_ids = self._module_partition()
-        num_modules = len(module_ids)
-        mask = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
-
-        def write_block(src_idx: int, tgt_idx: int, prob: float) -> None:
-            """モジュール src_idx → tgt_idx のブロックに確率 prob の結合を書き込む。
-
-            乱数の消費は「ブロック形状ぶんを1回 rand」なので、モジュール分割が同じなら
-            ID が連続でも散在でも同一の実現になる。
-            """
-            block = self.rng.rand(len(module_ids[src_idx]), len(module_ids[tgt_idx])) < prob
-            mask[np.ix_(module_ids[src_idx], module_ids[tgt_idx])] = block.astype(np.int8)
-
-        # モジュール内の結合を生成
-        for module_idx in range(num_modules):
-            write_block(module_idx, module_idx, within_module_connection_prob)
-
-        # モジュール間の結合を生成: 各モジュールを隣接モジュールと双方向に接続する。
-        for module_idx in range(num_modules):
-            # module_idx + 1 == num_modules のとき IndexError になる。よって % 演算子で
-            # 0 に戻す(環状に隣接させる)。
-            next_idx = (module_idx + 1) % num_modules
-            write_block(module_idx, next_idx, between_module_connection_prob)
-            write_block(next_idx, module_idx, between_module_connection_prob)
-
-        if not allow_self_connections:
-            np.fill_diagonal(mask, 0)
-
-        return mask
+        return within_module_connection_prob, between_module_connection_prob, allow_self_connections
 
     def _module_partition(self) -> list[np.ndarray]:
         """モジュール分割をグローバルID集合のリストとして返す。

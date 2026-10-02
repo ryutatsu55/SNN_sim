@@ -25,7 +25,7 @@ Sumi et al. (2025) Front. Neurosci. 19:1570783 §2.8（`docs/private/damage.pdf`
 
 > **モデルそのものと実装アルゴリズムの逐条解説は巻末の
 > [付録: `axon_growth` のモデルとアルゴリズム (詳細)](#付録-axon_growth-のモデルとアルゴリズム-詳細) にある。**
-> 「何をモデル化しているのか」「`_grow_axons` / `generate_sparse` が実際に何をしているか」
+> 「何をモデル化しているのか」「`_grow_axons` / `generate` が実際に何をしているか」
 > 「乱数消費の順序」「論文との差分」を知りたいときはそちら。本編 (§1〜§4) は
 > Δs を変更する人向けの実務規則に絞ってある。
 
@@ -245,7 +245,7 @@ Lp = 2 * 100 / 0.1^2 = 20,000 um = 20 mm
 ### A.2 実装の 3 相構成
 
 ```
-  generate_sparse()
+  generate()
     ├─ 第 1 相  _grow_axons(p)          軸索を折れ線として伸ばす      → セグメント列
     ├─ 第 2 相  KD-tree + 幾何判定       樹状突起円との接触を全部拾う  → 接触セグメント列
     └─ 第 3 相  侵入への畳み込み + 抽選   1 侵入 1 ドローで結合を決める → COO (rows, cols)
@@ -284,7 +284,7 @@ Lp = 2 * 100 / 0.1^2 = 20,000 um = 20 mm
 area   = areaClass(...)                       # 乱数を引かない (CLAUDE.md 注記 12)
 space  = spaceClass(..., rng, area=area)      # soma 座標。rng を消費する
 conn   = AxonGrowthTopology(cfg, N, coords, rng, layout=..., area=area)
-rows, cols = conn.generate_sparse()           # ← ここ
+rows, cols = conn.generate()                  # ← ここ
 weight = weightClass(..., rng, ...)           # 続きの rng を消費
 delay  = delayClass(..., rng, ...)
 ```
@@ -303,13 +303,9 @@ delay  = delayClass(..., rng, ...)
 
 | 出力 | 型 | 経路 | 用途 |
 |---|---|---|---|
-| 結合 | `(rows, cols)` int32 COO、`(pre, post)` 昇順 | `generate_sparse()` の戻り値 | GeNN 登録、解析すべて |
+| 結合 | `(rows, cols)` int32 COO、`(pre, post)` 昇順 | `generate()` の戻り値 | GeNN 登録、解析すべて |
 | 軸索の記録 | `AxonGeometry` | `axon_geometry()` (生成前は `None`) | 描画 (`plotting/network.py::axon_network`)、損傷実験。`axon_geometry.npz` に保存 |
 | 軸索長 | `{"axon_length": (N,) float}` | `describe_axes()` | `layout.order_by("axon_length")`、軸索長 vs 出次数の解析 |
-
-`generate()` (密) は `generate_sparse()` を呼んで `mask[rows, cols] = 1` するだけなので、
-**密と疎は定義上一致する**。`GaussianDistanceTypeTopology` が両経路で乱数列を手で
-揃えているのとは対照的で、こちらは揃える対象がそもそも 1 つしかない。
 
 ---
 
@@ -483,8 +479,9 @@ hit  = |perp|² <= dendrite_radius²
 
 ### D.3 自己結合の除去は**抽選より前**
 
-`own[seg_idx] != flat_j` で落とす。密経路が疎経路に委譲する構成なので、
-`GaussianDistanceTypeTopology` のように「対角のドローを消費してから捨てる」必要がない。
+`own[seg_idx] != flat_j` で落とす。乱数は全ペアではなく侵入ごとに引くので、
+全ペアに乱数を引く connector (`_row_block_coo()`) のように「対角のドローを消費してから捨てる」
+必要がない。
 
 ### D.4 見通し判定 (line of sight) — ユークリッド距離だけでは足りない
 
@@ -582,7 +579,7 @@ keep[1:] = (pre[1:] != pre[:-1]) | (post[1:] != post[:-1])
 | 採択 (× 0.2) | 71,510 |
 | 重複を畳んだ後のシナプス数 | **71,328** (k_out = 25.23) |
 | 畳み込みで消えたぶん | 182 (0.26%) |
-| `generate_sparse()` の実時間 | 0.56 s |
+| `generate()` の実時間 | 0.56 s |
 
 重複が 0.26% しかないのは、同じ相手の円へ 2 回侵入する軸索が稀 (軸索がほぼ直線なので、
 一度抜けた円へ戻ってこない) だから。壁で何度も曲がる形状ではこの比率は上がる。
@@ -664,7 +661,6 @@ keep[1:] = (pre[1:] != pre[:-1]) | (post[1:] != post[:-1])
 | `TestAxonGrowth::test_axons_never_leave_the_area` | 全セグメントが領域内 |
 | `…::test_axon_segments_never_cross_a_void` | 端点だけでなく**線分**が領域内 (§D.4 の前提) |
 | `…::test_no_synapses_between_isolated_components` | 見通し判定が効いていること |
-| `…::test_dense_and_sparse_agree` | `generate()` が `generate_sparse()` の散布であること |
 | `…::test_reproducible_from_seed` | §F の乱数契約 |
 | `TestFirstExit::test_prefix_is_always_inside` | `first_exit` が `segment_inside` 自身を二分探索していること (点サンプルで交点を求めると後から「外」と判定されうる) |
 | `TestAdvanceAndSlide::test_convex_walls_never_truncate_an_axon` | 残り長さの引き継ぎ (§C.3-2) |

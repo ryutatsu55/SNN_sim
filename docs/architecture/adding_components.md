@@ -34,7 +34,7 @@ class MyNeuron(BaseNeuronModel):
 |---|---|
 | `BaseNeuronModel` | `model_class`, `params`（定数）, `initial_vars` |
 | `BaseSynapse`, `BasePlasticity` | 同様。GeNN 固有のパラメータ期待値を持つ |
-| `BaseConnection`, `BaseWeight`, `BaseDelay` | ネットワークトポロジのヘルパ |
+| `BaseConnection`, `BaseWeight`, `BaseDelay` | `generate()` が COO を返す。結合は row-major ソート済み・重複なしの `(rows, cols)`、重み・遅延は `generate(rows, cols)` で結合 1 本に 1 値の float32。密な (N, N) は作らない（全ペアに乱数を引くなら `connectors._row_block_coo()`） |
 | `BaseDataLoader` | trial データ（入力 + メタデータ）を yield する |
 | `BaseSpace` | ニューロン座標を生成する |
 | `BaseArea` | ニューロンが住み、軸索が閉じ込められる 2-D 領域。`sdf(points)` のみ抽象 |

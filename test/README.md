@@ -46,7 +46,7 @@ test/
 
 | ファイル | 壊れたら何が起きるか | 件数 / 時間 |
 |---|---|---|
-| `test_global_coo.py` | 疎/密の生成経路が同じ COO を返さなくなる。build 以降を COO 一本にできる根拠そのもの | 5 / 0.4s |
+| `test_global_coo.py` | builder の `GlobalCOO` が row-major ソート・dtype・長さの不変条件を破る。`_pair_coo()` が GeNN の期待する並びを作れなくなる | 3 / 0.4s |
 | `test_axon_growth.py` | 軸索が領域外へ出る・接していない部分領域が結合する・area が RNG を消費する・`DiskArea` の draw 順が `RandomCircle2DSpace` とずれる | 93 / **107s** |
 | `test_area_plotting.py` | `plot_area()` が境界を閉じない / bbox 全体を塗る / 座標の有無で誤判定する。SDF 実装で踏んだ罠 3 つを固定 | 13 / 3.5s |
 |  `test_akita_model.py` | Akita モデルの素の数式（escape noise / conductance LIF / STDP kernel / STP）とべき乗フィット・E/I ブロック統計 | 21 / 0.5s |

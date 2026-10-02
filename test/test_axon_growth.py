@@ -326,7 +326,7 @@ class TestAxonGrowth(unittest.TestCase):
         """
         area = Modular4Area(MODULAR_SPEC)
         conn, coords = self._build(area)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
         self.assertGreater(rows.size, 0)
 
         # part index -> 連結成分 index。part 4, 5 (十字の 2 枚) は交差しているので 1 成分。
@@ -364,30 +364,10 @@ class TestAxonGrowth(unittest.TestCase):
         # 全長の分布が Rayleigh (平均 1100 um) であること
         self.assertAlmostEqual(L.mean(), 1100.0, delta=100.0)
 
-    def test_dense_and_sparse_agree(self):
-        """generate() は generate_sparse() に委譲するので、両者は定義上一致する。
-
-        GaussianDistanceTypeTopology が密版と疎版で乱数の消費順を手で揃えているのに対し、
-        こちらは委譲によって構造的に一致が保証される。その保証が壊れていないことを見る。
-        """
-        area = DiskArea(_cfg(radius=900.0))
-        n = 400
-        conn_sparse, _ = self._build(area, n=n, seed=5)
-        rows, cols = conn_sparse.generate_sparse()
-
-        conn_dense, _ = self._build(area, n=n, seed=5)   # 同じ seed = 同じ座標・同じ軸索
-        mask = conn_dense.generate()
-
-        self.assertEqual(mask.shape, (n, n))
-        self.assertEqual(mask.dtype, np.int8)
-        dense_rows, dense_cols = np.nonzero(mask)
-        np.testing.assert_array_equal(dense_rows, rows)
-        np.testing.assert_array_equal(dense_cols, cols)
-
     def test_output_invariants(self):
         area = DiskArea(_cfg(radius=1200.0))
         conn, _ = self._build(area, n=900, seed=8)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
 
         self.assertGreater(rows.size, 0)
         self.assertEqual(rows.dtype, np.int32)
@@ -400,8 +380,8 @@ class TestAxonGrowth(unittest.TestCase):
         area = Modular4Area(MODULAR_SPEC)
         a, _ = self._build(area, n=500, seed=42)
         b, _ = self._build(area, n=500, seed=42)
-        ra, ca = a.generate_sparse()
-        rb, cb = b.generate_sparse()
+        ra, ca = a.generate()
+        rb, cb = b.generate()
         np.testing.assert_array_equal(ra, rb)
         np.testing.assert_array_equal(ca, cb)
 
@@ -409,20 +389,20 @@ class TestAxonGrowth(unittest.TestCase):
         coords = np.zeros((10, 3), dtype=np.float32)
         conn = AxonGrowthTopology(AXON_CFG, 10, coords, np.random.RandomState(0), area=None)
         with self.assertRaises(ValueError):
-            conn.generate_sparse()
+            conn.generate()
 
     def test_rejects_bad_boundary_mode(self):
         cfg = SimpleNamespace(**{**vars(AXON_CFG), "boundary": "bounce"})
         conn = AxonGrowthTopology(cfg, 10, np.zeros((10, 3)), np.random.RandomState(0),
                                   area=NoSpaceArea(_cfg()))
         with self.assertRaises(ValueError):
-            conn.generate_sparse()
+            conn.generate()
 
     def test_axon_length_axis_declared_after_generate(self):
         area = DiskArea(_cfg(radius=1000.0))
         conn, _ = self._build(area, n=300, seed=6)
         self.assertEqual(conn.describe_axes(), {})   # 生成前は何も宣言しない
-        conn.generate_sparse()
+        conn.generate()
         axes = conn.describe_axes()
         self.assertIn("axon_length", axes)
         self.assertEqual(axes["axon_length"].shape, (300,))
@@ -557,7 +537,7 @@ class TestInvasionLottery(unittest.TestCase):
         cfg = SimpleNamespace(**{**vars(AXON_CFG), **over})
         conn = AxonGrowthTopology(cfg, self.N, coords, np.random.RandomState(seed),
                                   area=self.AREA)
-        return conn.generate_sparse()
+        return conn.generate()
 
     def test_degree_matches_probability_times_invasions(self):
         """出次数 = connection_prob x 侵入数。p=1.0 が幾何的な侵入数そのもの。"""
@@ -605,7 +585,7 @@ class TestAxonGeometry(unittest.TestCase):
     def _built(n=400, seed=7, cfg=AXON_CFG):
         area = Modular4Area(MODULAR_SPEC)
         conn, coords = TestAxonGrowth._build(area, n=n, seed=seed, cfg=cfg)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
         return area, conn, coords, rows, cols
 
     def test_absent_before_generate(self):
@@ -629,7 +609,7 @@ class TestAxonGeometry(unittest.TestCase):
             # 連続するセグメントは端点を共有する = 折れ線として繋がっている
             np.testing.assert_allclose(g.seg_start[lo + 1:hi], g.seg_end[lo:hi - 1])
 
-    def test_pairs_match_generate_sparse(self):
+    def test_pairs_match_generate(self):
         _, conn, _, rows, cols = self._built()
         g = conn.axon_geometry()
         np.testing.assert_array_equal(g.pre, rows)
@@ -871,7 +851,7 @@ class TestModular4GridArea(unittest.TestCase):
         coords = np.zeros((n, 3), dtype=np.float32)
         coords[:, :2] = area.sample(n, rng)
         conn = AxonGrowthTopology(AXON_CFG, n, coords, rng, area=area)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
 
         starts, ends, _, _ = conn._grow_axons(conn._params())
         self.assertTrue(area.segment_inside(starts, ends).all())
@@ -1044,7 +1024,7 @@ class TestModularGridArea(unittest.TestCase):
         coords = np.zeros((800, 3), dtype=np.float32)
         coords[:, :2] = area.sample(800, rng)
         conn = AxonGrowthTopology(AXON_CFG, 800, coords, rng, area=area)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
 
         starts, ends, _, _ = conn._grow_axons(conn._params())
         self.assertTrue(area.segment_inside(starts, ends).all())
@@ -1109,7 +1089,7 @@ class TestModularGridArea(unittest.TestCase):
         coords = np.zeros((800, 3), dtype=np.float32)
         coords[:, :2] = area.soma_area.sample(800, rng)
         conn = AxonGrowthTopology(AXON_CFG, 800, coords, rng, area=area)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
 
         starts, ends, _, _ = conn._grow_axons(conn._params())
         self.assertTrue(area.segment_inside(starts, ends).all())
@@ -1427,7 +1407,7 @@ class TestHierarchicalModularGridArea(unittest.TestCase):
         coords = np.zeros((n, 3), dtype=np.float32)
         coords[:, :2] = area.soma_area.sample(n, rng)
         conn = AxonGrowthTopology(AXON_CFG, n, coords, rng, area=area)
-        rows, cols = conn.generate_sparse()
+        rows, cols = conn.generate()
 
         starts, ends, _, _ = conn._grow_axons(conn._params())
         self.assertTrue(area.segment_inside(starts, ends).all(), "軸索が領域外へ出た")

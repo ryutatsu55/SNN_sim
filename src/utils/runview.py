@@ -245,7 +245,6 @@ class BuiltNetwork(Built):
             geometry: 軸索幾何。None ならコネクタから取る。**結合を差し替えた builder
                 では必ず渡すこと** —— コネクタの幾何は差し替えを反映しない。
         """
-        # 疎/密の違いは builder が吸収済み。ここから先は COO しか見ない (Hard Rule 4)。
         coo = builder.global_coo()
         if geometry is None:
             geometry = getattr(builder.connection, "axon_geometry", lambda: None)()

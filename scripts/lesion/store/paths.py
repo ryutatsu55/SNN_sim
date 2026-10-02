@@ -38,9 +38,9 @@ FIGURES_SUBDIR = "figures"
 
 # ランチャが run 本体へ config を引き継ぐためのファイル。
 #
-# **`config.yaml` と分けてあるのは、役割が違うから。** `config.yaml` は「この run はこうして
-# 走った」という記録で、`network.sparse` が実値 ("on"/"off") である必要がある。しかし実値を
-# 焼き込むのは NetworkBuilder の生成時なので、ランチャが起動前に書けるのは "auto" のまま。
+# **`config.yaml` と分けてあるのは、役割が違うから。** `config.yaml` は「この run は build を
+# 通ってこうして走った」という記録で、run 本体が build() の後に書く。ランチャが起動前に書く
+# ものは、まだ build を通っていない。
 # それを `config.yaml` の名前で置くと、記録の不変条件が崩れる。
 PENDING_CONFIG_NAME = "pending_config.yaml"
 

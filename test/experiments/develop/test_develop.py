@@ -11,7 +11,6 @@
 import sys
 import tempfile
 import unittest
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -71,9 +70,6 @@ def _make_run(tmp_dir, hours=(0.0,)) -> Path:
     config = manager.resolve(str(FIXTURE_CONFIG), "develop",
                              task_path=TASK_PATH)
     config.task.record_window_ms = 30000.0
-    # 本来 NetworkBuilder が build() 時に焼き込む値。ここはフィクスチャで
-    # ビルドを通さないので、save_config() の警告を出さないために実値を入れておく。
-    config.network.sparse = "off"
     manager.save_config(config, save_dir=run_dir)
 
     row, col, weights = _fake_coo()
@@ -310,7 +306,6 @@ class TaskProfileTest(unittest.TestCase):
             task_path = Path(tmp) / "task.yaml"
             task_path.write_text(
                 "develop:\n"
-                "  duration: 43800000.0\n"
                 f"  record_hours: {record_hours}\n"
                 "  record_window_ms: 600000.0\n"
                 "  record_buffer_ms: 10000.0\n"
@@ -344,37 +339,12 @@ class RunPathsTest(unittest.TestCase):
 class PendingConfigTest(unittest.TestCase):
     """`config.yaml` は「build を通った run の記録」以外にならないこと。
 
-    ランチャは起動前に config を置くが、その時点では `network.sparse` がまだ "auto" で、
-    記録としては不完全。だから引き継ぎは別名 (`pending_config.yaml`) で置き、
-    `config.yaml` を書くのは build を通した run 本体だけにしてある。
+    ランチャが起動前に置く引き継ぎは別名 (`pending_config.yaml`) にし、`config.yaml` を
+    書くのは build を通した run 本体だけにしてある。
     """
 
     def test_handoff_is_not_named_config_yaml(self):
         self.assertNotEqual(paths.PENDING_CONFIG_NAME, CONFIG_NAME)
-
-    def test_dump_config_does_not_claim_to_be_a_record(self):
-        """`dump_config` は sparse 未解決でも警告を出さない (記録を主張しないので)。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = _resolved_config()
-            self.assertNotIn(config.network.sparse, ("on", "off"))   # まだ "auto"
-            with warnings.catch_warnings():
-                warnings.simplefilter("error")   # 警告が出たら失敗
-                ConfigManager.dump_config(config, Path(tmp) / paths.PENDING_CONFIG_NAME)
-
-    def test_save_config_still_warns_before_build(self):
-        """`save_config` の不変条件は残っていること (引数で黙らせられない)。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = _resolved_config()
-            with self.assertWarns(UserWarning):
-                ConfigManager().save_config(config, save_dir=tmp)
-
-    def test_save_config_is_quiet_once_sparse_is_resolved(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = _resolved_config()
-            config.network.sparse = "off"        # build() が焼き込む値
-            with warnings.catch_warnings():
-                warnings.simplefilter("error")
-                ConfigManager().save_config(config, save_dir=tmp)
 
 
 class MetricsColumnsTest(unittest.TestCase):

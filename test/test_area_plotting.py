@@ -193,7 +193,7 @@ class TestAxonNetwork(unittest.TestCase):
                    dendrite_radius=150.0, connection_prob=0.2, boundary="deflect",
                    allow_self_connections=False)
         conn = AxonGrowthTopology(cfg, n, coords, rng, area=area)
-        conn.generate_sparse()
+        conn.generate()
         return area, conn.axon_geometry(), coords
 
     def _draw(self, tmp, **kwargs):

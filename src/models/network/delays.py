@@ -2,20 +2,15 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from numbers import Real
-from scipy.spatial.distance import pdist, squareform
 from src.core.registry import DELAY_MODELS
 
 class BaseDelay(ABC):
     """シナプスの伝播遅延を生成する基底クラス"""
 
-    # 密な (N,N) を作らずに COO 上の 1D 遅延を直接生成できるか。
-    supports_sparse: bool = False
-
-    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: Optional[np.ndarray] = None, rng: np.random.RandomState = None, layout=None):
+    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState = None, layout=None):
         self.config = config
         self.num_neurons = num_neurons
         self.coords = coords
-        self.mask = mask
         self.rng = rng
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
         # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
@@ -24,9 +19,9 @@ class BaseDelay(ABC):
     def describe_axes(self) -> Dict[str, Any]:
         """任意フック: このコンポーネントが定義するカテゴリ/ソート軸を宣言する。
 
-        NetworkBuilder が `generate()` / `generate_sparse()` の**直後**に呼び、戻り値を
+        NetworkBuilder が `generate()` の**直後**に呼び、戻り値を
         `NetworkLayout.add_axis()` へ注入する。生成後に呼ばれるので、自身が計算した
-        座標・マスク・遅延等から軸を導出してよい(例: 遅延帯でのビン分け)。
+        座標・結合・遅延等から軸を導出してよい(例: 遅延帯でのビン分け)。
 
         Returns:
             {軸名: 長さ num_neurons の配列}。カテゴリ名(文字列)でもソート用の数値でも
@@ -35,33 +30,20 @@ class BaseDelay(ABC):
         return {}
 
     @abstractmethod
-    def generate(self) -> np.ndarray:
-        """
-        Returns:
-            np.ndarray: 形状 (num_neurons, num_neurons) の遅延行列 (np.float32)
-        """
-        pass
+    def generate(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """結合 COO (rows, cols) の各要素に対応する 1D 遅延 [ms] 配列 (np.float32) を返す。
 
-    def generate_sparse(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
-        """COO (rows, cols) に対応する 1D 遅延配列 [ms] (np.float32) を返す。"""
-        raise NotImplementedError(
-            f"{type(self).__name__} は疎生成に対応していません (supports_sparse=False)。"
-        )
+        乱数を使うモデルは rows, cols の並び (行優先) の順に 1 結合 1 値で引く。
+        """
 
 @DELAY_MODELS.register("constant")
 class ConstantDelay(BaseDelay):
-    def generate(self):
-        """全シナプスで共通の伝播遅延"""
-        val = self.config.value
-        
-        delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        delays[self.mask != 0] = val
-        return delays
+    def generate(self, rows, cols):
+        """全結合に同じ遅延 `value` [ms] を割り当てる。"""
+        return np.full(np.asarray(rows).size, self.config.value, dtype=np.float32)
 
 @DELAY_MODELS.register("distance_based")
 class DistanceBasedDelay(BaseDelay):
-
-    supports_sparse = True
 
     def _params(self):
         """遅延パラメータを検証して (velocity, min_delay, max_delay, synaptic_delay) を返す。"""
@@ -98,18 +80,7 @@ class DistanceBasedDelay(BaseDelay):
             calc = np.minimum(calc, float(max_delay))
         return calc
 
-    def generate(self):
-        """物理的な距離を伝播速度で割って遅延を決定する"""
-        calc_delays = self._delays_from_distance(squareform(pdist(self.coords)))
-
-        # 結合がない箇所の遅延は0にする（メモリ効率とバグ防止のため）
-        delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        idx = (self.mask != 0)
-        delays[idx] = calc_delays[idx]
-
-        return delays
-
-    def generate_sparse(self, rows, cols):
+    def generate(self, rows, cols):
         self._params()  # coords / パラメータの検証
         rows = np.asarray(rows)
         cols = np.asarray(cols)
@@ -133,39 +104,49 @@ class TypeBasedDelay(BaseDelay):
         d_ee (Exc→Exc), d_ei (Exc→Inh), d_ie (Inh→Exc), d_ii (Inh→Inh)
     """
 
-    def generate(self):
+    def generate(self, rows, cols):
+        """送信・受信ニューロンの極性 (E/I) の組で 4 値の遅延を引く。E/I 以外のニューロンは 0。"""
+        exc, inh, values = self._blocks()
+        code = np.full(self.num_neurons, -1, dtype=np.int64)
+        code[np.asarray(exc, dtype=np.int64)] = 0
+        code[np.asarray(inh, dtype=np.int64)] = 1
+        table = np.array([[values[0], values[1]], [values[2], values[3]]], dtype=np.float32)
+        src = code[np.asarray(rows, dtype=np.int64)]
+        tgt = code[np.asarray(cols, dtype=np.int64)]
+        known = (src >= 0) & (tgt >= 0)
+        delays = np.zeros(src.size, dtype=np.float32)
+        delays[known] = table[src[known], tgt[known]]
+        return delays
+
+    def _blocks(self):
+        """(興奮性 ID, 抑制性 ID, (d_ee, d_ei, d_ie, d_ii)) を検証して返す。
+
+        値の検証は送信・受信どちらの集合も空でないブロックについてだけ行う。
+        """
         if self.layout is None:
             raise ValueError(
                 "TypeBasedDelay requires a NetworkLayout to resolve E/I populations."
             )
-
         ids = self.layout.ids_by("polarity")
         exc = ids["excitatory"]
         inh = ids["inhibitory"]
-
-        delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-
-        # 送信種別(行) × 受信種別(列)の 4 ブロックにそれぞれの遅延を割り当てる。
-        # global_delays は [source, target] 配向(NetworkBuilder が np.ix_(src, tgt) で切出す)。
-        blocks = (
+        values = []
+        for src_ids, tgt_ids, value in (
             (exc, exc, self.config.d_ee),
             (exc, inh, self.config.d_ei),
             (inh, exc, self.config.d_ie),
             (inh, inh, self.config.d_ii),
-        )
-        for src_ids, tgt_ids, value in blocks:
+        ):
             if len(src_ids) == 0 or len(tgt_ids) == 0:
+                values.append(0.0)
                 continue
-            v = float(value)
             if not isinstance(value, Real) or isinstance(value, bool):
                 raise ValueError("type_based delays (d_ee/d_ei/d_ie/d_ii) must be real numbers.")
+            v = float(value)
             if v < 0.0:
                 raise ValueError("type_based delays must be greater than or equal to 0.0.")
-            delays[np.ix_(src_ids, tgt_ids)] = v
-
-        # 結合がない箇所の遅延は0にする(既存 delay モデルと同じ規約)。
-        delays[self.mask == 0] = 0.0
-        return delays
+            values.append(v)
+        return exc, inh, values
 
 @DELAY_MODELS.register("akita_soc")
 class AkitaSocTypeDelay(TypeBasedDelay):
@@ -175,8 +156,17 @@ class AkitaSocTypeDelay(TypeBasedDelay):
 
 @DELAY_MODELS.register("random")
 class RandomDelay(BaseDelay):
-    def generate(self) -> np.ndarray:
-        """結合がある箇所に正規分布ベースのランダム遅延を割り当てる"""
+    def generate(self, rows, cols):
+        """各結合に N(mean, std²) を float32 に丸めて [min, max] で切った遅延を割り当てる。"""
+        mean, std, lower, upper = self._params()
+        num_connections = int(np.asarray(rows).size)
+        if num_connections == 0:
+            return np.zeros(0, dtype=np.float32)
+        sampled = self.rng.normal(mean, std, size=num_connections).astype(np.float32)
+        return np.clip(sampled, lower, upper)
+
+    def _params(self):
+        """(mean, std, 下限, 上限) を検証して返す。min / max の None は ±inf。"""
         mean = self.config.mean
         std = self.config.std
         min_delay = self.config.min
@@ -203,18 +193,6 @@ class RandomDelay(BaseDelay):
         elif min_delay > max_delay:
             raise ValueError("min must be less than or equal to max.")
 
-        delays = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        valid_mask = self.mask != 0
-        num_connections = int(np.count_nonzero(valid_mask))
-
-        if num_connections == 0:
-            return delays
-
-        sampled_delays = self.rng.normal(float(mean), float(std), size=num_connections).astype(np.float32)
-
         lower = -np.inf if min_delay is None else float(min_delay)
         upper = np.inf if max_delay is None else float(max_delay)
-        sampled_delays = np.clip(sampled_delays, lower, upper)
-
-        delays[valid_mask] = sampled_delays
-        return delays
+        return float(mean), float(std), lower, upper

@@ -1,7 +1,6 @@
 import os
 import inspect
 import itertools
-import warnings
 import numpy as np
 import pygenn
 from dataclasses import dataclass
@@ -39,13 +38,12 @@ GENN_CODE_DIR = "genn_code"
 class GlobalCOO(NamedTuple):
     """グローバルID空間での結合を COO で表したもの。**ビルド以降の唯一の受け渡し形式**。
 
-    疎生成経路と密生成経路の違いを吸収する場所はここ 1 箇所だけで、
-    `NetworkBuilder.global_coo()` を通った後のコード (utils / scripts / test) は
-    もう `is_sparse` を見ない。密な (N, N) が本当に要るのは行列画像を描くときだけなので、
+    結合・重み・遅延のコンポーネントは最初からこの形 (1D 配列) で値を返し、密な (N, N) は
+    ホスト側のどこにも作られない。密な (N, N) が本当に要るのは行列画像を描くときだけなので、
     その復元は描画関数が自分の中でやる (`src/utils/plotting/matrices.py`)。
 
     **不変条件: 行優先ソート済み** (row 昇順、同一 row 内で col 昇順)。
-    密経路は `np.nonzero(mask)` が、疎経路は各コネクタの `generate_sparse()` が保証する。
+    各コネクタの `generate()` が保証する。
     GeNN はシナプスを送信元ニューロン順に格納するので、`_pair_coo()` の集団ローカル COO も
     この順序に乗っている。
     """
@@ -147,26 +145,14 @@ class NetworkBuilder:
 
         self._component_lifeline = []
         self.global_coords = None
-        # 密生成経路の作業領域。**生成経路の内部都合なので private**。
-        # ビルド以降にグローバルな結合が要るコードは `global_coo()` を使うこと
-        # (疎/密の分岐がそこ 1 箇所に閉じる)。
-        self._global_mask = None
-        self._global_weights = None
-        self._global_delays = None
         # ニューロンを配置し軸索を閉じ込める 2D 領域 (_generate_global_matrices で構築)
         self.area = None
         # 結合コンポーネントの実体。生成後も残すのは、行列に落ちない副産物 (axon_growth の
         # 軸索折れ線など) を可視化・解析から読めるようにするため。area と同じ扱い。
         self.connection = None
-        # 疎生成経路で使う COO (すべて index 整合の 1D 配列)。密経路では None のまま。
-        # これも生成経路の内部都合。外へ出すのは `global_coo()` に正規化した後だけ。
-        self._sparse_rows = None
-        self._sparse_cols = None
-        self._sparse_weights = None
-        self._sparse_delays = None
-        # 疎/密どちらで生成しても同じ形になる正規化済み COO (`global_coo()` のキャッシュ)
+        # 生成したグローバル結合 (`global_coo()` が返すもの)
         self._global_coo: GlobalCOO | None = None
-        # 疎経路での グローバルID -> (集団コード, ローカルindex) 索引表 (遅延構築)
+        # グローバルID -> (集団コード, ローカルindex) 索引表 (遅延構築)
         self._index_table = None
         # "src_to_tgt" -> SynapseIndex。_build_synapses が GeNN へ登録した接続順を記録する。
         self.synapse_index: Dict[str, SynapseIndex] = {}
@@ -219,118 +205,67 @@ class NetworkBuilder:
             DELAY_MODELS.get(network.delay.profile_name),
         )
 
-    def _use_sparse(self) -> bool:
-        """疎生成経路を使うかどうかを config と各コンポーネントの対応状況から決める。
-
-        入力値:
-          "auto"(既定): 結合/重み/遅延の3段すべてが疎対応なら疎。1段でも非対応なら密。
-          "force"     : 疎を必須とし、非対応クラス名を挙げて即エラー(大規模実行で
-                        20分走ってから OOM kill されるのを防ぐ)。
-          "off"       : 常に密(過去のネットワーク実現を再現したいとき)。
-
-        記録値 ("on" / "off"): 保存済み config.yaml をそのまま再実行するための入口。
-        `_generate_global_matrices()` が決定結果をここへ焼き込むため、記録された config は
-        必ずこの形になっている。"on" は「疎で走った」の意なので `force` と同じ扱い
-        (非対応ならエラー)にし、黙って密へ落ちて別の実現になるのを防ぐ。
-        """
-        mode = getattr(self.config.network, "sparse", "auto")
-        if mode not in ("auto", "force", "off", "on"):
-            raise ValueError(
-                f"network.sparse は 'auto' / 'force' / 'off' / 'on' のいずれかです (got {mode!r})。"
-            )
-        if mode == "off":
-            return False
-        if mode == "on":
-            mode = "force"
-
-        # area と space は行列を作らないので疎/密の判定対象外。
-        _, _, connect_cls, weight_cls, delay_cls = self._component_classes()
-        unsupported = [
-            cls.__name__
-            for cls in (connect_cls, weight_cls, delay_cls)
-            if not getattr(cls, "supports_sparse", False)
-        ]
-        if not unsupported:
-            return True
-        if mode == "force":
-            raise ValueError(
-                "network.sparse='force' ですが、疎生成に対応していないコンポーネントがあります: "
-                f"{', '.join(unsupported)}。'auto' にするか、疎対応のプロファイルを選んでください。"
-            )
-
-        # auto で密へ落ちたケース。密は N×N を 3 本 (mask int8 + weights/delays float32 =
-        # 9N² バイト) 確保し、生成中は距離行列・確率行列 (float64) でさらに数倍になる。
-        # 全結合のように「密のほうが軽い」構成なら意図どおりだが、その場合は off を明示して
-        # 記録に残すべきなので、黙って落ちずに知らせる。
-        dense_bytes = self.total_neurons ** 2 * 9
-        warnings.warn(
-            f"network.sparse='auto' ですが疎生成に非対応のコンポーネントがあるため密経路を使います: "
-            f"{', '.join(unsupported)}。"
-            f" 密な N×N 行列に約 {dense_bytes / 2**30:.2f} GiB (生成中のピークはこの数倍) を確保します。"
-            " 意図的に密を選んでいる場合 (全結合など、疎より軽くなる構成) は"
-            " network.sparse='off' を明示してください。",
-            stacklevel=2,
-        )
-        return False
-
-    @property
-    def is_sparse(self) -> bool:
-        """疎生成経路で構築されたか。真実の在り処は `config.network.sparse`。
-
-        `_generate_global_matrices()` が決定結果を config へ焼き込むので、ビルド後は
-        ここを見れば分岐が分かる。`_sparse_rows is not None` のような副作用からの推測は
-        しないこと (真実が 2 箇所になる)。
-        """
-        return self.config.network.sparse == "on"
-
     def _generate_global_matrices(self):
-        """全ニューロンの座標と、グローバルな結合情報を生成する"""
-        print("  Generating Global Coordinates and Matrices...")
-        use_sparse = self._use_sparse()
+        """全ニューロンの座標と、グローバルな結合 (`GlobalCOO`) を生成する。
 
-        # 決定結果を config へ焼き込む。以後この分岐を見たい人は config.network.sparse を
-        # 読む (seed / backend / layout.assignment と同じく、実際にどちらで走ったかを
-        # 記録に残すため)。`_sparse_rows is not None` のような副作用からの推測はしない。
-        self.config.network.sparse = "on" if use_sparse else "off"
-
-        if use_sparse:
-            self._generate_global_sparse()
-        else:
-            self._generate_global_dense()
-
-        # ここで疎/密を 1 つの COO に正規化する。以降 (GeNN 登録・可視化・解析) は
-        # この形しか見ないので、生成経路の違いはこの行より先へは漏れない。
-        self._global_coo = self._normalize_to_coo()
-
-    def _normalize_to_coo(self) -> GlobalCOO:
-        """生成直後のグローバル結合を `GlobalCOO` へ正規化する (`global_coo()` の実装)。
-
-        密経路は「マスクが非零のところ」を実結合とする (重みが 0 でも結合はある)。
-        `np.nonzero` の返す順序が行優先なので、`GlobalCOO` の不変条件はそのまま満たされる。
+        乱数は area を除く 空間 → 結合 → 重み → 遅延 の順に `self.rng` から消費する。
         """
-        shape = (self.total_neurons, self.total_neurons)
-        if self.is_sparse:
-            return GlobalCOO(
-                row=np.asarray(self._sparse_rows, dtype=np.int32),
-                col=np.asarray(self._sparse_cols, dtype=np.int32),
-                weights=np.asarray(self._sparse_weights, dtype=np.float64),
-                delays=np.asarray(self._sparse_delays, dtype=np.float64),
-                shape=shape,
-            )
-        row, col = np.nonzero(np.asarray(self._global_mask))
-        return GlobalCOO(
-            row=row.astype(np.int32),
-            col=col.astype(np.int32),
-            weights=np.asarray(self._global_weights)[row, col].astype(np.float64),
-            delays=np.asarray(self._global_delays)[row, col].astype(np.float64),
-            shape=shape,
+        print("  Generating Global Coordinates and Connectivity...")
+        network = self.config.network
+        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
+
+        # 1. 領域の構築 (soma の配置範囲と軸索の伸長範囲)。
+        #    RandomState を渡さないのは、area が rng を消費すると空間→結合→重み→遅延の
+        #    単一ストリームが全部ずれ、同じ seed の既存ネットワークが別物になるから。
+        #    乱数は area.sample(n, rng) の引数としてのみ空間モデルから渡る。
+        self.area = areaClass(network.area, self.total_neurons, layout=self.layout)
+
+        # 2. 空間座標の生成
+        space = spaceClass(
+            network.space, self.total_neurons, self.rng, layout=self.layout, area=self.area
+        )
+        self.global_coords = space.generate()
+        self._inject_axes(space)
+
+        # 3. 結合 (行優先ソート済みの (rows, cols))
+        connection = connectClass(
+            network.connection, self.total_neurons, self.global_coords, self.rng,
+            layout=self.layout, area=self.area,
+        )
+        self.connection = connection
+        rows, cols = connection.generate()
+        self._inject_axes(connection)
+        rows = np.asarray(rows, dtype=np.int32)
+        cols = np.asarray(cols, dtype=np.int32)
+
+        # 4. 重み
+        weight = weightClass(
+            network.weight, self.total_neurons, self.global_coords, rng=self.rng, layout=self.layout,
+        )
+        weights = weight.generate(rows, cols)
+        self._inject_axes(weight)
+
+        # 5. 遅延
+        delay = delayClass(
+            network.delay, self.total_neurons, self.global_coords, rng=self.rng, layout=self.layout,
+        )
+        delays = delay.generate(rows, cols)
+        self._inject_axes(delay)
+
+        print(f"    Connectivity: {rows.size} synapses "
+              f"({rows.size / max(self.total_neurons, 1):.1f} per neuron)")
+        self._global_coo = GlobalCOO(
+            row=rows,
+            col=cols,
+            weights=np.asarray(weights, dtype=np.float64),
+            delays=np.asarray(delays, dtype=np.float64),
+            shape=(self.total_neurons, self.total_neurons),
         )
 
     def global_coo(self) -> GlobalCOO:
         """グローバルな結合を COO で返す。**ビルド以降はこれが唯一の入口**。
 
-        疎経路で生成されたか密経路で生成されたかに関わらず同じ形・同じ順序で返るので、
-        呼び出し側が `is_sparse` を見る必要はない。行列生成前に呼ぶとエラー。
+        行列生成前に呼ぶとエラー。
         """
         if self._global_coo is None:
             raise RuntimeError(
@@ -454,22 +389,13 @@ class NetworkBuilder:
             delays=delays,
             shape=(n, n),
         )
-        # 生成経路の作業領域は差し替え後の結合を指していない。読めてしまうより落ちるほうが
-        # 安全なので落とす (どのみち `_pair_coo()` は global_coo() しか見ない)。
-        self._global_mask = None
-        self._global_weights = None
-        self._global_delays = None
-        self._sparse_rows = None
-        self._sparse_cols = None
-        self._sparse_weights = None
-        self._sparse_delays = None
         self._index_table = None
 
     def _inject_axes(self, component):
         """コンポーネントが宣言するカテゴリ/ソート軸を NetworkLayout に注入する。
 
-        `generate()` / `generate_sparse()` の**直後**に呼ぶこと。コンポーネントは自身が
-        計算した座標・マスク等から軸を導出できる。後段のコンポーネント(結合→重み→遅延)は
+        `generate()` の**直後**に呼ぶこと。コンポーネントは自身が
+        計算した座標・結合等から軸を導出できる。後段のコンポーネント(結合→重み→遅延)は
         先行コンポーネントが宣言した軸を `layout.ids_by(...)` などで参照できる。
         """
         axes = component.describe_axes()
@@ -479,92 +405,6 @@ class NetworkBuilder:
             self.layout.add_axis(name, values)
             print(f"    Axis '{name}' declared by {type(component).__name__} "
                   f"({len(self.layout.ids_by(name))} categories)")
-
-    def _generate_global_dense(self):
-        """密な (N, N) 行列として結合・重み・遅延を生成する(従来経路)"""
-        network = self.config.network
-
-        # Pydanticモデルから辞書を取得
-        area_cfg = network.area
-        space_cfg = network.space
-        conn_cfg = network.connection
-        weight_cfg = network.weight
-        delay_cfg = network.delay
-
-        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
-
-        # 1. 領域の構築 (soma の配置範囲と軸索の伸長範囲)。
-        #    RandomState を渡さないのは、area が rng を消費すると空間→結合→重み→遅延の
-        #    単一ストリームが全部ずれ、同じ seed の既存ネットワークが別物になるから。
-        #    乱数は area.sample(n, rng) の引数としてのみ空間モデルから渡る。
-        self.area = areaClass(area_cfg, self.total_neurons, layout=self.layout)
-
-        # 2. 空間座標の生成
-        space = spaceClass(space_cfg, self.total_neurons, self.rng, layout=self.layout, area=self.area)
-        self.global_coords = space.generate()
-        self._inject_axes(space)
-
-        # 3. 結合マスクの生成
-        connection = connectClass(conn_cfg, self.total_neurons, self.global_coords, self.rng, layout=self.layout, area=self.area)
-        self.connection = connection
-        self._global_mask = connection.generate()
-        self._inject_axes(connection)
-
-        # 4. 重み行列の生成
-        weight = weightClass(weight_cfg, self.total_neurons, self.global_coords, self._global_mask, self.rng, layout=self.layout)
-        self._global_weights = weight.generate()
-        self._inject_axes(weight)
-
-        # 5. 遅延行列の生成
-        delay = delayClass(delay_cfg, self.total_neurons, self.global_coords, self._global_mask, self.rng, layout=self.layout)
-        self._global_delays = delay.generate()
-        self._inject_axes(delay)
-
-    def _generate_global_sparse(self):
-        """COO (rows, cols, weights, delays) として結合情報を生成する。
-
-        密行列を一切作らないため、N が数万規模でもメモリに収まる。乱数の消費順は
-        密経路と一致するよう各コンポーネント側で保証している
-        (connectors.GaussianDistanceTypeTopology.generate_sparse の docstring 参照)。
-        """
-        network = self.config.network
-        areaClass, spaceClass, connectClass, weightClass, delayClass = self._component_classes()
-
-        # 密経路と同じく area は rng を受け取らない (_generate_global_dense のコメント参照)。
-        self.area = areaClass(network.area, self.total_neurons, layout=self.layout)
-
-        space = spaceClass(
-            network.space, self.total_neurons, self.rng, layout=self.layout, area=self.area
-        )
-        self.global_coords = space.generate()
-        self._inject_axes(space)
-
-        connection = connectClass(
-            network.connection, self.total_neurons, self.global_coords, self.rng,
-            layout=self.layout, area=self.area,
-        )
-        self.connection = connection
-        rows, cols = connection.generate_sparse()
-        self._inject_axes(connection)
-        self._sparse_rows = np.asarray(rows, dtype=np.int32)
-        self._sparse_cols = np.asarray(cols, dtype=np.int32)
-
-        weight = weightClass(
-            network.weight, self.total_neurons, self.global_coords,
-            mask=None, rng=self.rng, layout=self.layout,
-        )
-        self._sparse_weights = weight.generate_sparse(self._sparse_rows, self._sparse_cols)
-        self._inject_axes(weight)
-
-        delay = delayClass(
-            network.delay, self.total_neurons, self.global_coords,
-            mask=None, rng=self.rng, layout=self.layout,
-        )
-        self._sparse_delays = delay.generate_sparse(self._sparse_rows, self._sparse_cols)
-        self._inject_axes(delay)
-
-        print(f"    Sparse connectivity: {self._sparse_rows.size} synapses "
-              f"({self._sparse_rows.size / max(self.total_neurons, 1):.1f} per neuron)")
 
     def _build_neuron_populations(self):
         """GeNN上にニューロンポピュレーションを定義
@@ -625,13 +465,11 @@ class NetworkBuilder:
     def _pair_coo(self, src_name: str, tgt_name: str):
         """(src_pop -> tgt_pop) の接続を集団ローカルの COO として取り出す。
 
-        入力はグローバル COO 1 本 (`global_coo()`)。疎で生成したか密で生成したかで
-        分岐しないのは、正規化の時点で違いが消えているから。
+        入力はグローバル COO 1 本 (`global_coo()`)。
 
         `layout.global_indices` は昇順なので `local_of` は各集団上で単調増加であり、
-        行優先ソート済みキーへの単調写像はソート順を保つ。よってここで得られる並びは、
-        密行列を `np.where(sub_mask)` で走査したのと同一 = GeNN が期待する
-        「集団ローカルの (pre, post) 行優先ソート順」になる。
+        行優先ソート済みキーへの単調写像はソート順を保つ。よってここで得られる並びは
+        GeNN が期待する「集団ローカルの (pre, post) 行優先ソート順」になる。
 
         Returns:
             (local_src, local_tgt, weights_flat, delays_ms, positions) いずれも行優先

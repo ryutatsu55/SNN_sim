@@ -190,9 +190,9 @@ run ディレクトリの中身:
 走っている最中の run には、もう 1 つ `pending_config.yaml` がある。**ランチャから run 本体
 への引き継ぎ**で、run 本体が build を通して `config.yaml` を書いた時点で消える。
 
-分けてあるのは役割が違うから。`network.sparse` の実値 (`on` / `off`) を決めるのは
-NetworkBuilder の生成時なので、ランチャが起動前に書ける config は `auto` のまま —— それを
-`config.yaml` の名前で置くと「この run はこうして走った」という記録の意味が崩れる。
+分けてあるのは役割が違うから。`config.yaml` は「この run は build を通ってこうして走った」
+という記録で、ランチャが起動前に書ける config はまだ build を通っていない —— それを
+`config.yaml` の名前で置くと記録の意味が崩れる。
 
 おかげで **`config.yaml` があれば build を通った run**、という読み方ができる。
 
