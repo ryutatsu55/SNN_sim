@@ -43,6 +43,32 @@ def consume_synaptic_resource(x: float, utilization: float) -> tuple[float, floa
     return x - released, released
 
 
+def replay_released_resource(times: np.ndarray, ids: np.ndarray, num_neurons: int,
+                             utilization, tau_rec: float) -> np.ndarray:
+    """スパイク列から、各スパイクが放出した資源 `x_release = U·x` を再現する。
+
+    `pre_spike_code` と同じ漸化式 (Eq. S11 → S12) をニューロンごとに時刻順に回す。
+    返り値は `times` と同じ並び。`utilization` はスカラか、ニューロンごとの長さ
+    `num_neurons` の配列。
+
+    **各ニューロンの最初のスパイクは x = 1 (満タン) から始まる。** 記録窓の直前の
+    発火履歴は分からないので、窓の先頭 τ_rec 程度は放出量をわずかに過大に見積もる。
+    """
+    times = np.asarray(times, dtype=np.float64)
+    ids = np.asarray(ids, dtype=np.int64)
+    u = np.broadcast_to(np.asarray(utilization, dtype=np.float64), (int(num_neurons),))
+    order = np.lexsort((times, ids))
+    released = np.empty(times.size, dtype=np.float64)
+    x = np.ones(int(num_neurons), dtype=np.float64)
+    last = np.full(int(num_neurons), -np.inf)
+    for k in order:
+        j = ids[k]
+        x_now = recover_synaptic_resource(x[j], times[k] - last[j], tau_rec)
+        x[j], released[k] = consume_synaptic_resource(x_now, u[j])
+        last[j] = times[k]
+    return released
+
+
 def calculate_gmax_scale(num_synapses: int, num_post: int, normalize_by_fan_in: bool) -> float:
     """g_maxを入力総量として扱うための平均fan-in正規化係数。"""
     if not normalize_by_fan_in:

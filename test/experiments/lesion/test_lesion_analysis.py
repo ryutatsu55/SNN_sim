@@ -15,8 +15,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.analysis.axons import (  # noqa: E402
-    subset_geometry, synapse_crossed_parts, synapse_path_segments)
-from src.utils.analysis.connectivity import bridge_part_indices  # noqa: E402
+    subset_geometry, synapse_crossed_bridges, synapse_crossed_parts,
+    synapse_path_segments)
+from src.utils.analysis.connectivity import (  # noqa: E402
+    bridge_part_indices, module_part_indices)
 from src.utils.analysis.graph import (  # noqa: E402
     classify_roles, clustering_coefficients, component_sizes, degree_table,
     module_participation)
@@ -125,6 +127,71 @@ def test_more_samples_never_lose_a_detection():
     coarse = synapse_crossed_parts(geometry, area, [2], samples=8)[0, 0]
     fine = synapse_crossed_parts(geometry, area, [2], samples=256)[0, 0]
     assert fine >= coarse
+
+
+# --------------------------------------------------------------- ブリッジの食い込み
+
+def _area_with_overlapping_bridge():
+    """ブリッジが両モジュールへ 2 um 食い込んだ area (`_bridge_spec` と同じ形)。
+
+    モジュール M0 (x 0-10) / M1 (x 20-30) に対しブリッジは x 8-22 なので、
+    x 8-10 と x 20-22 は**モジュールの内側**。露出しているのは x 10-20 だけ。
+    """
+    return _Area(
+        parts=[_Rect(0, 0, 10, 10), _Rect(20, 0, 30, 10), _Rect(8, 4, 22, 6)],
+        names=["M0", "M1", "B0-1"],
+        allows=[True, True, False],
+    )
+
+
+def test_module_part_indices_is_the_complement_of_bridges():
+    assert module_part_indices(_area_with_overlapping_bridge()).tolist() == [0, 1]
+
+
+def test_module_part_indices_needs_at_least_one_module():
+    with pytest.raises(ValueError):
+        module_part_indices(_Area([_Rect(0, 4, 10, 6)], ["B0-1"], [False]))
+
+
+def test_bridge_overlap_inside_a_module_is_not_a_crossing():
+    """**モジュール内で完結する軸索がブリッジの食い込みをかすめても切られないこと。**
+
+    食い込みは union を連結にするための実装上の都合で、実験で焼くのは露出した通路。
+    ここを区別しないと、同一モジュール内の結合が「ブリッジを渡った」として切られる
+    (実測: BX1-3 で 101 本中 58 本、その 42 本が同一モジュール内)。
+    """
+    # M0 の内側だけを x=2 -> 9 と進む。x 8-9 はブリッジ part の内側でもある。
+    geometry = _Geometry(
+        seg_start=[[2, 5]], seg_end=[[9, 5]],
+        offsets=[0, 1], pre=[0], post=[1], contact_seg=[0], contact_t=[1.0],
+    )
+    area = _area_with_overlapping_bridge()
+    assert synapse_crossed_parts(geometry, area, [2])[0, 0]        # 幾何的には part の内側
+    assert not synapse_crossed_bridges(geometry, area, [2])[0, 0]  # 渡ってはいない
+
+
+def test_crossing_the_exposed_channel_is_still_a_crossing():
+    """露出部 (どのモジュールにも属さない区間) を通れば切られること。"""
+    geometry = _Geometry(
+        seg_start=[[2, 5]], seg_end=[[25, 5]],
+        offsets=[0, 1], pre=[0], post=[1], contact_seg=[0], contact_t=[1.0],
+    )
+    area = _area_with_overlapping_bridge()
+    assert synapse_crossed_bridges(geometry, area, [2])[0, 0]
+
+
+def test_bridge_crossing_is_a_subset_of_part_containment():
+    """露出部の判定は part の内外判定の部分集合。逆転する組み合わせは無いこと。"""
+    area = _area_with_overlapping_bridge()
+    geometry = _Geometry(
+        seg_start=[[2, 5], [9, 5], [2, 5]], seg_end=[[9, 5], [25, 5], [4, 5]],
+        offsets=[0, 1, 2, 3], pre=[0, 1, 2], post=[1, 2, 0],
+        contact_seg=[0, 1, 2], contact_t=[1.0, 1.0, 1.0],
+    )
+    strict = synapse_crossed_bridges(geometry, area, [2])
+    loose = synapse_crossed_parts(geometry, area, [2])
+    assert not (strict & ~loose).any()
+    assert strict.ravel().tolist() == [False, True, False]
 
 
 # ======================================================================================

@@ -29,6 +29,7 @@ from src.models.neurons.akita_escape_lif import (
 from src.models.plasticity.custom_Akita import (
     calculate_gmax_scale,
     consume_synaptic_resource,
+    replay_released_resource,
     decay_trace,
     e_stdp_kernel,
     e_trace_post_delta,
@@ -134,6 +135,24 @@ class AkitaPlasticityTest(unittest.TestCase):
         remaining, released = consume_synaptic_resource(recovered, utilization=0.4)
         self.assertGreater(recovered, 0.2)
         self.assertAlmostEqual(remaining + released, recovered)
+
+    def test_replay_releases_u_then_matches_recovery(self):
+        released = replay_released_resource(np.array([10.0, 60.0]), np.array([0, 0]),
+                                            num_neurons=1, utilization=0.4, tau_rec=150.0)
+        self.assertAlmostEqual(released[0], 0.4)
+        x_before_second = recover_synaptic_resource(0.6, 50.0, 150.0)
+        self.assertAlmostEqual(released[1], 0.4 * x_before_second)
+
+    def test_replay_keeps_neurons_independent_and_input_order(self):
+        """ニューロンをまたいで資源を共有せず、入力の並び順にも依存しない。"""
+        times = np.array([5.0, 1.0, 3.0, 2.0])
+        ids = np.array([1, 0, 1, 0])
+        released = replay_released_resource(times, ids, num_neurons=2,
+                                            utilization=np.array([0.4, 0.8]), tau_rec=100.0)
+        self.assertAlmostEqual(released[1], 0.4)       # neuron 0 の 1 発目
+        self.assertAlmostEqual(released[2], 0.8)       # neuron 1 の 1 発目
+        self.assertAlmostEqual(released[3], 0.4 * recover_synaptic_resource(0.6, 1.0, 100.0))
+        self.assertAlmostEqual(released[0], 0.8 * recover_synaptic_resource(0.2, 2.0, 100.0))
 
     def test_e_stdp_kernel_has_expected_signs(self):
         potentiate = e_stdp_kernel(delta_t=10.0, a_e=0.02, tau_e=20.0, beta_e=1.0)

@@ -44,6 +44,28 @@ def split_avalanches(spike_times: np.ndarray) -> AvalancheResult:
     return AvalancheResult(sizes=sizes, starts=starts, threshold_ms=threshold)
 
 
+def avalanche_size_columns(sizes, duration_ms: float) -> dict:
+    """アバランチサイズの要約。**平均サイズが臨界性の読み方を決める。**
+
+    べき乗分布 p(s) ∝ s^-α の平均は α と系のサイズで決まるので、平均サイズを見れば
+    「観測された α がどのくらい深いイベントを意味するか」が分かる
+    (N=256 なら α=1.5 で平均 12.3、α=2.0 で 3.7)。
+
+    `duration_ms` は記録窓の長さ。アバランチの**頻度**を出すために要る —— 同じ
+    総スパイク数でも、平均サイズが大きいほど頻度は下がる。
+    """
+    sizes = np.asarray(sizes, dtype=np.float64)
+    if sizes.size == 0 or duration_ms <= 0:
+        return {"avalanche_rate_hz": 0.0, "avalanche_size_mean": float("nan"),
+                "avalanche_size_median": float("nan"), "avalanche_size_max": float("nan")}
+    return {
+        "avalanche_rate_hz": float(sizes.size / (duration_ms / 1000.0)),
+        "avalanche_size_mean": float(sizes.mean()),
+        "avalanche_size_median": float(np.median(sizes)),
+        "avalanche_size_max": float(sizes.max()),
+    }
+
+
 # ======================================================================================
 # 時間ビン連結 (Beggs & Plenz 2003)
 # ======================================================================================
