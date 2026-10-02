@@ -11,6 +11,9 @@ from scripts.develop.report import guard
 from scripts.develop.store import paths
 from scripts.develop.analysis.metrics import build_row
 from scripts.develop.figures.avalanche import avalanche_distribution
+from scripts.develop.figures.correlation import correlation_matrix
+from scripts.develop.figures.correlation_network import correlation_network
+from scripts.develop.figures.isi import isi_distribution
 from scripts.develop.figures.network import weight_network
 from scripts.develop.figures.raster import raster
 from scripts.develop.figures.synapse_hist import weight_distribution
@@ -27,6 +30,16 @@ FIGURES = (
     ("raster", raster, paths.RASTER, "raster_{tag}.png"),
     ("avalanche plot", avalanche_distribution, paths.AVALANCHE, "avalanche_{tag}.png"),
     ("weight matrix", weight_matrix, paths.WEIGHT, "weight_matrix_{tag}.png"),
+    # 機能的結合 (Watanabe et al. 2026 Fig. 2b)。重み行列と同じ並びで出るので、
+    # 「繋がっている」と「実際に同期している」を 2 枚並べて読める。
+    ("correlation matrix", correlation_matrix, paths.CORRELATION,
+     "correlation_{tag}.png"),
+    # 同じ相関を空間に置いたもの (論文 Fig. 3c 上段)。座標を持たない run (`no_space`)
+    # では window.coords() が MissingData を投げるので図は出ない。
+    ("correlation network", correlation_network, paths.CORRELATION_NETWORK,
+     "correlation_network_{tag}.png"),
+    # スパイク間隔の分布。平均発火率だけでは見えない「たまに高頻度で撃つ」が読める。
+    ("ISI distribution", isi_distribution, paths.ISI, "isi_{tag}.png"),
     ("weight distribution", weight_distribution, paths.WEIGHT_DIST,
      "weight_distribution_{tag}.png"),
     # 座標を持たない run (`no_space`) では window.coords() が MissingData を投げるので、

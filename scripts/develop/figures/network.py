@@ -54,8 +54,11 @@ def _sample_nodes(total: int, n_sample: int, rng) -> np.ndarray:
     同じ seed なら 2 枚の図に出るニューロンは一致する。"""
     return np.sort(rng.choice(total, size=min(n_sample, total), replace=False))
 
-def _excitatory_mask(layout, total: int):
-    """グローバル ID -> 興奮性か。layout が無ければ None (色分けしない)。"""
+def excitatory_mask(layout, total: int):
+    """グローバル ID -> 興奮性か。layout が無ければ None (色分けしない)。
+
+    `draw_nodes` と対で `correlation_network.py` も呼ぶ。
+    """
     if layout is None:
         return None
     exc_ids = np.asarray(layout.ids_by("polarity").get("excitatory", []), dtype=np.int64)
@@ -63,8 +66,12 @@ def _excitatory_mask(layout, total: int):
     is_exc[exc_ids] = True
     return is_exc
 
-def _draw_nodes(ax, x, y, sample, is_exc, node_size) -> None:
-    """細胞体を描く。E/I が分かるなら赤/青、分からなければ一色。"""
+def draw_nodes(ax, x, y, sample, is_exc, node_size) -> None:
+    """細胞体を描く。E/I が分かるなら赤/青、分からなければ一色。
+
+    **`correlation_network.py` も呼ぶ。** 空間に置くグラフはどれも同じ位置・同じ色で
+    ニューロンを描くので、実装を 2 つ持たない。
+    """
     if is_exc is None:
         ax.scatter(x[sample], y[sample], s=node_size, color='darkgray',
                    edgecolors='black', zorder=3)
@@ -103,7 +110,7 @@ def _draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin) -> None
         )
 
 
-def _apply_axis_limits(ax, config, area_drawn: bool) -> None:
+def apply_axis_limits(ax, config, area_drawn: bool) -> None:
     """軸範囲の優先順位:
       1. エリアの境界箱 (draw_area が set_limits で設定済み)。領域が図の外に切れない
       2. x_range/y_range を持つ矩形空間
@@ -156,7 +163,7 @@ def network(built, out_path):
     sample = _sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
-    is_exc = _excitatory_mask(layout, N)
+    is_exc = excitatory_mask(layout, N)
 
     fig, ax = plt.subplots(figsize=(12, 10))
 
@@ -166,7 +173,7 @@ def network(built, out_path):
     area_drawn = draw_area(ax, area, fill=False, boundary=True, zorder=0)
 
     # --- ノード描画 (layout があれば E/I で色分け) ---
-    _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
+    draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
     # 結合（エッジ）を抽出し、両端がサンプルに含まれるものだけ残す。
     # **重みでは絞らない** —— マスクに載っている結合は、重みがいくつであれ 1 本の線。
@@ -188,7 +195,7 @@ def network(built, out_path):
                  f"{sources.size} edges drawn")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
-    _apply_axis_limits(ax, config, area_drawn)
+    apply_axis_limits(ax, config, area_drawn)
 
     save(fig, out_path, dpi=DPI, bbox_inches='tight')
     print(f"Network visualization saved to {out_path}")
@@ -202,11 +209,13 @@ def weight_network(window, out_path):
     線の太さは `|w| / max|w|` に比例し (最大 `MAX_EDGE_WIDTH`)、**重み 0 の結合は
     描かない**。記録窓ごとに出るので、太い線が育っていく過程がそのまま見える。
 
-    エリアは窓からは読めないので境界線は敷かない (軸範囲は config から取る)。
-    座標を持たない run (`no_space`) では `coords()` が `MissingData` を投げる。
+    エリアは**あれば**境界線を背景に敷き、軸範囲もそこから取る (`network` と同じ)。
+    無くてもこの図は成立するので `optional()` で読む。座標を持たない run (`no_space`)
+    では `coords()` が `MissingData` を投げる。
     """
     coo = window.coo()
     config, layout = window.config, window.layout
+    area = optional(window.area)
 
     coords = np.asarray(window.coords())
     row = np.asarray(coo.row, dtype=np.int64)
@@ -223,10 +232,12 @@ def weight_network(window, out_path):
     sample = _sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
-    is_exc = _excitatory_mask(layout, N)
+    is_exc = excitatory_mask(layout, N)
 
     fig, ax = plt.subplots(figsize=(12, 10))
-    _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
+    # 塗りは入れない (`network` と同じ理由 —— part ごとの塗り分けはエッジと色が競合する)。
+    area_drawn = draw_area(ax, area, fill=False, boundary=True, zorder=0)
+    draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
     # 重み 0 の結合を落とすのは「線幅 0 の矢印を描かない」ため。COO は実結合しか
     # 持たないが、可塑性で 0 まで落ちた結合はここに含まれる。
@@ -250,7 +261,7 @@ def weight_network(window, out_path):
                  f"{sources.size} edges drawn, max|w|={abs_max:.3f}")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
-    _apply_axis_limits(ax, config, area_drawn=False)
+    apply_axis_limits(ax, config, area_drawn)
 
     save(fig, out_path, dpi=DPI, bbox_inches='tight')
 
@@ -329,7 +340,7 @@ def axon_network(built, out_path):
     sample = _sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
-    is_exc = _excitatory_mask(layout, N)
+    is_exc = excitatory_mask(layout, N)
 
     pre = np.asarray(geometry.pre, dtype=np.int64)
     post = np.asarray(geometry.post, dtype=np.int64)
@@ -363,9 +374,9 @@ def axon_network(built, out_path):
         ax.add_collection(LineCollection(stubs, colors=colors, linewidths=0.8,
                                          linestyles=(0, (2, 2)), zorder=1.5))
 
-    _draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
+    draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
-    # 凡例は _draw_nodes が付けた E/I に線種の説明を足す (色は送信元の極性で決まる)。
+    # 凡例は draw_nodes が付けた E/I に線種の説明を足す (色は送信元の極性で決まる)。
     # ただしこの図には載せず、`{title}_legend.png` として別に出す (_save_legend_figure)。
     handles, _ = ax.get_legend_handles_labels()
     handles.append(Line2D([], [], color="0.4", lw=1.2, label="axon (made a synapse)"))
@@ -373,7 +384,7 @@ def axon_network(built, out_path):
                           label="dendrite reach"))
     if underlay:
         handles.append(Line2D([], [], color="0.45", lw=0.6, alpha=0.6, label="all axons"))
-    # _draw_nodes が ax.legend() を呼んでいるので、本体からは取り除く。
+    # draw_nodes が ax.legend() を呼んでいるので、本体からは取り除く。
     if ax.get_legend() is not None:
         ax.get_legend().remove()
 
@@ -382,7 +393,7 @@ def axon_network(built, out_path):
                  f"{len(paths)} synapses drawn along axons, {len(underlay)} axons")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
-    _apply_axis_limits(ax, config, area_drawn)
+    apply_axis_limits(ax, config, area_drawn)
 
     out_path = Path(out_path)
     save(fig, out_path, dpi=DPI, bbox_inches='tight')

@@ -16,6 +16,9 @@ import numpy as np
 from src.utils.analysis.avalanche import split_avalanches
 from src.utils.analysis.criticality import (bimodality_d, burstiness_index,
                                             criticality_index_delta_cr)
+from src.utils.analysis.avalanche import analyze_avalanches, avalanche_size_columns
+from src.utils.analysis.correlation import mean_neuronal_correlation
+from src.utils.analysis.synchrony import event_columns
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
 from src.utils.analysis.weights import block_values, weight_block_metrics
@@ -46,17 +49,27 @@ def max_plasticity_weight(config) -> float:
 
 
 def spike_columns(local_times, ids, total_neurons: int, record_window_ms: float,
-                  smax: int) -> dict:
+                  smax: int, dt_ms: float) -> dict:
     """スパイク列だけから決まる指標。`spikes_*h.npz` があれば後からでも再計算できる。
 
     `local_times` は**記録窓の先頭を 0 とするローカル時刻**。絶対時刻を渡すと
     アバランチ分割は同じでも burstiness のビン割りがずれる。
+
+    アバランチは**2 通りの切り出し方**を両方走らせる (lesion と同じ)。ギャップ分割
+    (`split_avalanches`) が ΔCr / LLR / D の元で、ビン連結 (`analyze_avalanches`) が
+    分岐比 σ_bp と指数 α を出す。**臨界かどうかは σ_bp を見る** —— サイズ分布の傾きは
+    亜臨界でもべき乗に見えるため。
     """
     local_times = np.asarray(local_times, dtype=np.float64)
     ids = np.asarray(ids)
     avalanche = split_avalanches(local_times)
     rates = firing_rates(ids, total_neurons, record_window_ms)
-    return {
+    # 機能的結合 (Watanabe et al. 2026 の neuronal correlation)。`correlation_pairs` を
+    # 並べて出すのは、窓の中で 1 発も撃たないニューロンが平均から抜けるため ——
+    # 本数が減っていれば平均の上昇は同期の強まりではない。
+    mean_correlation, correlation_pairs = mean_neuronal_correlation(
+        local_times, ids, total_neurons, record_window_ms)
+    row = {
         "num_spikes": int(local_times.size),
         "mean_rate_hz": float(np.mean(rates)),
         "avalanche_threshold_ms": avalanche.threshold_ms,
@@ -66,7 +79,16 @@ def spike_columns(local_times, ids, total_neurons: int, record_window_ms: float,
         "delta_cr": criticality_index_delta_cr(avalanche.sizes, smax=smax),
         "burstiness_index": burstiness_index(local_times, record_window_ms),
         "bimodality_d": bimodality_d(avalanche.sizes),
+        "mean_correlation": mean_correlation,
+        "correlation_pairs": correlation_pairs,
     }
+    row.update(avalanche_size_columns(avalanche.sizes, record_window_ms))
+    row.update(event_columns(local_times, ids, total_neurons, record_window_ms))
+    # ビン連結方式。σ_bp (分岐比) が臨界性の直接の判定量。
+    _av, _lags, _corr, suite = analyze_avalanches(
+        local_times, ids, record_window_ms, min_bin_ms=dt_ms, size_fit_max=smax)
+    row.update({f"bp_{key}": value for key, value in suite.items()})
+    return row
 
 
 def group_columns(ids, layout, record_window_ms: float) -> dict:
@@ -99,7 +121,8 @@ def build_row(window) -> dict:
 
     out: dict = {"hour": float(window.hour)}
     out.update(spike_columns(spikes.times, spikes.ids, window.total_neurons,
-                             record_window_ms, smax))
+                             record_window_ms, smax,
+                             dt_ms=float(window.config.simulation.dt)))
     out.update(group_columns(spikes.ids, layout, record_window_ms))
     out.update(weight_columns(window.weights(), wiring.row, wiring.col, layout,
                               max_plasticity_weight(window.config)))

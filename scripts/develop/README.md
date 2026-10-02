@@ -156,8 +156,10 @@ run ディレクトリの中身:
     │   ├── raster/
     │   ├── avalanche/
     │   ├── weight/       重み行列 / 重み分布 / 重みで描いたネットワーク図
+    │   ├── correlation/  ニューロン間相関行列
+    │   ├── correlation_network/  相関の強いペアだけを空間に描いた無向グラフ
     │   └── trace/        task.trace_neuron を指定した run のみ
-    └── overview/         figure2c / figure2d
+    └── overview/         figure2c / figure2d / mean_correlation_track
 ```
 
 **ディレクトリ名からは何も読み取らないこと。** seed も条件も `config.yaml` の中にある。

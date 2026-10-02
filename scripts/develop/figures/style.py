@@ -42,6 +42,13 @@ ORDER_AXES = ("module", "polarity")
 # 「E/I だけで並べればよい」図 (重み行列) もこれを直接指す。
 FALLBACK_ORDER_AXES: tuple[str, ...] = ("polarity",)
 
+# ブロック境界の線。**明背景 (粗視化結合図の白) でも暗背景 (重み行列の viridis 0) でも
+# 読める中間グレー 1 色。** 白 1 色だと粗視化図で消え、黒 1 色だと重み行列で沈む。
+BOUNDARY_COLOR = "0.5"
+# 階層レベルごとの線幅 [pt]。外側 (レベル 0) が太い。レベルが増えても最後の値を使う。
+BOUNDARY_WIDTHS = (1.0, 0.6)
+
+
 
 def available_order_axes(layout, axes: tuple[str, ...] = ORDER_AXES):
     """layout が実際に持っている軸だけに絞った並べ替え軸を返す。
@@ -175,16 +182,20 @@ def draw_block_boundaries(ax, ordering: Ordering, size: int, *, scale: float = 1
     `skip` に軸名を挙げるとその軸の切り替わりには線を引かない。**粗視化結合図も
     重み行列も `skip=("polarity",)` を渡す** —— 2 枚が同じ格子に見えること自体が
     並べて読むための条件で、線の種類が増えると格子が読めなくなる。
+
+    **線は 1 本 1 色。** 以前は白の上に細い黒を重ねていたが、黒が白の中央を削るので
+    「白 1px + 黒 1px + 白 1px」になり、画素内の位置によって太さも濃さもばらついた。
     """
     for position, level in ordering.visible_boundaries(skip):
         position = position * scale
         if not 0 < position < size:
             continue
-        # 白線の上に細い黒線を重ねると、明背景でも暗背景でも見える。
-        # 縦横それぞれ白 → 黒の順に引くこと (交点で黒が上に来る)。
-        white, black = (1.2, 0.4) if level == 0 else (0.8, 0.25)
         offset = position - 0.5
-        ax.axhline(offset, color="white", linewidth=white)
-        ax.axvline(offset, color="white", linewidth=white)
-        ax.axhline(offset, color="black", linewidth=black)
-        ax.axvline(offset, color="black", linewidth=black)
+        width = BOUNDARY_WIDTHS[min(level, len(BOUNDARY_WIDTHS) - 1)]
+        for line in (ax.axhline(offset, color=BOUNDARY_COLOR, linewidth=width),
+                     ax.axvline(offset, color=BOUNDARY_COLOR, linewidth=width)):
+            # **アンチエイリアスを切り、画素へスナップさせる。** 境界位置は整数でも、
+            # データ座標から画素への倍率が整数でないので線ごとに画素内の位置がずれる。
+            # そのまま描くと 1 本ずつ滲み方が変わり、太さも濃さもばらつく。
+            line.set_antialiased(False)
+            line.set_snap(True)

@@ -16,6 +16,9 @@ PAPER_XLIM_S = (0.0, 30.0)
 MARKER_SIZE = 2.0
 FIGSIZE = (10, 4)
 DPI = 200
+# 最外ブロックの名前を y 軸に出す上限。これを超えると文字が潰れるので番号のままにする
+# (重み行列・相関行列と同じ約束・同じ値)。
+MAX_BLOCK_TICKS = 16
 
 
 def raster(window, out_path: Path) -> None:
@@ -61,6 +64,12 @@ def raster(window, out_path: Path) -> None:
         if n_exc > 0 and n_inh > 0:
             ax.legend(loc="upper right", markerscale=3, fontsize=8)
         ax.set_ylim(0.5, total + 0.5)
+        # **y 軸は最外ブロックの名前。** 並べ替えた後の通し番号にはもう意味が無く、
+        # 読み手が知りたいのは「どの区画か」なので、区切り線と同じ単位のラベルを出す。
+        blocks = style.outer_block_labels(layout, ordering, total)
+        if blocks and len(blocks) <= MAX_BLOCK_TICKS:
+            ax.set_yticks([centre for centre, _ in blocks])
+            ax.set_yticklabels([name for _, name in blocks], fontsize=7)
         remapped = True
 
     if not remapped:
@@ -73,8 +82,9 @@ def raster(window, out_path: Path) -> None:
     if not remapped:
         ax.set_ylabel("Neuron ID")
     elif ordering.axes == ("polarity",):
-        ax.set_ylabel("Neuron ID (excitatory 1..Nexc, inhibitory above)")
+        ax.set_ylabel("excitatory 1..Nexc, inhibitory above")
     else:
-        ax.set_ylabel(f"Neuron ID (ordered by {' > '.join(ordering.axes)})")
+        ax.set_ylabel(f"{ordering.axes[0]} (within: {' > '.join(ordering.axes[1:])})"
+                      if len(ordering.axes) > 1 else ordering.axes[0])
     ax.set_xlim(*PAPER_XLIM_S)
     save(fig, out_path, dpi=DPI)

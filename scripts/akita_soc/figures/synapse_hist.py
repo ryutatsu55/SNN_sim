@@ -27,10 +27,16 @@ DPI = 200
 BINS = 80
 HIST_FIGSIZE = (11, 4)
 WEIGHT_TITLE = "Weight distribution"
+# 重みの横軸は**常に [0, 1]**。可塑性の Wmax で正規化済みなので、データに合わせると
+# 記録時刻ごとに軸が動いて分布の移動が読めなくなる。縦軸は確率密度 —— シナプス本数が
+# 違う run (や損傷の前後) でも形をそのまま比べられる。
+WEIGHT_RANGE = (0.0, 1.0)
 
 
 def _value_distribution(view, values: np.ndarray, out_path: Path, *,
-                        xlabel: str, title: str, unit: str = "") -> None:
+                        xlabel: str, title: str, unit: str = "",
+                        value_range: tuple[float, float] | None = None,
+                        density: bool = False) -> None:
     """COO 上の per-synapse 量のヒストグラム (左: 全体 / 右: E/I ブロック別)。
 
     遅延・距離・重みの共通の骨格。右パネルは左と**同じビン境界**を使うので、
@@ -42,6 +48,9 @@ def _value_distribution(view, values: np.ndarray, out_path: Path, *,
         xlabel: 横軸ラベル (単位を含めて呼び出し側が決める)
         title: 図全体のタイトル
         unit: 左パネルの mean/max に添える単位。空なら数値だけ。
+        value_range: 横軸とビン境界を固定する範囲。`None` ならデータに合わせる。
+            **範囲の外の値は描かれない** (左パネルのタイトルの mean/max には出る)。
+        density: 縦軸を確率密度にするか。`False` なら件数。
     """
     wiring = view.wiring()
     if wiring.num_synapses == 0:
@@ -51,28 +60,40 @@ def _value_distribution(view, values: np.ndarray, out_path: Path, *,
                         excitatory_flags(view.layout, view.total_neurons))
     suffix = f" {unit}" if unit else ""
 
+    # ビン境界は**両パネル共通**。範囲を固定すると記録時刻をまたいでも同じ境界になるので、
+    # 図を重ねて読める (固定しない量はデータに合わせる)。
+    if value_range is not None:
+        edges = np.linspace(value_range[0], value_range[1], BINS + 1)
+    elif values.size:
+        edges = np.histogram_bin_edges(values, bins=BINS)
+    else:
+        edges = np.linspace(0, 1, BINS + 1)
+    ylabel = "Density" if density else "Number of synapses"
+
     fig, axes = plt.subplots(1, 2, figsize=HIST_FIGSIZE)
 
-    axes[0].hist(values, bins=BINS, color="black")
+    axes[0].hist(values, bins=edges, color="black", density=density)
     axes[0].set_xlabel(xlabel)
-    axes[0].set_ylabel("Number of synapses")
+    axes[0].set_ylabel(ylabel)
     if values.size:
         axes[0].set_title(f"All synapses (n={values.size})\n"
                           f"mean={values.mean():.2f}{suffix}, max={values.max():.2f}{suffix}")
     else:
         axes[0].set_title("All synapses (empty)")
 
-    edges = np.histogram_bin_edges(values, bins=BINS) if values.size else np.linspace(0, 1, BINS)
     drawn = 0
     for name in BLOCK_ORDER:
         block = values[masks[name]]
         if block.size:
-            axes[1].hist(block, bins=edges, histtype="step", lw=1.4,
+            axes[1].hist(block, bins=edges, histtype="step", lw=1.4, density=density,
                          color=BLOCK_COLORS[name], label=f"{name} (n={block.size})")
             drawn += 1
     axes[1].set_xlabel(xlabel)
-    axes[1].set_ylabel("Number of synapses")
+    axes[1].set_ylabel(ylabel)
     axes[1].set_title("By connection type")
+    if value_range is not None:
+        for ax in axes:
+            ax.set_xlim(*value_range)
     if drawn:
         # 1 本も描いていないときに legend() を呼ぶと matplotlib が警告を出すだけなので黙る。
         axes[1].legend(fontsize=7)
@@ -121,4 +142,5 @@ def weight_distribution(view, out_path: Path) -> None:
     _value_distribution(
         view, view.coo().weights, out_path,
         xlabel="Weight", title=f"{WEIGHT_TITLE}{_at(view)}",
+        value_range=WEIGHT_RANGE, density=True,
     )

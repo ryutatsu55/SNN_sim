@@ -58,6 +58,10 @@ class Window(runview.Window):
         """soma の座標。run を通して不変なので series が持つものをそのまま返す。"""
         return self._series.coords()
 
+    def area(self):
+        """ニューロンが置かれる領域。**run を通して不変**なので series が持つものを返す。"""
+        return self._series.area()
+
     def weights(self) -> np.ndarray:
         """重みの値ベクトル。**wiring と本数が合うことをここで確かめる。**
 
@@ -95,6 +99,8 @@ class Series(runview.Series):
         super().__init__(run_dir, config, layout)
         self._wiring = wiring
         self._windows = windows
+        # area は config から組み直すので 1 度だけ作って持つ (`area()` 参照)。
+        self._area = None
 
     @property
     def windows(self) -> tuple[Window, ...]:
@@ -112,6 +118,23 @@ class Series(runview.Series):
         if not path.exists():
             raise MissingData("coords", "空間を持たない config です")
         return load_coords(path)
+
+    def area(self):
+        """ニューロンが置かれる領域。**config から組み直す** (記録には残っていない)。
+
+        `BaseArea` は RNG を保持も消費もしない (ルート `CLAUDE.md` の Hard Rule 6) ので、
+        読み出しの途中で作っても run の再現性には影響しない。**無界のエリアと
+        `no_space` は「持たない」**として扱う —— 契約 (`src/utils/runview.py`) と同じ。
+        """
+        if self._area is None:
+            from src.core.registry import AREA_MODELS
+            import src.models.network.area  # noqa: F401  @register を走らせる
+            profile = self.config.network.area
+            area_class = AREA_MODELS.get(profile.profile_name)
+            self._area = area_class(profile, self.layout.total_neurons, layout=self.layout)
+        if not self._area.is_bounded:
+            raise MissingData("area", "無界のエリアです")
+        return self._area
 
     def metrics(self) -> pd.DataFrame:
         """`metrics.csv` を読む。**呼ばれた時点で読む** (開いた時点ではない)。

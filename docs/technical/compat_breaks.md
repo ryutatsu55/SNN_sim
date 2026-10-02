@@ -376,3 +376,152 @@ RNG を引く) ので、従来は**再ビルドしないと空間の図が描け
   一定。初期重みが全部 0 の config (`weight: constant_zero`) では、旧実装は
   `abs(w) != 0` で全エッジを落としていたので**線が 1 本も出ていなかった**。
   旧実装と同じ「重みで描く」絵は `weight_network` として panels に移した。
+
+
+---
+
+## 重み分布図: 横軸 [0, 1] 固定 / 縦軸を確率密度に (develop / akita_soc / lesion)
+
+`weight_distribution` (構造図の `weight_distribution_initial.png` と
+`panels/weight_distribution/`) の軸を 3 実験とも変えた。
+
+- **横軸は常に [0, 1]。** 可塑性の Wmax で正規化済みなので、データに合わせると記録時刻
+  ごとに軸が動いて分布の移動が読めない。ビン境界も [0, 1] を 80 等分に固定したので、
+  **記録時刻をまたいで図を重ねられる**。
+- **縦軸は確率密度** (`density=True`)。シナプス本数が違う run どうし、および損傷の
+  前後でも形をそのまま比べられる。
+
+`delay_distribution` / `distance_distribution` は変えていない (物理量なのでデータ範囲のまま)。
+
+**範囲の外の値は描かれない。** 重みが 1 を超える設定にした場合、その分は棒として出ない
+(左パネルのタイトルの `max=` には出るので、気づけないことはない)。
+
+## ブロック境界線: 白+黒のサンドイッチをやめ、グレー 1 色に (develop / akita_soc / lesion)
+
+`style.draw_block_boundaries()` が引く線 (重み行列・粗視化結合図) の見た目を変えた。
+
+**旧: 白 1.2pt の上に黒 0.4pt を重ねる。** 黒が白の中央を削るので 1 本の境界が
+「白 1px + 黒 1px + 白 1px」になり、境界 15 本に対して白い筋が 30 本描かれていた。
+そのうえデータ座標から画素への倍率が整数でないため線ごとに画素内の位置がずれ、
+アンチエイリアスがそれを拾って**太さも濃さも 1 本ずつばらついた**。
+
+**新: 中間グレー (`"0.5"`) 1 色、アンチエイリアス無効 + 画素スナップ。** 白 1 色では
+粗視化結合図 (白背景) で消え、黒 1 色では重み行列 (viridis の暗い背景) で沈むので、
+両方で読める中間グレーにした。線幅は階層レベルごとに 1.0 / 0.6 pt。
+
+**図の見た目が変わるだけで、数値は変わらない。**
+
+## develop / lesion: ニューロン間相関の図と指標を追加
+
+Watanabe et al. (2026) *Communications Engineering* 5:150 の "neuronal correlation"
+(発火率時系列のゼロラグ Pearson 相関、式 1) を `src/utils/analysis/correlation.py` に
+入れ、両実験の `panels/` と `metrics.csv` に出すようにした。
+
+- `panels/correlation/correlation_{tag}.png` が増えた (論文 Fig. 2b に対応)
+- `overview/mean_correlation_track.png` が増えた (平均相関の時間発展)。値は
+  `metrics.csv` を読み直すので、この図と表と相関行列のタイトルは必ず一致する
+- `panels/correlation_network/correlation_network_{tag}.png` が増えた (論文 Fig. 3c 上段:
+  相関を体細胞の位置の上に描いた無向グラフ)。描くのは**相関が
+  `correlation_network.MIN_CORRELATION` (= 0.4) 以上の全ペア**で、結合の有無も距離も
+  見ない。閾値は絶対値で固定 —— 窓ごとに分位点で決めると系全体の相関が落ちても同じ
+  本数が残り、切断で同期が失われたことが図に出なくなる
+- `panels/weight_network/` が**エリアの境界線を背景に敷くようになった** (`network_sample`
+  と同じ)。軸範囲もエリアの境界箱から取るので、`space: area_uniform` の run で
+  autoscale に落ちなくなった
+
+これに伴う変更が 2 つ:
+
+- 両実験の `store/series.py` に **`Series.area()` / `Window.area()`** が増えた (config から
+  area を組み直す)。`BaseArea` は RNG を消費しないので run の再現性には影響しない
+- `figures/network.py` の `_draw_nodes` / `_apply_axis_limits` / `_excitatory_mask` が
+  `draw_nodes` / `apply_axis_limits` / `excitatory_mask` へ改名された
+  (`correlation_network.py` も呼ぶようになったため)
+- `metrics.csv` に `mean_correlation` と `correlation_pairs` の 2 列が増えた。
+  lesion では baseline の行にも出るので、切断前後の差は `metrics_delta.csv` の
+  `delta_mean_correlation` / `ratio_mean_correlation` が自動で持つ
+
+r(t) のビン幅は **100 ms** (`correlation.RATE_BIN_MS`)。**変えると相関の値が変わる。**
+
+論文のフレームレート (20 fps = 50 ms) には合わせていない。論文の r(t) は GCaMP6s
+(減衰 ~1 s) を CASCADE で推定したもので、実効的な時間分解能はフレーム間隔より粗い ——
+揃えるべきはサンプリング間隔ではなく「1 回の同期イベントが 1 ビンに入る」ことだと判断した。
+
+`b50_seg1_g002F_U8_W0_20h_sweep` の 8 seed で、baseline と切断 +3 h の窓を掃引した実測
+(平均 ± SD):
+
+| bin [ms] | 平均相関 (bef) | Δ 平均相関 | 負のペアの割合 |
+|---|---|---|---|
+| 25 | 0.046 ± 0.014 | −28.8 ± 18.7 % | 16.0 ± 6.1 % |
+| 50 | 0.076 ± 0.023 | −29.8 ± 18.0 % | 13.1 ± 5.4 % |
+| **100** | **0.104 ± 0.031** | **−30.6 ± 17.4 %** | **10.8 ± 4.6 %** |
+| 250 | 0.113 ± 0.030 | −31.6 ± 15.2 % | 10.6 ± 3.8 % |
+| 500 | 0.091 ± 0.019 | −25.9 ± 12.9 % | 15.9 ± 4.8 % |
+| 1000 | 0.079 ± 0.014 | −25.4 ± 11.8 % | 21.0 ± 4.1 % |
+| 2000 | 0.074 ± 0.014 | −21.4 ± 14.9 % | 25.2 ± 4.7 % |
+
+100–250 ms が 3 つの指標すべてで最良 —— 相関の大きさが最大 (細かすぎるビンは発火が
+まばらで推定が減衰する)、切断による低下が最大、推定ノイズで負に落ちるペアが最少
+(粗いビンは標本数が減るぶんノイズが増える)。両側でなだらかに悪化するので、
+**この範囲の中での 100 か 250 かは結果を変えない**。
+
+切断によるモジュール間相関の消失そのものは 25 ms〜10 s のどのビン幅でも見える
+(ビン幅は効果の有無ではなく感度を決める)。
+
+**既存の数値は変わらない。** 増えたのは列と図で、既存 run は `replot.py` を通せば
+新しい列と図が付く。
+
+## develop / lesion: 臨界性と同期の列を metrics.csv へ追加
+
+- **同期イベント** (`src/utils/analysis/synchrony.py`): `event_bin_ms` /
+  `event_rate_hz` / `event_participation` / `event_participation_ceiling` /
+  `synchronous_fraction` / `active_fraction_median`。
+  ビン幅は `correlation.RATE_BIN_MS` (= 100 ms) を共有する。**平均発火率の逆数は
+  使わない** —— 1 ビンあたり平均 1 発になる幅だとほぼ全ビンがイベント判定になり
+  (実測で 99%)、損傷の前後で参加率が動かなくなる
+- **アバランチサイズ** (`avalanche.avalanche_size_columns`): `avalanche_rate_hz` /
+  `avalanche_size_mean` / `avalanche_size_median` / `avalanche_size_max`。両実験
+- **分岐比の一式**: develop にも `bp_*` (σ_bp・α_size・寿命指数・各種チェック) が
+  付くようになった (lesion は以前から持っていた)。**臨界かどうかの判定は σ_bp**。
+  サイズ分布の傾きは亜臨界でもべき乗に見える
+
+**既存の数値は変わらない。** 増えたのは列だけで、既存 run は `replot.py` を通せば付く。
+解釈と方針は `docs/technical/criticality_notes.md`。
+
+## develop / lesion: ラスターの y 軸がモジュール名になった
+
+並べ替えた後の通し番号には意味が無いので、区切り線と同じ単位のラベル
+(`style.outer_block_labels()`、重み行列・相関行列と同じもの) を出すようにした。
+最外ブロックが 16 個を超える layout では従来どおり数値目盛りのまま。
+
+**図の見た目が変わるだけで、数値は変わらない。**
+
+## 相関のビン幅 100 ms → 30 ms、lesion のアバランチのビンは baseline 固定
+
+- **`correlation.RATE_BIN_MS` = 30 ms** (旧 100 ms)。`mean_correlation` と
+  `panels/correlation*` の値が変わる。基準を「平均相関の最大化」から
+  「確実に相関しているペアの検出力」へ変えた結果 —— 分離度 (サロゲートに対する d) は
+  30 ms で最大 (35.0 ± 3.2)、100 ms では 27.4 ± 2.1 まで落ちる。
+  30 ms は相互相関ヒストグラムの半値全幅とも一致する
+- **`synchrony.EVENT_BIN_MS` = 100 ms** を新設し、相関のビンから切り離した。
+  「集団の 20% が同時に撃つ」イベントは 50〜100 ms の現象で、30 ms では検出できない
+- **lesion の `bp_*` のビンが baseline 固定**になった (`Series.avalanche_bin_ms()`)。
+  従来は窓ごとの平均イベント間隔だったので、損傷で発火率が落ちるとビンが伸び、
+  それだけで σ_bp が上がって見えていた (0.496 → 0.529)。固定すると 0.496 → 0.441 で
+  **変化の符号が逆になる**
+
+**既存 run の `metrics.csv` と相関の図は再解析で値が変わる。** 新旧を並べないこと。
+根拠の数値は `docs/technical/criticality_notes.md`。
+
+## 相関のビン幅 30 ms → 50 ms
+
+- **`correlation.RATE_BIN_MS` = 50 ms** (旧 30 ms)。`mean_correlation` と
+  `panels/correlation*` の値が変わる (相関は全体に上がり、`correlation_network` の
+  閾値 0.4 を超える線が増える)。
+- 論文 (Watanabe et al. 2026) のフレームレート 20 fps = 50 ms に合わせた。
+  30 ms を選んだ基準 (偶然との分離度 d) で見ても 50 ms は 33.4 ± 2.8 と
+  30 ms の 35.0 ± 3.2 から SD の範囲内で、検出率は 96.4 % とむしろわずかに高い。
+  どのペアが相関しているか (順位) はビン幅にほぼ依らない
+- `synchrony.EVENT_BIN_MS` (100 ms) とアバランチのビンは変わらない
+
+**既存 run の `metrics.csv` と相関の図は `replot.py` を通すと値が変わる。** 新旧を
+並べないこと (図のタイトルにビン幅が出るので、そこで見分けられる)。

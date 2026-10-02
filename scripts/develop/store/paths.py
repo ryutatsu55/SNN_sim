@@ -18,8 +18,11 @@
         │   ├── weight/      … 重み行列
         │   ├── weight_distribution/ … 重み分布
         │   ├── weight_network/ … 重みで描いたネットワーク図
+        │   ├── correlation/ … ニューロン間相関行列
+        │   ├── correlation_network/ … 相関の強いペアだけを空間に描いた図
+        │   ├── ISI/         … スパイク間隔の分布と CV
         │   └── trace/       … task.trace_neuron を指定した run のみ
-        └── overview/        … figure2c / figure2d
+        └── overview/        … figure2c / figure2d / 平均相関の推移
 
 **最初から正しい場所へ書く。** 走り終えてから `data/` へ移すような後処理は無いので、
 完走したか否かで run の形が変わらない。
@@ -61,13 +64,18 @@ AVALANCHE = f"{PANELS}/avalanche"
 WEIGHT = f"{PANELS}/weight"
 WEIGHT_DIST = f"{PANELS}/weight_distribution"
 WEIGHT_NETWORK = f"{PANELS}/weight_network"
+CORRELATION = f"{PANELS}/correlation"   # ニューロン間相関行列
+CORRELATION_NETWORK = f"{PANELS}/correlation_network"   # 相関の強いペアの空間図
+ISI = f"{PANELS}/ISI"                    # スパイク間隔の分布
 TRACE = f"{PANELS}/trace"
 OVERVIEW = "overview"
-FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK, TRACE, OVERVIEW)
+FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK,
+             CORRELATION, CORRELATION_NETWORK, ISI, TRACE, OVERVIEW)
 
 # run を走らせる前に必ず作るディレクトリ。trace は task.trace_neuron を指定したときだけ作る
 # (空ディレクトリが残ると「採取したのに空だった」のか「採取していない」のか読めなくなる)。
-DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK, OVERVIEW)
+DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK,
+                     CORRELATION, CORRELATION_NETWORK, ISI, OVERVIEW)
 
 
 def data_dir(run_dir: str | Path) -> Path:

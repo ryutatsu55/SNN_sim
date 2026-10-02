@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from scripts.develop.report import guard
 from scripts.develop.store import paths
+from scripts.develop.figures.correlation_track import mean_correlation_track
 from scripts.develop.figures.fig2c import fig2c
 from scripts.develop.figures.fig2d import fig2d
 
@@ -20,6 +21,7 @@ from scripts.develop.figures.fig2d import fig2d
 FIGURES = (
     ("Figure 2c", fig2c, "figure2c_reproduction.png"),
     ("Figure 2d", fig2d, "figure2d_firing_rate_scatter.png"),
+    ("mean correlation track", mean_correlation_track, "mean_correlation_track.png"),
 )
 
 
