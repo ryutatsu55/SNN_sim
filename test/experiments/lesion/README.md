@@ -34,20 +34,22 @@ smoke:
   cut: ["bridge:kind=inter_cluster"]
   cut_combine: or
   settle_ms: 2000.0
-  baseline_window_ms: 5000.0
-  recovery_hours: 0.01
-  probe_interval_hours: 0.005
+  record_hours: [0, 0.005, 0.01]
   record_window_ms: 5000.0
   record_buffer_ms: 1000.0
   hub_z: 2.5
   include_betweenness: true
   include_clustering: true
-  duration: 120000.0
 ```
 
+**出力は親 run の下**です (`--condition` はありません。ディレクトリ名は切断 spec から
+決まる)。親を 1 本だけ作ったので、run ディレクトリは
+`outputs/develop/_parent/bridge-inter_cluster/` になります。
+
 ```bash
-python -m scripts.lesion --parent outputs/develop/_parent --condition _ref --task smoke
-find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum > /tmp/lesion_before.md5
+python -m scripts.lesion --parent outputs/develop/_parent --task smoke
+RUN=outputs/develop/_parent/bridge-inter_cluster
+find "$RUN" -name "*.png" | sort | xargs md5sum > /tmp/lesion_before.md5
 ```
 
 ### 3. 再解析して突き合わせる
@@ -58,17 +60,17 @@ find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum > /tmp/lesion_befor
 証拠になります。
 
 ```bash
-python -m scripts.lesion.replot outputs/lesion/_ref
-find outputs/lesion/_ref -name "*.png" | sort | xargs md5sum | diff - /tmp/lesion_before.md5
+python -m scripts.lesion.replot "$RUN"
+find "$RUN" -name "*.png" | sort | xargs md5sum | diff - /tmp/lesion_before.md5
 ```
 
 ## 後片付け
 
-終わったら `task.yaml` の `smoke` プロファイル・`outputs/lesion/_ref`・
-`outputs/develop/_parent`・`genn_code/lesion_*` を消してください。
+終わったら `task.yaml` の `smoke` プロファイル・`outputs/develop/_parent`
+(損傷 run はこの下にあるので一緒に消える)・`genn_code/lesion_*` を消してください。
 
 ## 時間がかかる
 
-**GeNN のコンパイルが run につき 2 回**走り、そのうえ `_generate_global_matrices()` が
-3 回 (切断対象の決定 / Phase 1 / Phase 2) 走ります。`axon_growth` 系の config では
-ここが支配的なので、このチェックは数十分見ておくこと。
+**GeNN のコンパイルが run につき 1 回**走り、そのうえ `_generate_global_matrices()` が
+2 回 (切断対象の決定 / 本番の build) 走ります。`axon_growth` 系の config では
+ここが支配的なので、このチェックは十数分見ておくこと。

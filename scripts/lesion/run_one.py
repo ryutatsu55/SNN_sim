@@ -6,30 +6,31 @@
 親 run のパスも切断 spec も probe のタイムラインもすべて `task.*` から読む。run ディレクトリを
 作るのも config を置くのもランチャ (`python -m scripts.lesion`) の仕事で、ここではやらない。
 
-## 2 フェーズ / 2 モデル構成
+## 流れ
 
-構造的除去を選んだ時点で、切断は再ビルドを意味する (GeNN のシナプス集団は
-`set_sparse_connections()` で確定し、実行中に行を削れない)。したがって 1 プロセスで
-**2 回 build する**のが唯一の素直な形になる。
+    下見 (build するが compile しない)
+      → 親の重みを (pre, post) で復元し、切断対象を決める
+      → 記録を書く (config / 結合 / lesion.json / 切断プロファイル)
+      → **ベースラインは親 run の記録時刻の窓をそのまま置く** (probe 0)
+    本番 (compile する 1 回きりの build)
+      → 復元した重みを載せ、切断マスクで行を削除
+      → settle → record_hours の各時刻で probe
 
-    Phase 1 (intact)                      Phase 2 (lesioned)
-    ─────────────────                     ──────────────────
-    親 config を同一 seed で再ビルド
-      → 保存済み重みを join で復元
-      → settle → baseline probe を 1 点
-      → w_pre を pull して保存  ──────────→ 同じ config で再ビルド
-                                            → w_pre を復元し、切断マスクで行を削除
-                                            → 等間隔 probe で回復を追う
+**ベースラインを自分で測らないのが要点。** 切断前のネットワークをもう一度走らせても、
+settle と記録窓のあいだに起きるのは親 run の続きでしかない。測り直すぶん GeNN の
+コンパイルが 2 回になるだけなので、親の `weights_{h}h.npz` と `spikes_{h}h.npz` を
+そのままベースラインにする (引き継ぎ時刻は `task.from_hour`)。
 
-こうする理由は 2 つ。**ベースラインが「切断直前のまさにその重み」になる** (親 run の
-記録時刻の値を借りるのではなく、同じプロセスで測った値になる) こと。そして Phase 2 の
-復元重みが Phase 1 の dump と残存シナプス上で一致することを assert できるので、
-**復元経路そのものが自己検証になる**こと。
+**ベースライン窓の幅は親のもの**で、`task.record_window_ms` とは違いうる。窓幅は窓ごとに
+npz が持つので、発火率は正しく出る (`store/series.py`)。
 
-代償は GeNN のコンパイルが 2 回走ること。`model_name` は必ず分ける。
+構造的除去が再ビルドを意味するのは GeNN の事情による —— シナプス集団は
+`set_sparse_connections()` で確定し、実行中に行を削れない。切断は「生成直後の COO から
+行を落としてから登録する」という形でしか書けない (`build_network()`)。
 """
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -45,7 +46,7 @@ from src.core.config_manager import CONFIG_NAME, ConfigManager
 from src.core.NetworkBuilder import GlobalCOO, NetworkBuilder
 from src.core.layout import AXES_NAME
 from src.core.simulator import GeNNSimulator
-from src.utils.analysis.axons import subset_geometry, synapse_crossed_parts
+from src.utils.analysis.axons import subset_geometry, synapse_crossed_bridges
 from src.utils.analysis.connectivity import bridge_part_indices
 from src.utils.runview import BuiltNetwork
 
@@ -58,12 +59,13 @@ from scripts.lesion.store.parent import load_parent
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
 from scripts.lesion.store.records import (COORDS_NAME, METRICS_NAME, MS_PER_HOUR,
-                                          PHASE_BASELINE, PHASE_POST, SPIKES, WEIGHTS,
-                                          CUT_PROFILE_NAME, MetricsWriter, probe_filename,
-                                          save_connectivity, save_coords, save_cut,
-                                          save_manifest, save_spikes, save_weight_values,
-                                          write_table)
-from scripts.lesion.store.records import POST_CONNECTIVITY_NAME, pre_connectivity_path
+                                          PHASE_BASELINE, PHASE_POST, SPIKES, TRACE,
+                                          WEIGHTS, CUT_PROFILE_NAME, MetricsWriter,
+                                          probe_filename, save_connectivity, save_coords,
+                                          save_cut, save_manifest, save_spikes, save_trace,
+                                          save_weight_values, write_table)
+from scripts.lesion.store.records import (BASELINE_INDEX, POST_CONNECTIVITY_NAME,
+                                          pre_connectivity_path)
 from scripts.lesion.store.series import open_run
 
 import src.models.neurons.akita_escape_lif
@@ -110,6 +112,44 @@ def run_steps(sim, steps: int, chunk_steps: int, keep_spikes: bool):
     return {"times": times[order], "ids": ids[order]}
 
 
+def capture_membrane_window(sim, window_s: float, neuron_id: int):
+    """1 ステップずつ進めながら対象ニューロンの V と Isyn_rec を採り、窓内スパイクを返す。
+
+    保持するのは対象ニューロン 1 本の列だけ。採取ステップ数は GeNN の記録バッファ長の
+    整数倍に丸める (バッファはちょうど溜まった時しか読み出せないため)。
+
+    Returns:
+        `(V, I, spikes, actual_window_s)`。`actual_window_s` は丸めた後の実表示幅 [s]。
+    """
+    dt = sim.dt
+    buf = sim.max_timesteps
+    requested_steps = int(round(window_s * 1000.0 / dt))
+    n_buffers = max(1, round(requested_steps / buf))
+    steps = n_buffers * buf
+    actual_window_s = steps * dt / 1000.0
+
+    V = np.empty(steps, dtype=np.float64)
+    I = np.empty(steps, dtype=np.float64)
+    all_times = []
+    all_ids = []
+    for i in range(steps):
+        sim.step()
+        V[i] = sim.pull("V")[neuron_id]
+        I[i] = sim.pull("Isyn_rec")[neuron_id]
+        if (i + 1) % buf == 0:
+            chunk = sim.get_global_spikes()
+            if chunk["times"].size > 0:
+                all_times.append(chunk["times"])
+                all_ids.append(chunk["ids"])
+            sim.flush_recording()
+
+    if all_times:
+        spikes = {"times": np.concatenate(all_times), "ids": np.concatenate(all_ids)}
+    else:
+        spikes = {"times": np.array([], dtype=np.float64), "ids": np.array([], dtype=np.int32)}
+    return V, I, spikes, actual_window_s
+
+
 def build_network(config, model_name, restored_weights=None,
                   cut_mask=None, preserve_fan_in: bool = False, compile_model: bool = True):
     """再ビルド + (任意で) 重み復元と構造的除去。
@@ -146,27 +186,108 @@ def build_network(config, model_name, restored_weights=None,
     return builder, genn_model, layout
 
 
-def probe(sim, series, run_dir: Path, index: int, *, phase: str, start_ms: float,
-          window_ms: float, chunk_steps: int, dt: float, metrics_csv) -> None:
+def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
+          clock_start_ms: float, window_ms: float, chunk_steps: int, dt: float,
+          trace_neuron: int | None, trace_window_s: float, metrics_csv) -> None:
     """probe 1 点ぶん: 窓を走らせ、npz を書き、**書いたものを読み直して**出力する。
+
+    `start_ms` は窓の先頭の**切断軸**の時刻、`clock_start_ms` は同じ瞬間の **GeNN の
+    時計**。settle のぶんだけずれるので、GeNN が返すスパイク時刻は切断軸へ移してから
+    書く (npz の時刻は切断軸、`record_start_ms` はその上の原点)。
 
     最後の一手が要点。in-memory の値をそのまま図へ渡すと、本番と再解析で描画経路が
     2 本になる。一度書いてから `series.window(index)` で読み直せば、`replot.py` と
     まったく同じ呼び出しになる。
+
+    切断**後**の窓しか通らない (ベースラインは `write_baseline()`)。
+
+    `trace_neuron` が指定されていれば、**窓の先頭**を 1 ステップ刻みで進めて膜電位を
+    採る。同じ窓のラスターと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
     """
-    steps = max(1, int(round(window_ms / dt)))
-    spikes = run_steps(sim, steps, chunk_steps, keep_spikes=True)
     weights = sim.pull_synapse_coo("w")["data"]
+    steps = max(1, int(round(window_ms / dt)))
+
+    trace = None
+    if trace_neuron is None:
+        spikes = run_steps(sim, steps, chunk_steps, keep_spikes=True)
+    else:
+        effective_trace_s = min(trace_window_s, window_ms / 1000.0)
+        trace_v, trace_i, trace_spikes, actual_window_s = capture_membrane_window(
+            sim, effective_trace_s, trace_neuron)
+        remaining = steps - len(trace_v)
+        if remaining < 0:
+            # 黙って通すと窓の総ステップ数がトレースの有無で変わり、結果が変わる。
+            raise ValueError(
+                f"トレース採取が記録窓を超えました ({len(trace_v)} > {steps} steps)。"
+                " record_buffer_ms を record_window_ms より小さくしてください。")
+        rest = (run_steps(sim, remaining, chunk_steps, keep_spikes=True) if remaining
+                else {"times": np.array([], dtype=np.float64),
+                      "ids": np.array([], dtype=np.int32)})
+        times = np.concatenate([trace_spikes["times"], rest["times"]])
+        ids = np.concatenate([trace_spikes["ids"], rest["ids"]])
+        order = np.argsort(times)
+        spikes = {"times": times[order], "ids": ids[order]}
+        trace = (trace_v, trace_i, trace_spikes, actual_window_s)
 
     save_weight_values(paths.data_path(run_dir, probe_filename(WEIGHTS, index)), weights)
     # **窓の素性を npz に埋める。** 原点 (切断からの経過) も窓幅も phase もここが正で、
     # ファイル名の index は並べ替えと目印にしか使わない。
+    # GeNN の時計 -> 切断軸。settle は切断軸に含まれないので、引かないと窓ローカル時刻が
+    # settle_ms ぶん先へずれ、ラスターも burstiness のビン割りも窓の外を見る。
+    to_axis = start_ms - clock_start_ms
     save_spikes(paths.data_path(run_dir, probe_filename(SPIKES, index)),
-                spikes["times"], spikes["ids"],
-                record_start_ms=start_ms, record_window_ms=window_ms, phase=phase)
+                np.asarray(spikes["times"], dtype=np.float64) + to_axis, spikes["ids"],
+                record_start_ms=start_ms, record_window_ms=window_ms, phase=PHASE_POST)
+
+    if trace is not None:
+        trace_v, trace_i, trace_spikes, actual_window_s = trace
+        # 図だけでなく生データも残す。1 ニューロン x 数万ステップで数百 KB しかない一方、
+        # 「同じ窓のラスターと時間軸が揃った V/I」は後から作れない。
+        save_trace(paths.data_path(run_dir, probe_filename(TRACE, index)),
+                   trace_v, trace_i, dt=dt, neuron_id=trace_neuron,
+                   window_s=actual_window_s,
+                   spike_times=np.asarray(trace_spikes["times"], dtype=np.float64)
+                   - clock_start_ms,
+                   spike_ids=trace_spikes["ids"])
 
     # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
     panels.emit(series.window(index), metrics=metrics_csv)
+
+
+def write_baseline(series, run_dir: Path, parent, weights, metrics_csv) -> None:
+    """親 run の記録時刻の窓を、この run のベースライン (probe 0) として置く。
+
+    **測り直さない。** 切断前のネットワークをもう一度走らせても、settle と記録窓の
+    あいだに起きるのは親 run の続きでしかないので、親の記録をそのまま使う。
+
+    窓は切断より前なので**負の時刻**に置く。0.0 にすると post の最初の probe と重なり、
+    切断の瞬間が図でも CSV でも判別できなくなる。幅は親の記録窓のもので、
+    `task.record_window_ms` とは違いうる (窓幅は窓ごとに npz が持つ)。
+
+    `weights` は親の値を**この run の COO の並びへ引き当てた**ベクトル。
+
+    親が膜電位トレースを採っていれば、その npz も**そのまま**引き継ぐ (中の時刻は
+    窓の先頭からの相対なので、窓の原点が変わっても読み替えが要らない)。
+    """
+    start_ms = -float(parent.window_ms)
+    save_weight_values(paths.data_path(run_dir, probe_filename(WEIGHTS, BASELINE_INDEX)),
+                       weights)
+    # npz は絶対時刻で持ち、原点を `record_start_ms` に持つ (`load_spikes` が引く)。
+    # 親から読んだ時刻は窓ローカルなので、この窓の原点を足してから書く。
+    save_spikes(paths.data_path(run_dir, probe_filename(SPIKES, BASELINE_INDEX)),
+                np.asarray(parent.spike_times, dtype=np.float64) + start_ms,
+                parent.spike_ids,
+                record_start_ms=start_ms, record_window_ms=float(parent.window_ms),
+                phase=PHASE_BASELINE)
+    if parent.trace_path is not None:
+        shutil.copyfile(parent.trace_path,
+                        paths.data_path(run_dir, probe_filename(TRACE, BASELINE_INDEX)))
+
+    print(f"  ベースライン: 親 run の {parent.hour} h の窓 "
+          f"({parent.spike_times.size} spikes / {parent.window_ms / 1000:.0f} s"
+          f"{', トレースあり' if parent.trace_path is not None else ''})")
+
+    panels.emit(series.window(BASELINE_INDEX), metrics=metrics_csv)
 
 
 def select_cut(scout, layout, config, parent):
@@ -223,7 +344,7 @@ def cross_check(scout, layout, coo, geometry):
     if geometry is not None and scout.area is not None:
         try:
             bridges = bridge_part_indices(scout.area)
-            crossed = synapse_crossed_parts(geometry, scout.area, bridges)
+            crossed = synapse_crossed_bridges(geometry, scout.area, bridges)
             crossed_names = [str(scout.area.part_names[int(b)]) for b in bridges]
             result["bridge_crossing_geometric"] = int(crossed.any(axis=1).sum())
         except ValueError:
@@ -264,8 +385,11 @@ def main():
 
     dt = float(config.simulation.dt)
     window_ms = float(protocol.record_window_ms)
-    baseline_window_ms = float(getattr(protocol, "baseline_window_ms", None) or window_ms)
+    # **基準は切断の瞬間。** ランチャが展開済みの時刻 [h] を並べてある。
+    record_starts = sorted(float(hour) * MS_PER_HOUR for hour in protocol.record_hours)
     chunk_steps = max(1, int(float(protocol.record_buffer_ms) / dt))
+    trace_neuron = getattr(protocol, "trace_neuron", None)
+    trace_window_s = float(getattr(protocol, "trace_window_s", 10.0))
     smax = lesion_metrics.resolve_avalanche_smax(config)
 
     print(f"run: {run_dir}  seed={seed}  backend={config.simulation.backend}")
@@ -274,8 +398,9 @@ def main():
 
     # --- 切断対象の決定 (GeNN 不要。ここまでが --dry-run の範囲) -------------------
     scout, _model, layout = build_network(config, "lesion_scout", compile_model=False)
-    # **外部軸は切断対象を決める前に読み戻す。** `between:axis=module` のように軸で選ぶ
-    # spec があるので、後から読むと選択が別のものになる。
+    # **外部軸は切断対象を決める前に読み戻す。** 軸自体は build が貼り直すが、親の記録で
+    # 釘を刺しておく。`between:axis=...` は軸を見て切るので、後から読むと「親とは違う
+    # ラベルで切った」ことに気づけないまま通る。
     if parent.axes_path is not None:
         layout.load_axes_file(parent.axes_path)
     coo, restored, geometry, selection, verification = select_cut(scout, layout, config, parent)
@@ -286,9 +411,7 @@ def main():
     # 知りたいことなので)。重みは config が生成した初期値ではなく復元した実値を使う。
     per_synapse, comparison, cut_summary = lesion_metrics.cut_profile(
         coo._replace(weights=restored), selection.cut, layout, scout.total_neurons,
-        coords=scout.global_coords, crossed=crossed, crossed_part_names=crossed_names,
-        include_betweenness=bool(getattr(protocol, "include_betweenness", True)),
-        hub_z=float(getattr(protocol, "hub_z", 2.5)))
+        coords=scout.global_coords, crossed=crossed, crossed_part_names=crossed_names)
     print()
     print(lesion_metrics.format_cut_profile(comparison, cut_summary))
     print()
@@ -309,15 +432,18 @@ def main():
         "cross_check": checks,
         "verification": verification,
         "avalanche_smax": smax,
-        "hub_z": float(getattr(protocol, "hub_z", 2.5)),
         "preserve_fan_in_scale": True,
         "parent_drift": parent.drift,
+        "baseline_from_parent": {
+            "hour": parent.hour,
+            "window_ms": float(parent.window_ms),
+            "note": "ベースラインは測り直さず、親 run の記録時刻の窓をそのまま使う",
+        },
         "timeline_ms": {
+            # settle は時間軸に含まれない。record_hours の 0 h は settle 明けの時刻。
             "settle": float(protocol.settle_ms),
-            "baseline_window": baseline_window_ms,
             "probe_window": window_ms,
-            "probe_interval": float(protocol.probe_interval_hours) * MS_PER_HOUR,
-            "recovery_total": float(protocol.recovery_hours) * MS_PER_HOUR,
+            "record_starts": record_starts,
         },
     }
 
@@ -333,109 +459,96 @@ def main():
         print(f"--dry-run: GeNN は実行していません。{run_dir}")
         return
 
-    # ---------------- Phase 1: intact ----------------
-    # ここから先が「走る run」。**dry-run はここへ来ないので、下見のために
-    # data/ や figures/ が作られることはない** (作ると完走した run と見分けが付かない)。
-    paths.prepare(run_dir)
-    print("\n=== Phase 1: 損傷なしで復元し、切断直前のベースラインを測る ===")
-    seed_tag = f"seed{seed}"
-    b1, model1, layout1 = build_network(config, f"lesion_intact_{seed_tag}",
-                                        restored_weights=restored)
+    # ---------------- ここから先が「走る run」 ----------------
+    # **dry-run はここへ来ないので、下見のために data/ や figures/ が作られることはない**
+    # (作ると完走した run と見分けが付かない)。
+    # trace は採るときだけディレクトリを作る (空ディレクトリが残ると「採取したのに
+    # 空だった」のか「採取していない」のかが読めなくなる)。
+    paths.prepare(run_dir,
+                  paths.DEFAULT_FIG_KINDS
+                  + ((paths.TRACE,) if trace_neuron is not None else ()))
+    print(f"\n=== {num_cut} 本を構造的に除去して回復を追う ===")
+    keep = ~np.asarray(selection.cut, dtype=bool)
+    # **モデル名は同時に走るものどうしで必ず変える** (同じ名前は genn_code の同じ
+    # ディレクトリを共有する。ルート CLAUDE.md)。seed と切断条件で分ける。
+    builder, model, layout = build_network(
+        config, f"lesion_seed{seed}_{selection.label}"[:80],
+        restored_weights=restored, cut_mask=selection.cut, preserve_fan_in=True)
     if parent.axes_path is not None:
-        layout1.load_axes_file(parent.axes_path)
+        layout.load_axes_file(parent.axes_path)
 
-    # **ここが「run の記録」を書く唯一の場所。** build() を通ったので network.sparse は
-    # 実値になっており、save_config() の不変条件を満たす。
+    # **ここが「run の記録」を書く唯一の場所。** build() を通った後なので記録になる。
     manager.save_config(config, save_dir=run_dir)
     (run_dir / paths.PENDING_CONFIG_NAME).unlink(missing_ok=True)
-    layout1.save_axes(paths.data_path(run_dir, AXES_NAME))
+    layout.save_axes(paths.data_path(run_dir, AXES_NAME))
 
     # 座標も config だけからは復元できない。**`no_space` では書かない** ——
     # 「ファイルが無い = 空間を持たない run」を読む側の判定にしているため。
-    coords = b1.global_coords
+    coords = builder.global_coords
     if coords is not None and np.all(np.isfinite(coords)):
         save_coords(paths.data_path(run_dir, COORDS_NAME), coords)
 
-    sim1 = GeNNSimulator(model1, config, b1)
-    sim1.setup(backup_initial_states=False)   # 復元前の重みを initial_states に残さない
-    connectivity1 = sim1.synapse_connectivity_coo()
+    # 切断**前**の結合は下見の COO そのもの。ベースラインの窓がこれを使う。
     save_connectivity(pre_connectivity_path(paths.data_dir(run_dir)),
-                      connectivity1["row"], connectivity1["col"], connectivity1["shape"])
+                      coo.row, coo.col, np.asarray(coo.shape, dtype=np.int64))
 
-    # 切断後の結合も先に書いておく。**`open_run()` は 2 本とも要求する**ので、
-    # baseline probe を読み直す時点で揃っている必要がある。
-    keep = ~np.asarray(selection.cut, dtype=bool)
-    save_connectivity(paths.data_path(run_dir, POST_CONNECTIVITY_NAME),
-                      coo.row[keep], coo.col[keep],
-                      np.asarray(coo.shape, dtype=np.int64))
+    sim = GeNNSimulator(model, config, builder)
+    sim.setup(backup_initial_states=False)   # 復元前の重みを initial_states に残さない
+
+    # **復元経路の自己検証。** GeNN が実際に持っている重みが、親から引き当てた値の
+    # 残存ぶんと一致することを確かめる。ここが狂うと以降の指標は全部別物になる。
+    check = sim.pull_synapse_coo("w")
+    aligned = align_saved_to_coo(check["row"], check["col"], check["data"],
+                                 builder.global_coo())
+    if not np.allclose(aligned, restored[keep], rtol=0, atol=1e-6):
+        raise RuntimeError("復元した重みが GeNN 上の値と一致しません (復元経路の破損)。")
+    print("  親 run の重みが残存シナプスへ正しく入ったことを確認しました")
+
+    # 切断後の結合は GeNN が持っているものを記録する。**`open_run()` は 2 本とも要求する**
+    # ので、ベースラインを読み直す時点で揃っている必要がある。
+    connectivity = sim.synapse_connectivity_coo()
+    save_connectivity(paths.data_path(run_dir, POST_CONNECTIVITY_NAME), connectivity["row"],
+                      connectivity["col"], connectivity["shape"])
     save_manifest(paths.data_dir(run_dir), manifest)
     save_cut(paths.data_dir(run_dir), per_synapse)
     write_table(comparison, paths.data_path(run_dir, CUT_PROFILE_NAME))
 
     metrics_csv = MetricsWriter(paths.data_path(run_dir, METRICS_NAME))
     series = open_run(run_dir, require_windows=False)
-
-    if protocol.settle_ms > 0:
-        run_steps(sim1, int(round(float(protocol.settle_ms) / dt)), chunk_steps,
-                  keep_spikes=False)
-
-    # baseline は**切断より前**に測った値なので負の時刻に置く。0.0 にすると post の
-    # 最初の probe と重なり、「切断の瞬間」が図でも CSV でも判別できなくなる。
-    probe(sim1, series, run_dir, 0, phase=PHASE_BASELINE, start_ms=-baseline_window_ms,
-          window_ms=baseline_window_ms, chunk_steps=chunk_steps, dt=dt,
-          metrics_csv=metrics_csv)
-
-    w_pre = sim1.pull_synapse_coo("w")
-    print(f"  切断直前の重みを保存: {w_pre['data'].size} 本")
-    del sim1, model1, b1
-
-    # ---------------- Phase 2: lesioned ----------------
-    print(f"\n=== Phase 2: {num_cut} 本を構造的に除去して回復を追う ===")
-    coo2_source = align_saved_to_coo(w_pre["row"], w_pre["col"], w_pre["data"], coo)
-    b2, model2, layout2 = build_network(
-        config, f"lesion_cut_{seed_tag}_{selection.label}"[:80],
-        restored_weights=coo2_source, cut_mask=selection.cut, preserve_fan_in=True)
-    if parent.axes_path is not None:
-        layout2.load_axes_file(parent.axes_path)
-    sim2 = GeNNSimulator(model2, config, b2)
-    sim2.setup(backup_initial_states=False)
-
-    check = sim2.pull_synapse_coo("w")
-    expected = coo2_source[~selection.cut]
-    aligned = align_saved_to_coo(check["row"], check["col"], check["data"], b2.global_coo())
-    if not np.allclose(aligned, expected, rtol=0, atol=1e-6):
-        raise RuntimeError("Phase 2 の復元重みが Phase 1 の値と一致しません (復元経路の破損)。")
-    print("  Phase 1 の重みが残存シナプスへ正しく入ったことを確認しました")
-
-    # 記録済みの切断後 COO と、GeNN が実際に持っている COO が同じであることを確かめる。
-    connectivity2 = sim2.synapse_connectivity_coo()
-    save_connectivity(paths.data_path(run_dir, POST_CONNECTIVITY_NAME), connectivity2["row"],
-                      connectivity2["col"], connectivity2["shape"])
+    write_baseline(series, run_dir, parent, restored, metrics_csv)
 
     # 構造図。**切断後の幾何を渡すこと。** builder のコネクタが持つ幾何は
     # replace_global_coo() の影響を受けないので、既定のままだと axon_network.png に
     # 切ったはずの結合まで描かれる。
     print("\nGenerating post-lesion structure figures...")
     post_geometry = subset_geometry(geometry, keep) if geometry is not None else None
-    structure.emit(BuiltNetwork.from_builder(b2, run_dir, geometry=post_geometry))
+    structure.emit(BuiltNetwork.from_builder(builder, run_dir, geometry=post_geometry))
 
+    # **settle は時間軸に含まれない。** record_hours の 0 h は settle 明けの時刻。
+    # そのぶん GeNN の時計は切断軸より先を指すので、ずれを持っておいて probe へ渡す。
     if protocol.settle_ms > 0:
-        run_steps(sim2, int(round(float(protocol.settle_ms) / dt)), chunk_steps,
+        run_steps(sim, int(round(float(protocol.settle_ms) / dt)), chunk_steps,
                   keep_spikes=False)
+    clock_offset_ms = float(protocol.settle_ms)
 
-    interval_ms = float(protocol.probe_interval_hours) * MS_PER_HOUR
-    num_probes = max(1, int(round(float(protocol.recovery_hours)
-                                  / float(protocol.probe_interval_hours))) + 1)
     elapsed_ms = 0.0
-    for k in range(num_probes):
-        gap_ms = k * interval_ms - elapsed_ms
+    for k, record_start_ms in enumerate(record_starts):
+        gap_ms = record_start_ms - elapsed_ms
+        if gap_ms < -1e-9:
+            raise ValueError(
+                f"record_hours の窓が重なっています ({record_start_ms / MS_PER_HOUR:.3f} h)。"
+                " 間隔を record_window_ms より広げてください。")
         if gap_ms > 0:
-            run_steps(sim2, int(round(gap_ms / dt)), chunk_steps, keep_spikes=False)
+            run_steps(sim, int(round(gap_ms / dt)), chunk_steps, keep_spikes=False)
             elapsed_ms += gap_ms
-        index = k + 1
-        print(f"  probe {index}/{num_probes}  t = {elapsed_ms / MS_PER_HOUR:.2f} h")
-        probe(sim2, series, run_dir, index, phase=PHASE_POST, start_ms=elapsed_ms,
-              window_ms=window_ms, chunk_steps=chunk_steps, dt=dt, metrics_csv=metrics_csv)
+        # **番号は `record_hours` の添字そのもの。** ベースラインは別名なのでずらさない。
+        index = k
+        print(f"  probe {index + 1}/{len(record_starts)}"
+              f"  t = {elapsed_ms / MS_PER_HOUR:.2f} h")
+        probe(sim, series, run_dir, index, start_ms=elapsed_ms,
+              clock_start_ms=elapsed_ms + clock_offset_ms, window_ms=window_ms,
+              chunk_steps=chunk_steps, dt=dt, trace_neuron=trace_neuron,
+              trace_window_s=trace_window_s, metrics_csv=metrics_csv)
         elapsed_ms += window_ms
 
     print("\nGenerating visualizations...")

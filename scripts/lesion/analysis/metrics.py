@@ -15,18 +15,22 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.utils.analysis.avalanche import split_avalanches
+from src.utils.analysis.avalanche import avalanche_size_columns, split_avalanches
 from src.utils.analysis.criticality import (bimodality_d, burstiness_index,
                                             criticality_index_delta_cr)
 from src.utils.analysis.connectivity import group_connection_probability
+from src.utils.analysis.correlation import mean_neuronal_correlation
 from src.utils.analysis.graph import (betweenness_centrality, classify_roles,
                                       degree_table, graph_metrics, module_participation)
 from src.utils.analysis.isi import isi_metrics
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
+from src.utils.analysis.synchrony import event_columns
 from src.utils.analysis.weights import (block_values, excitatory_flags,
                                         synapse_distances, weight_block_metrics)
 from src.utils.analysis.avalanche import analyze_avalanches
+
+from scripts.lesion.analysis.drive import drive_columns
 
 
 def resolve_avalanche_smax(config) -> int:
@@ -46,15 +50,14 @@ def resolve_avalanche_smax(config) -> int:
 def build_row(window) -> dict:
     """`metrics.csv` の 1 行を作る。**本番の run も再解析もこの 1 つを通る。**
 
-    必要な値は全部 `window` から取る (smax も解析オプションも config から導けるので
-    引数にしない)。`spikes().times` は**窓の先頭を 0 とするローカル時刻**で、絶対時刻を
-    使うとアバランチ分割は同じでも burstiness のビン割りがずれる (契約でローカルに固定済み)。
+    必要な値は全部 `window` から取る。`spikes().times` は**窓の先頭を 0 とするローカル
+    時刻**で、絶対時刻を使うとアバランチ分割は同じでも burstiness のビン割りがずれる
+    (契約でローカルに固定済み)。
 
-    重い指標 (媒介中心性・クラスタ係数) の on/off は `task.*` にある。**結果に効くので
-    引数ではなく config 側**にあり、run ディレクトリの `config.yaml` を見れば
-    「その run が何を測ったか」が分かる。
+    **解析のパラメータ (ハブ判定の閾値・媒介中心性の厳密解の上限など) は渡さない。**
+    それを使う関数 (`src/utils/analysis/graph.py`) が既定値として持っているので、
+    ここで上書きすると定義が 2 か所になる。
     """
-    protocol = window.config.task
     spikes = window.spikes()
     coo = window.coo()
     out: dict = {
@@ -68,18 +71,22 @@ def build_row(window) -> dict:
         window.record_window_ms,
         smax=resolve_avalanche_smax(window.config),
         dt_ms=float(window.config.simulation.dt),
+        # **アバランチのビンはベースラインで固定。** 窓ごとに合わせると、発火率が
+        # 落ちるだけで σ_bp が上がって見える (`store/series.py` の docstring)。
+        avalanche_bin_ms=window.avalanche_bin_ms(),
     ))
     out.update(structure_metrics(
-        coo.row, coo.col, coo.weights, window.layout, window.total_neurons,
-        include_betweenness=bool(getattr(protocol, "include_betweenness", True)),
-        include_clustering=bool(getattr(protocol, "include_clustering", True)),
-        hub_z=float(getattr(protocol, "hub_z", 2.5)),
-    ))
+        coo.row, coo.col, coo.weights, window.layout, window.total_neurons))
+    # E / I から実際に届いた駆動。損傷で失った入力の量と、E/I の釣り合いの動き。
+    out.update(drive_columns(
+        spikes.times, spikes.ids, coo.row, coo.col, coo.weights,
+        window.layout, window.config, window.record_window_ms))
     return add_diagnosis(out)
 
 
 def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,
-                  smax: int, dt_ms: float, *, include_avalanche_suite: bool = True) -> dict:
+                  smax: int, dt_ms: float, *, avalanche_bin_ms: float | None = None,
+                  include_avalanche_suite: bool = True) -> dict:
     """1 記録窓ぶんの神経科学指標。
 
     `analyze_avalanches` (ビン分割) と `split_avalanches` (ギャップ分割) の**両方**を
@@ -106,6 +113,16 @@ def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,
         "burstiness_index": burstiness_index(times, window_ms),
         "bimodality_d": bimodality_d(avalanche.sizes),
     }
+    # 機能的結合 (Watanabe et al. 2026 の neuronal correlation)。**切断前後の比較の軸。**
+    # baseline の行にも同じ列が出るので、差は `metrics_delta.csv` が自動で持つ。
+    # `correlation_pairs` を並べて出すのは、窓の中で 1 発も撃たないニューロンが
+    # 平均から抜けるため —— 本数が減っていれば平均の上昇は回復ではない。
+    row["mean_correlation"], row["correlation_pairs"] = mean_neuronal_correlation(
+        times, ids, num_neurons, window_ms)
+    row.update(avalanche_size_columns(avalanche.sizes, window_ms))
+    # 同期の粗さ。**相関 ≒ 参加率**なので、相関が落ちたとき「同期構造が壊れた」のか
+    # 「発火率が落ちて参加できなくなった」のかはこの 2 つを並べないと決まらない。
+    row.update(event_columns(times, ids, num_neurons, window_ms))
     polarity = layout.ids_by("polarity")
     row.update(spike_group_metrics(ids, polarity.get("excitatory"), polarity.get("inhibitory"),
                                    window_ms))
@@ -114,26 +131,25 @@ def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,
     if include_avalanche_suite:
         # ビン連結方式。σ_bp (分岐パラメータ) は臨界性の回復を最も直接に示す量。
         _av, _lags, _corr, suite = analyze_avalanches(
-            times, ids, window_ms, min_bin_ms=dt_ms, size_fit_max=smax,
+            times, ids, window_ms, bin_ms=avalanche_bin_ms, min_bin_ms=dt_ms,
+            size_fit_max=smax,
         )
         row.update({f"bp_{key}": value for key, value in suite.items()})
     return row
 
 
 def structure_metrics(row, col, weights, layout, num_neurons: int, *,
-                      module_axis: str = "module",
-                      include_betweenness: bool = True,
-                      include_clustering: bool = True,
-                      hub_z: float = 2.5) -> dict:
-    """1 時点ぶんの構造指標 (トポロジー + 重み)。"""
+                      module_axis: str = "module") -> dict:
+    """1 時点ぶんの構造指標 (トポロジー + 重み)。
+
+    グラフ指標の中身 (何を測るか・どこで近似に落とすか) は `graph_metrics()` が決める。
+    """
     row = np.asarray(row, dtype=np.int64)
     col = np.asarray(col, dtype=np.int64)
     weights = np.asarray(weights, dtype=np.float64)
 
     labels = layout.labels(module_axis) if layout.has_axis(module_axis) else None
-    out = graph_metrics(row, col, num_neurons, weights=weights, labels=labels,
-                        include_betweenness=include_betweenness,
-                        include_clustering=include_clustering, hub_z=hub_z)
+    out = graph_metrics(row, col, num_neurons, weights=weights, labels=labels)
 
     if labels is not None:
         group = group_connection_probability(row, col, layout, module_axis)
@@ -222,8 +238,7 @@ def _stats(values: np.ndarray) -> dict:
 
 def cut_profile(coo, cut_mask, layout, num_neurons: int, *, module_axis: str = "module",
                 coords=None, crossed=None, crossed_part_names=None,
-                include_betweenness: bool = True,
-                hub_z: float = 2.5) -> tuple[dict, list[dict], dict]:
+                ) -> tuple[dict, list[dict], dict]:
     """切断されたシナプスの素性を、残存シナプスと対比して記述する。
 
     ニューロン単位の指標 (次数・participation・ハブ役割) は**切断前のネットワーク**で
@@ -248,12 +263,11 @@ def cut_profile(coo, cut_mask, layout, num_neurons: int, *, module_axis: str = "
               if layout.has_axis(module_axis) else None)
     if labels is not None:
         part = module_participation(row, col, num_neurons, labels)
-        roles = classify_roles(part["participation"], part["within_module_z"], hub_z=hub_z)
+        roles = classify_roles(part["participation"], part["within_module_z"])
     else:
         part = {"participation": np.zeros(num_neurons), "within_module_z": np.zeros(num_neurons)}
         roles = np.full(num_neurons, "unknown", dtype=object).astype(str)
-    betweenness, betweenness_exact = (
-        betweenness_centrality(row, col, num_neurons) if include_betweenness else (None, False))
+    betweenness, betweenness_exact = betweenness_centrality(row, col, num_neurons)
 
     is_exc = excitatory_flags(layout, num_neurons)
     block_of = np.where(is_exc[row], np.where(is_exc[col], "EE", "EI"),
@@ -274,9 +288,8 @@ def cut_profile(coo, cut_mask, layout, num_neurons: int, *, module_axis: str = "
         "pre_within_module_z": part["within_module_z"][row],
         "post_within_module_z": part["within_module_z"][col],
     }
-    if betweenness is not None:
-        attributes["pre_betweenness"] = betweenness[row]
-        attributes["post_betweenness"] = betweenness[col]
+    attributes["pre_betweenness"] = betweenness[row]
+    attributes["post_betweenness"] = betweenness[col]
     if coords is not None:
         attributes["distance_um"] = synapse_distances(coords, row, col)
 

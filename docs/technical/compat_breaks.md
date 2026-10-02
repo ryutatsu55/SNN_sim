@@ -377,6 +377,36 @@ RNG を引く) ので、従来は**再ビルドしないと空間の図が描け
   `abs(w) != 0` で全エッジを落としていたので**線が 1 本も出ていなかった**。
   旧実装と同じ「重みで描く」絵は `weight_network` として panels に移した。
 
+---
+
+## lesion: ベースラインの出どころ・タイムラインの書き方・出力先
+
+損傷実験のプロトコルを 4 点変えた。**旧 run の `metrics.csv` と新 run のそれは、
+ベースライン行 (`probe=0`) の意味が違うので並べて読めない。**
+
+- **ベースラインを測らなくなった。** 旧: 切断前のネットワークをもう一度 build して
+  settle してから 1 窓測る (GeNN のコンパイルが run につき 2 回)。
+  新: 親 run の `spikes_{h}h.npz` / `weights_{h}h.npz` をそのまま probe 0 に置く
+  (コンパイルは 1 回)。ベースラインの窓幅も親のものになる
+  (`task.record_window_ms` とは違いうる)。
+- **タイムラインが `record_hours` のリストになった。** 旧: `recovery_hours` +
+  `probe_interval_hours` (等間隔)。新: develop と同じ時刻のリスト。
+  `baseline_window_ms` は廃止 (ベースラインが親のものになったので指定できない)。
+- **出力先が `<親 run>/<切断条件>/` になった** (旧 `outputs/lesion/<条件>/`)。
+  `--condition` 引数は無い。ディレクトリ名は切断 spec から機械的に決まる。
+- **解析パラメータを task から外した。** `hub_z` / `include_betweenness` /
+  `include_clustering` は `src/utils/analysis/graph.py` の既定値が正になった。
+  **値は同じ** (2.5 / true / true) なので指標は変わらないが、旧 run の `config.yaml` には
+  残っており、新しいコードはそれを読まない。
+- **`figures/overview/` に 2 枚増えた。** `weight_trajectories` と
+  `weight_distribution_shift` は実装も import もありながら登録簿に載っておらず、
+  出ていなかった。
+
+`task.duration` は 3 実験 (develop / akita_soc / lesion) すべてから削除した。
+run 長を決めていたのは常に `record_hours` の最大値 + `record_window_ms` で、
+`duration` はそれを手計算した値が記録に残るだけのフィールドだった。
+**結果は変わらない** (どこもこの値で走っていない) が、旧 run の `config.yaml` には
+残っている。
 
 ---
 
@@ -396,6 +426,22 @@ RNG を引く) ので、従来は**再ビルドしないと空間の図が描け
 **範囲の外の値は描かれない。** 重みが 1 を超える設定にした場合、その分は棒として出ない
 (左パネルのタイトルの `max=` には出るので、気づけないことはない)。
 
+## lesion の `structure/` `panels/` を develop と同じ一覧に
+
+lesion の図は develop の複製だったが、develop 側の更新が反映されず古い版のままだった。
+**`figures/` と `report/{structure,panels}.py` を develop の現行版で置き直した。**
+
+- `panels/` に 3 種類増えた: `weight_distribution/` `weight_network/` `trace/`
+- `structure/weight_distribution.png` → **`weight_distribution_initial.png` へ改名**
+- `structure/connection_probability.png` が E/I 4 本 + 理論曲線 → **実測 1 本**に
+- `structure/network_sample.png` が重みではなく**結合マスク**から描くように (線幅一定)
+- 窓のタイトルだけ develop と違う。`0 h` ではなく `baseline (-0.17 h)` / `post (+3.00 h)`
+  (損傷実験では時刻だけでは切断の前後が読めないため)
+
+`task.trace_neuron` / `trace_window_s` も develop と同じものを持つようになった
+(既定 `null` = 採らない)。ベースラインの probe は**親 run が採っていればその npz を
+そのまま引き継ぐ**ので、develop と lesion の契約が 7 → 8 ファイルになった。
+
 ## ブロック境界線: 白+黒のサンドイッチをやめ、グレー 1 色に (develop / akita_soc / lesion)
 
 `style.draw_block_boundaries()` が引く線 (重み行列・粗視化結合図) の見た目を変えた。
@@ -410,6 +456,25 @@ RNG を引く) ので、従来は**再ビルドしないと空間の図が描け
 両方で読める中間グレーにした。線幅は階層レベルごとに 1.0 / 0.6 pt。
 
 **図の見た目が変わるだけで、数値は変わらない。**
+
+## lesion: post probe のスパイク時刻が settle のぶんずれていた (修正)
+
+`run_one.probe()` は GeNN の時計が返すスパイク時刻を**そのまま** npz へ書いていた。
+`record_start_ms` は**切断軸** (settle を含まない) の時刻なので、`load_spikes()` が引いた
+窓ローカル時刻は `settle_ms` (既定 60,000 ms) ぶん先へずれていた。baseline の probe は
+親 run の窓を切断軸へ移して書くので、**post の probe だけ**がずれていた。
+
+影響 (`settle_ms > 0` で走った全 lesion run の post probe):
+
+- **ラスターが真っ白。** 窓ローカル時刻が 60〜660 s に載るのに対し、図の x 範囲は 0〜30 s。
+- **`burstiness_index` が壊れる。** `[0, record_window_ms]` を 1 s ビンで切るので、
+  先頭 `settle_ms` ぶんのビンが空になり (指標を押し上げる)、末尾へはみ出したスパイクは
+  数えられない。
+- アバランチ分布・発火率・ISI は時刻の**差**しか見ないので変わらない。
+
+**古い run は再実行するしかない。** npz が持つ時刻そのものが間違っているので、再解析
+(`replot.py`) では直らない。`records.save_spikes()` が窓の外のスパイクを弾くようになった
+ので、同じずれが静かに通ることは無い。
 
 ## develop / lesion: ニューロン間相関の図と指標を追加
 
@@ -470,6 +535,28 @@ r(t) のビン幅は **100 ms** (`correlation.RATE_BIN_MS`)。**変えると相�
 **既存の数値は変わらない。** 増えたのは列と図で、既存 run は `replot.py` を通せば
 新しい列と図が付く。
 
+## lesion: probe の番号が `record_hours` の添字と一致するようになった
+
+以前はベースラインが `p000` を取り、post の probe が `p001` から始まっていた。
+`record_hours: [0..20]` を指定すると記録は `p001`〜`p021` になり、「3 番目の記録時刻」と
+`p003` が食い違っていた。
+
+**新: post は `p000`〜`p020` (= `record_hours` の添字)。ベースラインは番号を持たず
+`{kind}_baseline.npz`。** ベースラインはそもそも別種 (親 run 由来で窓幅も別) なので、
+番号の並びを共有しない。`Window.index` と `metrics.csv` の `probe` 列は
+ベースラインで `-1` になる。
+
+図のファイル名も npz と同じ token に揃えた:
+
+    旧  raster_p000_baseline.png / raster_p004_post.png
+    新  raster_baseline.png      / raster_p003.png
+
+**古い run は再解析しても新しい名前にならない** (ファイル名は書いた時点で決まる)。
+新旧を並べるときはディレクトリごと分けること。
+
+同時に lesion の `weight_network` のタイトルを `3 h` から `post (+3.00 h)` へ直した
+(他の lesion の図と同じ `Window.label`)。切断の前後が読めなかったため。
+
 ## develop / lesion: 臨界性と同期の列を metrics.csv へ追加
 
 - **同期イベント** (`src/utils/analysis/synchrony.py`): `event_bin_ms` /
@@ -511,6 +598,40 @@ r(t) のビン幅は **100 ms** (`correlation.RATE_BIN_MS`)。**変えると相�
 
 **既存 run の `metrics.csv` と相関の図は再解析で値が変わる。** 新旧を並べないこと。
 根拠の数値は `docs/technical/criticality_notes.md`。
+
+## lesion: ブリッジ切断がモジュール内へ食い込んでいた
+
+`BridgeSelector` は「軸索がブリッジ part の内側を通ったか」で切っていた。ブリッジ part は
+union を連結にするため両端を `bridge_overlap` だけモジュールへ食い込ませてあるので
+(`area._bridge_spec`)、**その食い込みをかすめただけの、モジュール内で完結する軸索まで
+切断対象に入っていた**。`hierarchical_modular_grid` の既定値 (side 200 / bridge_width 50 /
+overlap 50) では、ブリッジ矩形 300 um のうち 100 um = 1/3 がモジュールの内側である。
+
+**新: 判定は「ブリッジ part の内側かつ全モジュール part の外側」= 露出した通路だけ**
+(`axons.synapse_crossed_bridges()` / `connectivity.module_part_indices()`)。
+
+実測 (`b50_seg1_g002F_U8_W0_20h_sweep`, `bridge:parts=BX1-3`、切断本数 旧 → 新):
+
+| seed | 全体 | 同一モジュール内 | 同一クラスタ内 |
+|---|---|---|---|
+| 01 | 101 → 43 | 44 → 2 | 58 → 2 |
+| 02 |  91 → 28 | 37 → 2 | 55 → 3 |
+| 03 | 156 → 59 | 79 → 3 | 95 → 4 |
+| 04 |  90 → 57 | 25 → 1 | 34 → 1 |
+| 05 | 139 → 45 | 55 → 0 | 83 → 0 |
+| 06 | 131 → 78 | 40 → 5 | 53 → 6 |
+| 07 | 123 → 46 | 51 → 1 | 75 → 1 |
+| 08 | 208 → 89 | 61 → 1 | 93 → 1 |
+
+**切断本数が 3〜7 割減り、クラスタ間ブリッジの切断なのに同一クラスタ内で完結していた
+結合がほぼ消える** (旧は切断の 4〜7 割がそれだった)。新しい判定は旧判定の部分集合。
+
+残る同一クラスタ内の数本は**正しい**: 軸索が露出部へ出て戻ってから接触した結合で、
+通路を焼けば実際に切れる。経路の判定範囲が `offsets[pre] .. contact_seg` である
+(= 接触より前に通ったものだけ数える) ことは元から正しく、そこは変えていない。
+
+**既存の lesion run はすべて作り直しが必要。** `lesion.json` の `num_synapses_cut` /
+`cut_profile` が過大なので、`replot.py` では直らない (切断そのものが違う)。
 
 ## 相関のビン幅 30 ms → 50 ms
 

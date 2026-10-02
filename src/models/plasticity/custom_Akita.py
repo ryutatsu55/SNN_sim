@@ -18,7 +18,9 @@
 GeNN が生成する C++ と独立に同じ数式を計算する。`CustomAkitaModel` 本体はそのうち
 `calculate_gmax_scale` のみ利用し、残りは検証テスト
 (test/test_akita_soc.py, test/core/STDPtest/test_multi_spike.py) が import して
-C++ 側の挙動と突き合わせるために使う。
+C++ 側の挙動と突き合わせるために使う。`replay_released_resource` は記録済みの
+スパイク列から STP の放出量を再現するためのもので、解析 (`scripts/lesion/analysis/drive.py`)
+が使う。
 """
 
 import pygenn

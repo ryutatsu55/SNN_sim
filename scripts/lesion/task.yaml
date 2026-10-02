@@ -12,7 +12,9 @@
 
 lesion:
   # --- 親 run からの引き継ぎ -------------------------------------------------
-  # 親 run のどの記録時刻の重みを引き継ぐか [h]。null なら**最後の記録**。
+  # 親 run のどの記録時刻を引き継ぐか [h]。null なら**最後の記録**。
+  # **重みとベースラインの両方**がこの時刻から来る (重みは weights_{h}h.npz、
+  # ベースライン窓は spikes_{h}h.npz)。
   from_hour: null
 
   # --- 切断 -----------------------------------------------------------------
@@ -20,51 +22,55 @@ lesion:
   #   bridge:kind=inter_cluster                       ブリッジを跨いだ結合
   #   hub:metric=participation,top=3,direction=out    ハブの出力
   #   between:axis=module                             群をまたぐ結合
+  #   random:pre=exc,post=exc,fraction=0.1,seed=0    極性で絞って無作為に
   #   synapses:pairs=3-7+12-40                        名指し
+  #
+  # **ここが run ディレクトリの名前になる** (`<親 run>/bridge-inter_cluster/`)。
   cut:
-    - "bridge:kind=inter_cluster"
+    - "bridge:parts=BC0-2-3"
   cut_combine: or            # "or" | "and"
 
   # --- タイムライン ----------------------------------------------------------
-  # 復元直後・切断直後に落ち着かせる時間 [ms]。
+  # 切断直後に落ち着かせる時間 [ms]。
   settle_ms: 60000.0
-  # ベースライン記録窓 [ms]。null なら record_window_ms と同じ。
-  baseline_window_ms: null
-  # 切断後に観察する総時間 [h] と probe の間隔 [h] (等間隔)。
-  recovery_hours: 12.0
-  probe_interval_hours: 1.0
-  # 1 probe の記録窓 [ms]。
+
+  # 記録する時刻 [h]。**基準は切断の瞬間**で、ここに並べた各時刻で record_window_ms
+  # ぶんの窓を採る。ベースラインは親 run から引き継ぐので、ここには書かない。
+  #
+  # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲。混ぜて書ける
+  # (書き方は develop の record_hours と同じ。`config_manager.expand_hours_spec()`)。
+  record_hours: [0..20]
+
+  # 1 記録窓の長さ [ms]。**ベースラインの窓幅は親 run のもの**なので、ここと違いうる
+  # (窓幅は窓ごとに npz が持つので、発火率は正しく出る)。
   record_window_ms: 600000.0
   # GeNN のスパイク記録バッファ [ms]。**record_window_ms より小さくすること。**
   record_buffer_ms: 10000.0
 
-  # --- 解析 ------------------------------------------------------------------
-  # ハブ判定の within-module z 閾値 (Guimera-Amaral の既定 2.5)。
-  # **代謝ネットワーク由来の値**なので、次数の小さい網では下げないとハブが 0 個になる。
-  hub_z: 2.5
-  # 重い指標。大きな N では切る。**結果に効くので config 側にある** ——
-  # 引数にすると、列の無い metrics.csv を見て「測ったが 0 だった」のか
-  # 「測っていない」のかが区別できなくなる。
-  include_betweenness: true
-  include_clustering: true
+  # --- 膜電位トレース -------------------------------------------------------
+  # 記録窓の先頭で、1 ニューロンの V と Isyn_rec を 1 ステップ刻みで採る (develop と
+  # 同じ)。同じ窓のラスターと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
+  #
+  # **null なら採らない (既定)。** 1 ステップずつ進めて毎ステップ pull するので遅い。
+  # 採ったかどうかがその run の記録の一部なので、引数ではなくここにある。
+  #
+  # ベースラインの probe は親 run が採っていればそれを引き継ぐ (この設定とは独立)。
+  trace_neuron: null
+  # 記録窓の先頭から何秒ぶん採るか [s]。窓より長くは採れない (窓幅で頭打ち)。
+  trace_window_s: 10.0
 
-  # 記録としての総時間 [ms]。**実際の run 長を決めるのは上のタイムラインであって
-  # この値ではない。** 食い違わせないこと。
-  duration: 43200000.0       # 12 h
+  # **解析のパラメータはここに無い。** ハブ判定の閾値も重い指標の on/off も、
+  # それを使う解析関数 (`src/utils/analysis/graph.py`) が既定値として持っている。
 
 lesion_dense_probe:
-  # 回復の初期を細かく見るプロファイル。probe を 15 分刻みにする。
+  # 回復の初期を細かく見るプロファイル。最初の 6 h を 15 分刻みにする。
   from_hour: null
   cut:
     - "bridge:kind=inter_cluster"
   cut_combine: or
   settle_ms: 60000.0
-  baseline_window_ms: null
-  recovery_hours: 6.0
-  probe_interval_hours: 0.25
+  record_hours: [0..6:0.25]
   record_window_ms: 300000.0
   record_buffer_ms: 10000.0
-  hub_z: 2.5
-  include_betweenness: true
-  include_clustering: true
-  duration: 21600000.0       # 6 h
+  trace_neuron: null
+  trace_window_s: 10.0

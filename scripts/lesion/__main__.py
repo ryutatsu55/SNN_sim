@@ -1,10 +1,9 @@
 """lesion 実験のランチャ (親プロセス)。
 
-    python -m scripts.lesion --parent <親 run または条件ディレクトリ> --condition <条件名>
+    python -m scripts.lesion --parent <親 run または条件ディレクトリ>
 
-**引数は「どの run を引き継ぐか」「どの損傷プロトコルか」「どの条件として記録するか」の
-3 つだけ。** それ以外 (切断 spec・タイムライン・解析オプション) はすべて `task.yaml` 側に
-ある。
+**引数は「どの run を引き継ぐか」「どの損傷プロトコルか」の 2 つだけ。** それ以外
+(切断 spec・タイムライン・解析オプション) はすべて `task.yaml` 側にある。
 
 ## なぜ develop と違って `--config` を取らないのか
 
@@ -14,20 +13,26 @@ lesion の**ネットワーク設定は親 run から来る**。同じ seed で�
 ランチャがやること:
 
 1. `--parent` の下から run ディレクトリを探す (条件ディレクトリなら `seedNN/` を列挙)
-2. 各親の `config.yaml` を読む = その run のネットワーク設定
+2. 各親の `config.yaml` を読む = その run のネットワーク設定 (並列度もここから取る)
 3. `task` をこのディレクトリの `task.yaml` の損傷プロトコルへ**差し替える**
 4. `task.parent_run` に親のパスを焼き込む
-5. `outputs/lesion/<条件>/` を作り、seed ごとの run ディレクトリへ引き継ぎ config を置く
+5. **親 run の下に** `<切断条件>/` を作り、引き継ぎ config を置く
 6. `run_one` を子プロセスとして並列に起動し、各々の出力を `<run>/run.log` へ流す
 
 **3 と 4 が要点。** おかげで run ディレクトリの `config.yaml` だけで「どのネットワークを、
 どこで切って、どう観察したか」が全部読める。ディレクトリ名からは何も読み取らない。
 
-出力の形:
+## 出力は親 run の下
 
-    outputs/lesion/<条件>/            親が 1 本  -> ここが run ディレクトリそのもの
-    outputs/lesion/<条件>/seed01/     親が複数   -> ここが run ディレクトリ
-                        /seed02/
+    <親 run>/bridge-inter_cluster/          親が 1 本
+    <親条件>/seed01/bridge-inter_cluster/   親が sweep なら seed ごとに 1 つずつ
+    <親条件>/seed02/bridge-inter_cluster/
+
+**`outputs/lesion/` は使わない。** 損傷 run は親 run に完全に従属していて、親を消したら
+再現も再解析もできないので、置き場所も親に従属させる。ディレクトリ名 `<切断条件>` は
+切断 spec から機械的に決まる (`selectors.cut_label()`) ので、**名前を引数で受けない** ——
+名前と中身がずれる余地を作らないため。同じ親を同じ spec で 2 度切ることはできない
+(既にあれば止まる)。
 """
 import argparse
 import os
@@ -41,22 +46,18 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 
-from src.core.config_manager import CONFIG_NAME, ConfigManager, load_yaml
+from src.core.config_manager import (CONFIG_NAME, ConfigManager, expand_hours_spec,
+                                     load_yaml)
 
+from scripts.lesion.analysis.selectors import cut_label
 from scripts.lesion.store.paths import PENDING_CONFIG_NAME
 
 _HERE = Path(__file__).resolve().parent
 
-# この実験の名前。出力の第 1 階層になる。
-EXPERIMENT = "lesion"
-OUTPUT_ROOT = Path("outputs")
 # 損傷プロトコル。**記録プロトコルと損傷条件の両方**がここに入る。
 TASK_PATH = _HERE / "task.yaml"
 DEFAULT_TASK = "lesion"
 RUN_LOG_NAME = "run.log"
-# 並列度。親 run の config には lesion 用の値が無いので、ここだけ引数で受ける
-# (**結果に影響しない**ので引数にしてよい。CLAUDE.md の線引き)。
-DEFAULT_PARALLEL = 1
 
 
 def parse_args():
@@ -64,17 +65,15 @@ def parse_args():
         description="育った run の結合を切って回復を追う (親 run ごとに子プロセスを並列起動)。")
     parser.add_argument(
         "--parent", required=True,
-        help="引き継ぐ親 run。run ディレクトリそのものでも、seedNN/ を並べた条件ディレクトリでもよい")
-    parser.add_argument(
-        "--condition", required=True,
-        help="条件名。outputs/lesion/<条件>/ になる。**条件の記述ではなくラベル** "
-             "(何で走ったかは run ディレクトリの config.yaml が持つ)")
+        help="引き継ぐ親 run。run ディレクトリそのものでも、seedNN/ を並べた条件ディレクトリでもよい。"
+             "**損傷 run はこの下に <切断条件>/ として作られる**")
     parser.add_argument(
         "--task", default=DEFAULT_TASK,
         help=f"task.yaml の損傷プロトコル名 (既定: {DEFAULT_TASK})")
     parser.add_argument(
-        "--parallel", type=int, default=DEFAULT_PARALLEL,
-        help="同時に走らせる run の数。GeNN のコンパイルが run につき 2 回走るので控えめに")
+        "--parallel", type=int, default=None,
+        help="同時に走らせる run の数。**既定は親 run の simulation.parallel**。"
+             "GeNN のコード生成とコンパイルが run ごとに走るので控えめに")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="GeNN を触らず、切断対象を数えて終了 (子へそのまま渡す)")
@@ -100,7 +99,12 @@ def discover_parents(parent: Path) -> list[Path]:
 
 
 def load_protocol(name: str) -> dict:
-    """`task.yaml` から損傷プロトコルを読む。"""
+    """`task.yaml` から損傷プロトコルを読み、`record_hours` を展開する。
+
+    展開をここでやるのは、lesion の task が `ConfigManager.resolve()` を通らないため
+    (通る develop / akita_soc は resolve() の中で展開される)。**run の config.yaml には
+    展開後の時刻が並ぶ**、という約束は 3 実験とも同じ。
+    """
     profiles = load_yaml(TASK_PATH)
     if name not in profiles:
         raise SystemExit(
@@ -108,31 +112,48 @@ def load_protocol(name: str) -> dict:
             f"(あるもの: {sorted(profiles)})")
     protocol = dict(profiles[name])
     protocol["profile_name"] = name
+    if "record_hours" not in protocol:
+        raise SystemExit(f"損傷プロトコル {name!r} に record_hours がありません: {TASK_PATH}")
+    protocol["record_hours"] = expand_hours_spec(protocol["record_hours"])
     return protocol
 
 
-def prepare_runs(manager: ConfigManager, parents: list[Path], protocol: dict,
-                 condition: str) -> list[Path]:
-    """`<条件>/` と各 run ディレクトリを作り、引き継ぎ config を置く。
+def resolve_parallel(configs: list, requested: int | None) -> int:
+    """同時に走らせる run の数。**既定は親 run の `simulation.parallel`。**
+
+    lesion は自分のネットワーク設定を持たないので、並列度も親から引き継ぐ (run の
+    `config.yaml` にもその値が焼き込まれるので、記録と実行が食い違わない)。
+
+    親が複数あって値が割れているときは**選ばずに止める**。多数決も最大値も、
+    どちらを採ったか記録に残らないため。
+    """
+    if requested is not None:
+        return max(1, int(requested))
+    values = {int(getattr(config.simulation, "parallel", 1) or 1) for config in configs}
+    if len(values) > 1:
+        raise SystemExit(
+            f"親 run の simulation.parallel が揃っていません ({sorted(values)})。"
+            " --parallel で明示してください。")
+    return max(1, values.pop())
+
+
+def prepare_runs(manager: ConfigManager, parents: list[Path], configs: list, protocol: dict,
+                 label: str) -> list[Path]:
+    """**親 run の下に** `<切断条件>/` を作り、引き継ぎ config を置く。
 
     置くのは `config.yaml` ではなく `pending_config.yaml`。**ここで書けるのは記録ではなく
-    引き継ぎだから** —— `network.sparse` の実値は build 時にしか決まらない。
+    引き継ぎだから** —— まだ build を通っていない。
     `config.yaml` を書くのは build を通した run 本体の仕事 (`run_one.py`)。
     """
-    condition_dir = OUTPUT_ROOT / EXPERIMENT / condition
-    if condition_dir.exists():
-        raise SystemExit(
-            f"条件 {condition!r} は既にあります: {condition_dir}\n"
-            "  上書きすると前の結果と混ざるので止めました。"
-            " 別の条件名を付けるか、不要なら手で消してください。")
-    condition_dir.mkdir(parents=True)
-
     run_dirs = []
-    for parent in parents:
-        config = manager.load_resolved(parent / CONFIG_NAME)
-        seed = int(config.simulation.seed)
-        run_dir = condition_dir if len(parents) == 1 else condition_dir / f"seed{seed:02d}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+    for parent, config in zip(parents, configs):
+        run_dir = parent / label
+        if run_dir.exists():
+            raise SystemExit(
+                f"{run_dir} は既にあります。\n"
+                "  上書きすると前の結果と混ざるので止めました。"
+                " 同じ親を同じ切断条件で切り直すなら、先に手で消してください。")
+        run_dir.mkdir(parents=True)
 
         # **task を丸ごと差し替える。** 親の記録プロトコル (develop の record_hours など)
         # はこの run では使わないので残さない。親のパスをここで焼き込むことで、
@@ -169,16 +190,33 @@ def main():
 
     parents = discover_parents(Path(args.parent))
     protocol = load_protocol(args.task)
+    # **ネットワークを組む前に決まる。** 切断 spec だけから決まるので、ランチャが
+    # run ディレクトリ名に使える (`run_one` 側で付く label と同じ値)。
+    label = cut_label(protocol.get("cut") or [], str(protocol.get("cut_combine", "or")))
     manager = ConfigManager()
+    # **親の config がこの run のネットワーク設定。** 並列度もここから取るので、
+    # run ディレクトリを作る前に全部読んでおく。
+    configs = [manager.load_resolved(parent / CONFIG_NAME) for parent in parents]
 
-    parallel = max(1, min(args.parallel, len(parents)))
+    # 親の本数を超えて並べても意味がないので頭打ちにする。
+    parallel = max(1, min(resolve_parallel(configs, args.parallel), len(parents)))
+    backend = configs[0].simulation.backend
+    if backend == "cuda" and parallel > 1:
+        print(
+            f"Warning: backend=cuda で parallel={parallel} です。1 枚の GPU に複数プロセスを"
+            " 載せてもドライバが時分割するだけで速くなりません (小さい N では起動レイテンシ"
+            " 律速なのでむしろ遅くなります)。--parallel 1 にしてください。",
+            file=sys.stderr,
+        )
+
     print(f"parent    : {args.parent}  ({len(parents)} run)")
     print(f"task      : {args.task}")
-    print(f"condition : {args.condition}")
-    print(f"cut       : {protocol.get('cut')}")
-    print(f"parallel  : {parallel}")
+    print(f"cut       : {protocol.get('cut')}  -> {label}")
+    print(f"parallel  : {parallel}  "
+          f"({'--parallel' if args.parallel is not None else '親 run の simulation.parallel'}"
+          f", backend={backend})")
 
-    run_dirs = prepare_runs(manager, parents, protocol, args.condition)
+    run_dirs = prepare_runs(manager, parents, configs, protocol, label)
     for parent, run_dir in zip(parents, run_dirs):
         print(f"  {parent} -> {run_dir}")
 
@@ -193,7 +231,7 @@ def main():
             print(f"  {run_dir}  (ログ: {run_dir / RUN_LOG_NAME})", file=sys.stderr)
         print("  再実行: python -m scripts.lesion.run_one <run ディレクトリ>", file=sys.stderr)
         raise SystemExit(1)
-    print(f"完了しました: {OUTPUT_ROOT / EXPERIMENT / args.condition}")
+    print(f"完了しました: {len(run_dirs)} run  (それぞれ <親 run>/{label}/)")
 
 
 if __name__ == "__main__":

@@ -95,11 +95,10 @@ def weights_at_cut(series, row, col) -> np.ndarray:
     """**切断の瞬間の**重みを、生き残ったシナプス `(row, col)` の上に並べ直す。
 
     構造図は重みを使う (ネットワーク図の線の太さ、重み分布のヒストグラム) ので、
-    config が生成した初期重みのまま描くと本番と別の図になる。**本番が描いたのは
-    Phase 2 へ流し込んだ重み** = baseline probe を測り終えた時点の値で、それは
-    `weights_p000.npz` そのもの。
+    config が生成した初期重みのまま描くと本番と別の図になる。**本番が流し込んだのは
+    親 run から復元した重み**で、それは `weights_baseline.npz` そのもの。
 
-    引き当ては (pre, post) の join。baseline は切断前の全シナプスぶんあるので、
+    引き当ては (pre, post) の join。ベースラインは切断前の全シナプスぶんあるので、
     位置では並ばない。
     """
     baseline = next((window for window in series.windows if window.is_baseline), None)

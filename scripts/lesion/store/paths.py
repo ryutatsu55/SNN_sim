@@ -13,12 +13,17 @@
         ├── panels/          … **probe ごと**の図。probe の数だけ増えるものはここへ
         │   ├── raster/
         │   ├── avalanche/
-        │   └── weight/      … その probe の重み行列
-        └── overview/        … 重み軌跡 / 重み分布の変化 / 発火レート散布
+        │   ├── weight/      … その probe の重み行列
+        │   ├── weight_distribution/ … 重み分布
+        │   ├── weight_network/ … 重みで描いたネットワーク図
+        │   ├── correlation/ … ニューロン間相関行列
+        │   ├── correlation_network/ … 相関の強いペアだけを空間に描いた図
+        │   ├── ISI/         … スパイク間隔の分布と CV
+        │   └── trace/       … task.trace_neuron を指定した run のみ
+        └── overview/        … 重み軌跡 / 重み分布の変化 / 発火レート散布 / 平均相関の推移
 
-`scripts/develop/store/paths.py` と同じ形だが、**別のファイルとして持つ**。
-図の種類が実験ごとに違う (lesion は膜電位トレースを採らない) ので、共有すると
-片方の都合でもう片方が動く。
+`scripts/develop/store/paths.py` と同じ形だが、**別のファイルとして持つ**。図の種類が
+実験ごとに変わりうるので、共有すると片方の都合でもう片方が動く (いまは同じ一覧)。
 
 `source_config.yaml` は置かない。lesion の入力は「親 run + 損傷プロトコル」であって
 1 つの YAML ではないので、逐語コピーする対象が無い。代わりに **`config.yaml` に全部
@@ -50,11 +55,20 @@ PANELS = "panels"
 RASTER = f"{PANELS}/raster"
 AVALANCHE = f"{PANELS}/avalanche"
 WEIGHT = f"{PANELS}/weight"
+WEIGHT_DIST = f"{PANELS}/weight_distribution"
+WEIGHT_NETWORK = f"{PANELS}/weight_network"
+CORRELATION = f"{PANELS}/correlation"   # ニューロン間相関行列
+CORRELATION_NETWORK = f"{PANELS}/correlation_network"   # 相関の強いペアの空間図
+ISI = f"{PANELS}/ISI"                    # スパイク間隔の分布
+TRACE = f"{PANELS}/trace"
 OVERVIEW = "overview"
-FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, OVERVIEW)
+FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK,
+             CORRELATION, CORRELATION_NETWORK, ISI, TRACE, OVERVIEW)
 
-# run を走らせる前に必ず作るディレクトリ。lesion は全種類を必ず出す。
-DEFAULT_FIG_KINDS = FIG_KINDS
+# run を走らせる前に必ず作るディレクトリ。trace は task.trace_neuron を指定したときだけ作る
+# (空ディレクトリが残ると「採取したのに空だった」のか「採取していない」のか読めなくなる)。
+DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK,
+                     CORRELATION, CORRELATION_NETWORK, ISI, OVERVIEW)
 
 
 def data_dir(run_dir: str | Path) -> Path:

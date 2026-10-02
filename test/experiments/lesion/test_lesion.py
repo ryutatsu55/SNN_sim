@@ -20,9 +20,10 @@ TASK_PATH = root_path / "scripts" / "lesion" / "task.yaml"
 # テスト用のネットワーク設定。**実験の config を借りない。**
 FIXTURE_CONFIG = root_path / "test" / "experiments" / "no_space_100.yaml"
 
+from scripts.lesion.analysis.drive import conductance_per_release, drive_columns, source_params
 from scripts.lesion.analysis.selectors import (
-    BetweenGroupSelector, HubSelector, LesionContext, SynapseSelector, combine,
-    parse_cut_spec)
+    BetweenGroupSelector, HubSelector, LesionContext, RandomSelector, SynapseSelector,
+    combine, cut_label, parse_cut_spec)
 
 import src.models.neurons.akita_escape_lif  # noqa: F401
 import src.models.network.connectors  # noqa: F401
@@ -153,9 +154,37 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(int(combine([a, b], "and").cut.sum()),
                          int((a.cut & b.cut).sum()))
 
+    def test_random_cuts_only_the_requested_polarities(self):
+        is_exc = np.asarray(self.builder.layout.labels("polarity")) == "excitatory"
+        selection = RandomSelector(fraction=0.3, pre="exc", post="exc").select(self.ctx)
+        cut_row, cut_col = self.coo.row[selection.cut], self.coo.col[selection.cut]
+        self.assertTrue(np.all(is_exc[cut_row]) and np.all(is_exc[cut_col]))
+        candidates = int((is_exc[self.coo.row] & is_exc[self.coo.col]).sum())
+        self.assertEqual(int(selection.cut.sum()), round(0.3 * candidates))
+        self.assertEqual(selection.detail["num_candidates"], candidates)
+
+    def test_random_pre_only_keeps_both_targets(self):
+        is_exc = np.asarray(self.builder.layout.labels("polarity")) == "excitatory"
+        selection = RandomSelector(fraction=0.5, pre="exc").select(self.ctx)
+        self.assertTrue(np.all(is_exc[self.coo.row[selection.cut]]))
+        self.assertTrue(np.any(~is_exc[self.coo.col[selection.cut]]))
+
+    def test_random_is_reproducible_by_seed(self):
+        a = RandomSelector(fraction=0.2, pre="exc", seed=3).select(self.ctx).cut
+        b = RandomSelector(fraction=0.2, pre="exc", seed=3).select(self.ctx).cut
+        c = RandomSelector(fraction=0.2, pre="exc", seed=4).select(self.ctx).cut
+        np.testing.assert_array_equal(a, b)
+        self.assertFalse(np.array_equal(a, c))
+
+    def test_random_label_carries_the_whole_spec(self):
+        self.assertEqual(cut_label(["random:pre=exc,post=exc,fraction=0.1,seed=2"]),
+                         "random-exc-exc-f0.1-seed2")
+
     def test_spec_parsing_rejects_typos(self):
         for bad in ("hub:topk=3", "unknown:x=1", "bridge:kind=zzz",
-                    "hub:metric=nonsense", "hub:direction=sideways"):
+                    "hub:metric=nonsense", "hub:direction=sideways",
+                    "random:pre=exc", "random:fraction=0", "random:fraction=0.1,pre=E",
+                    "random:fraction=0.1,frac=2"):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
                     parse_cut_spec(bad)
@@ -169,6 +198,56 @@ class SelectorTest(unittest.TestCase):
     def test_bridge_selector_needs_geometry(self):
         with self.assertRaises(ValueError):
             parse_cut_spec("bridge:kind=any").select(self.ctx)
+
+
+class DriveTest(unittest.TestCase):
+    """E / I 駆動が「1 発が届けるコンダクタンス × 本数」を正しく積むこと。"""
+
+    WINDOW_MS = 1000.0
+
+    def setUp(self):
+        builder = _builder()
+        self.config, self.layout = builder.config, builder.layout
+        self.coo = builder.global_coo()
+        self.is_exc = np.asarray(self.layout.labels("polarity")) == "excitatory"
+        self.params = source_params(self.config, self.layout)
+        self.per_release = conductance_per_release(self.params, float(self.config.simulation.dt))
+
+    def _drive(self, times, ids, weights):
+        return drive_columns(np.asarray(times, float), np.asarray(ids), self.coo.row,
+                             self.coo.col, weights, self.layout, self.config, self.WINDOW_MS)
+
+    def test_one_spike_delivers_u_w_gmax_times_decay_sum(self):
+        pre = int(np.flatnonzero(self.is_exc)[0])
+        weights = np.full(self.coo.row.size, 0.5)
+        out = self._drive([10.0], [pre], weights)
+        targets_e = self.coo.col[(self.coo.row == pre) & self.is_exc[self.coo.col]]
+        expected = (self.params.utilization[pre] * 0.5 * self.per_release[pre]
+                    * targets_e.size / self.is_exc.sum() * 1000.0 / self.WINDOW_MS)
+        self.assertAlmostEqual(out["drive_exc_onto_e_ns"], expected)
+        self.assertEqual(out["drive_inh_onto_e_ns"], 0.0)
+        self.assertTrue(np.isnan(out["drive_ei_ratio_onto_e"]))
+
+    def test_ratio_is_exc_over_inh(self):
+        pre_e = int(np.flatnonzero(self.is_exc)[0])
+        pre_i = int(np.flatnonzero(~self.is_exc)[0])
+        out = self._drive([10.0, 20.0], [pre_e, pre_i], np.ones(self.coo.row.size))
+        self.assertAlmostEqual(out["drive_ei_ratio_onto_e"],
+                               out["drive_exc_onto_e_ns"] / out["drive_inh_onto_e_ns"])
+
+    def test_cut_synapses_stop_delivering(self):
+        pre = int(np.flatnonzero(self.is_exc)[0])
+        keep = self.coo.row != pre
+        out = drive_columns(np.array([10.0]), np.array([pre]), self.coo.row[keep],
+                            self.coo.col[keep], np.ones(int(keep.sum())),
+                            self.layout, self.config, self.WINDOW_MS)
+        self.assertEqual(out["drive_exc_onto_e_ns"], 0.0)
+
+    def test_unsupported_synapse_model_is_refused(self):
+        config = self.config.model_copy(deep=True)
+        next(iter(config.synapses.values())).synapse.type = "ExpCurr"
+        with self.assertRaises(NotImplementedError):
+            source_params(config, self.layout)
 
 
 class CutProfileTest(unittest.TestCase):
@@ -186,8 +265,7 @@ class CutProfileTest(unittest.TestCase):
 
     def _profile(self, cut, **kwargs):
         from scripts.lesion.analysis.metrics import cut_profile
-        return cut_profile(self.coo, cut, self.layout, self.total,
-                           include_betweenness=False, **kwargs)
+        return cut_profile(self.coo, cut, self.layout, self.total, **kwargs)
 
     def test_cut_group_is_compared_against_the_kept_group(self):
         """本数だけでは何を失ったか決まらない。必ず残存群と並べる。"""
@@ -265,15 +343,19 @@ class LesionFigureDataTest(unittest.TestCase):
         いたが、窓幅も phase も原点も同じファイルに入れれば読み手は 1 つ開くだけで済む。
         """
         from scripts.lesion.store import records
-        for index, window_ms in enumerate(windows):
-            # 全ニューロンが 1 発ずつ撃つ = レートは 1000/window_ms [Hz] になるはず
+        # 先頭が baseline (番号を持たない)。post は 0 始まりで record_hours の添字に一致。
+        for position, window_ms in enumerate(windows):
+            baseline = position == 0
+            index = records.BASELINE_INDEX if baseline else position - 1
+            start_ms = -window_ms if baseline else float(index) * records.MS_PER_HOUR
+            # 全ニューロンが窓の先頭で 1 発ずつ撃つ = レートは 1000/window_ms [Hz]。
+            # 時刻は切断軸なので、窓の原点を足す (save_spikes が窓の外を弾く)。
             records.save_spikes(
                 run_dir / records.probe_filename(records.SPIKES, index),
-                np.zeros(self.total), np.arange(self.total),
-                record_start_ms=(-window_ms if index == 0
-                                 else float(index - 1) * records.MS_PER_HOUR),
+                np.full(self.total, start_ms), np.arange(self.total),
+                record_start_ms=start_ms,
                 record_window_ms=window_ms,
-                phase=records.PHASE_BASELINE if index == 0 else records.PHASE_POST)
+                phase=records.PHASE_BASELINE if baseline else records.PHASE_POST)
 
     def _windows(self, run_dir: Path):
         """`_write_run` が書いたものを、時刻順に並べた (hour, window_ms) で読み返す。"""
@@ -317,6 +399,20 @@ class LesionFigureDataTest(unittest.TestCase):
             self.assertEqual(records.discover_probes(Path(tmp_dir), records.SPIKES), [])
 
 
+class _StubSeries:
+    """`Series.avalanche_bin_ms()` だけを借りる最小のスタブ。
+
+    ビンの決め方は `run_dir` のファイルだけで決まる (config も layout も要らない) ので、
+    run を丸ごと作らずに固定できる。
+    """
+
+    def __init__(self, run_dir: Path):
+        from scripts.lesion.store.series import Series
+        self.run_dir = run_dir
+        self._avalanche_bin_ms = None
+        self.avalanche_bin_ms = Series.avalanche_bin_ms.__get__(self)
+
+
 class ProbeIoTest(unittest.TestCase):
     def test_pre_lesion_weights_are_not_mistaken_for_a_probe(self):
         """probe 以外の記録が probe の glob に拾われないこと (回帰テスト)。
@@ -334,6 +430,81 @@ class ProbeIoTest(unittest.TestCase):
                 np.savez_compressed(run_dir / probe_filename(WEIGHTS, index),
                                     data=np.array([1.0]))
             self.assertEqual([p.index for p in discover_probes(run_dir, WEIGHTS)], [0, 1])
+
+    def test_avalanche_bin_is_fixed_to_the_baseline(self):
+        """アバランチのビンが窓ごとに変わらないこと。
+
+        Beggs-Plenz の既定は「その窓の平均イベント間隔」だが、損傷で発火率が落ちると
+        ビンが伸び、それだけで σ_bp が上がって見える (実測で 0.496 -> 0.529、
+        同じビンなら 0.496 -> 0.441 と符号が逆)。切断の前後を比べるのが目的なので、
+        ビンは切断前で固定する。
+        """
+        from src.utils.analysis.avalanche import mean_iei_ms
+        from scripts.lesion.store import paths, records
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            data = paths.data_dir(run_dir)
+            data.mkdir(parents=True)
+            rng = np.random.default_rng(0)
+            # baseline は密、post は疎 -> 窓ごとに合わせるとビンが倍以上変わる
+            for index, rate in ((records.BASELINE_INDEX, 400), (0, 100)):
+                start = -1000.0 if index == records.BASELINE_INDEX else 0.0
+                times = np.sort(rng.uniform(0.0, 1000.0, rate)) + start
+                records.save_spikes(
+                    data / records.probe_filename(records.SPIKES, index),
+                    times, rng.integers(0, 10, rate),
+                    record_start_ms=start, record_window_ms=1000.0,
+                    phase=(records.PHASE_BASELINE if index == records.BASELINE_INDEX
+                           else records.PHASE_POST))
+            base_times = records.load_spikes(
+                data / records.probe_filename(records.SPIKES,
+                                              records.BASELINE_INDEX)).times
+            expected = mean_iei_ms(base_times)
+
+            series = _StubSeries(run_dir)
+            self.assertAlmostEqual(series.avalanche_bin_ms(), expected, places=9)
+            # 2 回目もキャッシュから同じ値
+            self.assertAlmostEqual(series.avalanche_bin_ms(), expected, places=9)
+
+    def test_avalanche_bin_needs_a_baseline(self):
+        """ベースラインが無ければ測らずに落とすこと (比較の基準が無い)。"""
+        from src.utils.runview import MissingData
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(MissingData):
+                _StubSeries(Path(tmp_dir)).avalanche_bin_ms()
+
+    def test_probe_numbers_are_record_hours_indices(self):
+        """post の番号が `task.record_hours` の添字と一致すること。
+
+        以前はベースラインが 0 を取っていたので、`record_hours: [0..20]` が
+        p001..p021 になり「3 番目の記録時刻」と「p003」が食い違っていた。
+        ベースラインは番号を持たず `baseline` という名前で区別する。
+        """
+        from scripts.lesion.store.records import (BASELINE_INDEX, SPIKES,
+                                                  parse_probe_name, probe_filename,
+                                                  probe_token)
+        self.assertEqual(probe_filename(SPIKES, 0), "spikes_p000.npz")
+        self.assertEqual(probe_filename(SPIKES, 20), "spikes_p020.npz")
+        self.assertEqual(probe_filename(SPIKES, BASELINE_INDEX), "spikes_baseline.npz")
+        # 図のファイル名も npz と同じ token を使う (読み替えなしで突き合わせられる)。
+        self.assertEqual(probe_token(3), "p003")
+        self.assertEqual(probe_token(BASELINE_INDEX), "baseline")
+        # 往復すること。
+        for index in (BASELINE_INDEX, 0, 7, 20):
+            self.assertEqual(parse_probe_name(probe_filename(SPIKES, index)),
+                             (SPIKES, index))
+
+    def test_baseline_sorts_before_the_numbered_probes(self):
+        """`discover_probes` が baseline を先頭に置くこと (番号が負なので自然に前)。"""
+        from scripts.lesion.store.records import (BASELINE_INDEX, discover_probes,
+                                                  probe_filename)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            for index in (2, 0, BASELINE_INDEX, 10):
+                np.savez_compressed(run_dir / probe_filename("spikes", index),
+                                    x=np.array([1]))
+            self.assertEqual([p.index for p in discover_probes(run_dir, "spikes")],
+                             [BASELINE_INDEX, 0, 2, 10])
 
     def test_probe_names_do_not_collide_with_akita_records(self):
         """akita_soc の解析 CLI が損傷 run を誤読しないこと。"""

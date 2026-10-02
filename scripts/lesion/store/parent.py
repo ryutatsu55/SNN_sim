@@ -9,17 +9,19 @@
 (ルート `CLAUDE.md`)。develop の内部事情に lesion がぶら下がると、develop を直すたびに
 lesion が壊れる。
 
-代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 6 つだけで、
+代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 8 つだけで、
 develop の `store/records.py` 全体ではない:
 
     config.yaml            ネットワーク設定 (同じ seed から同じネットワークが出る)
     data/connectivity.npz  結合構造 (row / col / shape)
     data/weights_{h}h.npz  引き継ぐ時点の重み (値ベクトル)
+    data/spikes_{h}h.npz   同じ時点のスパイク = **損傷実験のベースライン窓**
+    data/trace_{h}h.npz    同じ時点の膜電位トレース。任意 (親が採っていれば引き継ぐ)
     data/layout_axes.npz   外部軸 (module など)。任意
     data/axon_geometry.npz 軸索の折れ線。任意 (axon_growth 系のみ)
     data/metrics.csv       親 run の終盤ドリフト。任意 (無ければ理由が manifest に入る)
 
-**この 6 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
+**この 8 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
 ここに書いてよい理由。**この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**
 ファイル名の規約が変わったら、ここも直す —— 直す場所が 1 つで、そのことが docstring に
 書いてあれば、横 import より安全に保てる。
@@ -57,6 +59,10 @@ METRICS_NAME = "metrics.csv"
 # develop / akita_soc の記録ファイル名 `<種別>_<時刻>h.npz`。
 RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
 WEIGHTS = "weights"
+SPIKES = "spikes"
+TRACE = "trace"
+# 親のスパイク npz が持つ鍵。**窓幅は持たない**ので、幅は親 config から取る。
+RECORD_START_KEY = "record_start_ms"
 # 親 run の終盤ドリフトとして manifest に添える行数。
 DRIFT_TAIL_ROWS = 3
 
@@ -72,6 +78,12 @@ class Parent:
     axes_path: Path | None
     geometry: object | None
     drift: dict
+    # ベースライン窓。**この run では測らず、親の記録をそのまま使う。**
+    spike_times: np.ndarray   # 窓の先頭を 0 とするローカル時刻 [ms]
+    spike_ids: np.ndarray
+    window_ms: float          # 親の記録窓の幅。lesion の record_window_ms とは違いうる
+    # 同じ窓の膜電位トレース。親が採っていなければ None (npz をそのまま引き継ぐ)。
+    trace_path: Path | None
 
 
 def _parent_data_dir(run_dir: Path) -> Path:
@@ -125,6 +137,37 @@ def _load_wiring(data_dir: Path) -> Wiring:
                   shape=(int(shape[0]), int(shape[1])))
 
 
+def _sibling_record(weights_path: Path, kind: str) -> Path:
+    """同じ記録時刻の別の種別のファイル。**名前を組み立て直さず、置き換える。**
+
+    `f"{hour:g}h"` を組み立て直すと、非整数の記録時刻で往復が合わない
+    (`0.333333h` から読んだ float を書き戻すと別の名前になりうる)。
+    """
+    return weights_path.with_name(
+        weights_path.name.replace(f"{WEIGHTS}_", f"{kind}_", 1))
+
+
+def _load_spikes(path: Path, hour: float) -> tuple[np.ndarray, np.ndarray]:
+    """親の記録窓のスパイクを、**窓の先頭を 0 とするローカル時刻**で読む。
+
+    親は絶対時刻で書き、原点を `record_start_ms` に持つ。契約 (`runview.Spikes`) は
+    ローカル時刻なので、ここで引く。
+    """
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} がありません。{hour} h のスパイク記録が無いので、この時刻を"
+            " ベースラインにできません (task.from_hour を別の時刻にするか親を再実行)。")
+    with np.load(path, allow_pickle=False) as data:
+        if RECORD_START_KEY not in data.files:
+            raise KeyError(
+                f"{path} に {RECORD_START_KEY} がありません。"
+                " 記録窓の原点を持たない古い run は引き継げません。")
+        start_ms = float(data[RECORD_START_KEY])
+        times = np.asarray(data["times"], dtype=np.float64) - start_ms
+        ids = np.asarray(data["ids"], dtype=np.int64)
+    return times, ids
+
+
 def _load_drift(data_dir: Path) -> dict:
     """親 run の `metrics.csv` の末尾数行。**結果を読むときのドリフトの目安。**
 
@@ -156,7 +199,10 @@ def _load_geometry(data_dir: Path):
 
 
 def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
-    """親 run の config / 重み / 幾何を読む。
+    """親 run の config / 重み / ベースライン窓 / 幾何を読む。
+
+    **重みとベースラインは同じ時刻から取る。** 別の時刻から取ると、ベースラインの
+    活動と切断直前の重みが食い違う。
 
     Args:
         run_dir: 親の run ディレクトリ (`config.yaml` と `data/` を持つもの)。
@@ -183,6 +229,14 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
                 f"(ある時刻: {[item[0] for item in records]})")
         hour, weights_path = matches[0]
 
+    window_ms = getattr(config.task, "record_window_ms", None)
+    if window_ms is None:
+        raise ValueError(
+            f"{config_path} の task に record_window_ms がありません。"
+            " ベースライン窓の幅が決まらないので引き継げません。")
+    spike_times, spike_ids = _load_spikes(_sibling_record(weights_path, SPIKES), hour)
+    trace_path = _sibling_record(weights_path, TRACE)
+
     axes_path = data_dir / AXES_NAME
     return Parent(
         run_dir=run_dir,
@@ -193,4 +247,8 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
         axes_path=axes_path if axes_path.exists() else None,
         geometry=_load_geometry(data_dir),
         drift=_load_drift(data_dir),
+        spike_times=spike_times,
+        spike_ids=spike_ids,
+        window_ms=float(window_ms),
+        trace_path=trace_path if trace_path.exists() else None,
     )

@@ -6,8 +6,8 @@
 **1 ファイルに 2 枚あるのは、どちらも同じ前処理を必要とするから。** 損傷実験には
 develop に無い事情が 2 つあり、`_surviving_trajectories()` がその両方を吸収している。
 
-1. **baseline と post でシナプス本数が違う。** baseline は Phase 1 (切断前・全シナプス)、
-   post は Phase 2 (切断後)。同じ図に載せるには、生き残ったシナプスへ引き当てる必要が
+1. **baseline と post でシナプス本数が違う。** baseline は切断前 (全シナプス)、
+   post は切断後。同じ図に載せるには、生き残ったシナプスへ引き当てる必要が
    ある (`src/utils/analysis/weights.align_subset_to_coo`)。位置で対応づけてはいけない。
 2. **時間軸が切断からの相対時間で、負の領域を持つ。** baseline は切断より前の測定。
 
@@ -50,7 +50,7 @@ def _surviving_trajectories(series) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     for window in series.windows:
         values = window.weights()
         if window.is_baseline:
-            # Phase 1 の全シナプスぶんある。生き残った分へ (pre, post) で引き当てる。
+            # 切断前の全シナプスぶんある。生き残った分へ (pre, post) で引き当てる。
             values = align_subset_to_coo(pre.row, pre.col, values,
                                          post.row, post.col, int(post.shape[1]))
         hours.append(window.hour)

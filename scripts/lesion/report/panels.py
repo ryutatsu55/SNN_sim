@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from scripts.lesion.report import guard
 from scripts.lesion.store import paths
+from scripts.lesion.store.records import probe_token
 from scripts.lesion.analysis.metrics import build_row
 from scripts.lesion.figures.avalanche import avalanche_distribution
+from scripts.lesion.figures.correlation import correlation_matrix
+from scripts.lesion.figures.correlation_network import correlation_network
+from scripts.lesion.figures.isi import isi_distribution
+from scripts.lesion.figures.network import weight_network
 from scripts.lesion.figures.raster import raster
+from scripts.lesion.figures.synapse_hist import weight_distribution
+from scripts.lesion.figures.trace import neuron_trace
 from scripts.lesion.figures.weight_matrix import weight_matrix
 
 
@@ -24,6 +31,24 @@ FIGURES = (
     ("raster", raster, paths.RASTER, "raster_{tag}.png"),
     ("avalanche plot", avalanche_distribution, paths.AVALANCHE, "avalanche_{tag}.png"),
     ("weight matrix", weight_matrix, paths.WEIGHT, "weight_matrix_{tag}.png"),
+    # 機能的結合 (Watanabe et al. 2026 Fig. 2b)。重み行列と同じ並びで出るので、
+    # 「繋がっている」と「実際に同期している」を 2 枚並べて読める。
+    ("correlation matrix", correlation_matrix, paths.CORRELATION,
+     "correlation_{tag}.png"),
+    # 同じ相関を空間に置いたもの (論文 Fig. 3c 上段)。座標を持たない run (`no_space`)
+    # では window.coords() が MissingData を投げるので図は出ない。
+    ("correlation network", correlation_network, paths.CORRELATION_NETWORK,
+     "correlation_network_{tag}.png"),
+    # スパイク間隔の分布。平均発火率だけでは見えない「たまに高頻度で撃つ」が読める。
+    ("ISI distribution", isi_distribution, paths.ISI, "isi_{tag}.png"),
+    ("weight distribution", weight_distribution, paths.WEIGHT_DIST,
+     "weight_distribution_{tag}.png"),
+    # 座標を持たない run (`no_space`) では window.coords() が MissingData を投げるので、
+    # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
+    ("weight network", weight_network, paths.WEIGHT_NETWORK, "weight_network_{tag}.png"),
+    # トレースを採っていない probe では window.trace() が MissingData を投げるので、
+    # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
+    ("neuron trace", neuron_trace, paths.TRACE, "neuron_trace_{tag}.png"),
 )
 
 
@@ -40,9 +65,10 @@ def emit(window, *, metrics) -> None:
     metrics.append(build_row(window))
 
     # --- 図 ---
-    # 窓を指すのは probe の番号と phase。**時刻はファイル名に埋めない** ——
+    # 窓を指すのは probe の token (`p003` / `baseline`)。**npz と同じもの**を使うので、
+    # 図から元の記録を引くのに読み替えが要らない。**時刻はファイル名に埋めない** ——
     # 切断前の probe は負の時刻を持ち、間隔が細かいと float の往復で戻らないため。
-    tag = f"p{window.index:03d}_{window.phase}"
+    tag = probe_token(window.index)
     for label, draw, kind, template in FIGURES:
         guard(label, draw, window,
               paths.fig_path(window.run_dir, kind, template.format(tag=tag)))

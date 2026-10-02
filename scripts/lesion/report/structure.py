@@ -1,8 +1,8 @@
 """**切断の直後**に出すもの。
 
-develop の `structure.py` が「build 直後」に出すのに対し、lesion は **Phase 2 を
-build した直後** —— つまり切断が済んだネットワークの形を出す。切断前の形は親 run の
-`figures/structure/` に残っているので、ここで両方は出さない。
+develop の `structure.py` が「build 直後」に出すのに対し、lesion は**切断が済んだ
+ネットワーク**の形を出す。切断前の形は親 run の `figures/structure/` に残っているので、
+ここで両方は出さない。
 
 **渡す軸索幾何は必ず切断後のもの。** builder のコネクタが持つ幾何は
 `replace_global_coo()` の影響を受けないので、既定のままだと `axon_network.png` に
@@ -33,7 +33,10 @@ FIGURES = (
     ("area", area_figure, "area.png"),
     ("connection mask", connection_mask, "connection_mask_coarse.png"),
     ("delay distribution", delay_distribution, "delay_distribution.png"),
-    ("weight distribution", weight_distribution, "weight_distribution.png"),
+    # 切断直後 = **切断後の可塑性が 1 ステップも走る前**の重み。probe ごとの同じ図は
+    # panels が出すので、ここは 0 h の手前を残すためにある。
+    # **名前は panels のものと変えること** —— ログの `skip X` がどちらの話か分からなくなる。
+    ("weight distribution at cut", weight_distribution, "weight_distribution.png"),
     ("network sample", network, "network_sample.png"),
     ("axon network", axon_network, "axon_network.png"),
     # 「その距離のペアのうち何割が繋がったか」(確率) と「実際に張られた結合の長さが

@@ -1,7 +1,7 @@
 # lesion 実験
 
 `scripts/develop/` が育てたネットワークを引き継ぎ、**特定の結合を構造的に除去**して、
-切断直前から回復までを等間隔で記録する。
+切断からの回復を追う。ベースライン (切断直前) は親 run の記録をそのまま使う。
 
 **`scripts/develop/` と同じ 5 層構造** (`report/` `store/` `analysis/` `figures/`)。
 違うのは「何を記録し、何を測り、どう描くか」だけで、層の役割も解析・描画関数の引数も同じ。
@@ -11,16 +11,32 @@
 ## 走らせる
 
 ```bash
-python -m scripts.lesion --parent outputs/develop/<条件> --condition <条件名>
+python -m scripts.lesion --parent outputs/develop/<条件>
 ```
 
 | 引数 | 意味 |
 |---|---|
 | `--parent` | 引き継ぐ親 run。**run ディレクトリそのものでも、`seedNN/` を並べた条件ディレクトリでもよい** |
-| `--condition` | 条件名。`outputs/lesion/<条件名>/` になる |
 | `--task` | `task.yaml` の損傷プロトコル名 (既定 `lesion`) |
-| `--parallel` | 同時に走らせる run の数 (既定 1)。**結果に影響しない**ので引数でよい |
+| `--parallel` | 同時に走らせる run の数。**既定は親 run の `simulation.parallel`** (親の本数で頭打ち)。**結果に影響しない**ので引数で上書きしてよい |
 | `--dry-run` | GeNN を触らず、切断対象を数えて終了 |
+
+### 出力は親 run の下
+
+```
+<親 run>/bridge-inter_cluster/          親が 1 本
+<親条件>/seed01/bridge-inter_cluster/   親が sweep なら seed ごとに 1 つずつ
+<親条件>/seed02/bridge-inter_cluster/
+```
+
+**`outputs/lesion/` は使わない。** 損傷 run は親 run に完全に従属していて、親を消したら
+再現も再解析もできないので、置き場所も親に従属させる (ルート `CLAUDE.md` の
+「出力は `outputs/<実験名>/<条件>/`」はこの実験には当てはまらない)。
+
+ディレクトリ名 `<切断条件>` は**切断 spec から機械的に決まる**
+(`analysis/selectors.py` の `cut_label()`)。だから条件名を受ける引数が無い ——
+名前と中身がずれる余地を作らないため。同じ親を同じ spec で 2 度切ることはできない
+(既にあれば止まる。撮り直すなら先に消す)。
 
 ### なぜ develop と違って `--config` を取らないのか
 
@@ -35,18 +51,18 @@ run ディレクトリへ置く。
 失敗した run だけやり直す / 図と指標を作り直す:
 
 ```bash
-python -m scripts.lesion.run_one outputs/lesion/<条件>/seed03
-python -m scripts.lesion.replot  outputs/lesion/<条件>/seed03 [--no-structure]
+python -m scripts.lesion.run_one <親>/seed03/bridge-inter_cluster
+python -m scripts.lesion.replot  <親>/seed03/bridge-inter_cluster [--no-structure]
 ```
 
-### 条件ディレクトリを丸ごと作り直す
+### sweep を丸ごと作り直す
 
 `replot.py` が取るのは**run ディレクトリ 1 つ** (`config.yaml` と `data/` を持つ階層) です。
-sweep の条件ディレクトリはその下に `seed01`…`seedNN` を束ねたものなので、シェルの
-ループで回します。**暫定の手順で、専用の入口はまだありません。**
+親が sweep なら seed ごとに 1 つあるので、シェルのループで回します。
+**暫定の手順で、専用の入口はまだありません。**
 
 ```bash
-for d in outputs/lesion/<条件>/seed*; do
+for d in outputs/develop/<条件>/seed*/bridge-inter_cluster; do
     python -m scripts.lesion.replot "$d"
 done
 ```
@@ -63,80 +79,351 @@ done
 
 ```yaml
 lesion:
-  from_hour: null              # 親のどの記録時刻の重みを引き継ぐか。null なら最後
-  cut:                         # 切断 spec。複数書ける
+  from_hour: null              # 親のどの記録時刻を引き継ぐか。null なら最後
+  cut:                         # 切断 spec。複数書ける。**run ディレクトリ名になる**
     - "bridge:kind=inter_cluster"
   cut_combine: or              # "or" | "and"
-  settle_ms: 60000.0           # 復元直後・切断直後に落ち着かせる時間
-  baseline_window_ms: null     # null なら record_window_ms と同じ
-  recovery_hours: 12.0         # 切断後に観察する総時間
-  probe_interval_hours: 1.0    # probe の間隔 (等間隔)
+  settle_ms: 60000.0           # 切断直後に落ち着かせる時間。時間軸には含まれない
+  record_hours: [0..12]        # 記録する時刻 [h]。**基準は切断の瞬間**
   record_window_ms: 600000.0   # 1 probe の記録窓
   record_buffer_ms: 10000.0
-  hub_z: 2.5                   # ハブ判定の within-module z 閾値
-  include_betweenness: true    # 重い指標。大きな N では切る
-  include_clustering: true
 ```
 
-### 切断 spec
+`record_hours` の書き方は develop と同じ (`[0, 6, 72]` / `[0..12]` / `[0..3:0.5]`、
+**リストは範囲にならない**)。展開は `config_manager.expand_hours_spec()` が唯一の入口で、
+run の `config.yaml` には展開後の時刻が並ぶ。
 
-| spec | 意味 |
-|---|---|
-| `bridge:kind=inter_cluster` | ブリッジを跨いだ結合 (**幾何的**な定義) |
-| `between:axis=module` | 群をまたぐ結合 (**位相的**な定義) |
-| `hub:metric=participation,top=3,direction=out` | ハブの出力 |
-| `synapses:pairs=3-7+12-40` | 名指し |
+**総時間を書くフィールドは持たない。** run 長は `record_hours` の最大値 +
+`record_window_ms` で決まるので、手計算した値と実際が食い違う余地を作らない。
 
-**`bridge` と `between` は一致しない。** 「ブリッジを横切った軸索が作った結合」と
-「module ラベルが違う結合」は別の集合。`lesion.json` の `cross_check` に両方の本数が
-入るので、解釈するときに取り違えないこと。
+**解析のパラメータはここに無い。** ハブ判定の z 閾値 (Guimera-Amaral の 2.5) も、
+媒介中心性を厳密に解く上限 N も、それを使う `src/utils/analysis/graph.py` が既定値として
+持っている。config に置くと同じ定義が 2 か所になるうえ、切断条件と紛らわしい ——
+**何をどこで切るかを決めるのは `cut` の spec だけ**。
 
 ---
 
-## 2 フェーズ / 2 モデル構成
+## 切断 spec
 
-構造的除去を選んだ時点で、切断は再ビルドを意味する (GeNN のシナプス集団は
-`set_sparse_connections()` で確定し、実行中に行を削れない)。したがって 1 プロセスで
-**2 回 build する**のが唯一の素直な形になる。
+`task.yaml` の `cut:` に並べる文字列。**「どのシナプスを切るか」を決めるのはここだけ**で、
+ほかの設定は一切関与しない。
+
+### 文法
 
 ```
-Phase 1 (intact)                      Phase 2 (lesioned)
-─────────────────                     ──────────────────
-親 config を同一 seed で再ビルド
-  → 保存済み重みを join で復元
-  → settle → baseline probe を 1 点
-  → w_pre を pull して保存  ──────────→ 同じ config で再ビルド
-                                        → w_pre を復元し、切断マスクで行を削除
-                                        → 等間隔 probe で回復を追う
+NAME
+NAME:key=value
+NAME:key=value,key=value,...
 ```
 
-こうする理由は 2 つ。**ベースラインが「切断直前のまさにその重み」になる** (親 run の
-記録時刻の値を借りるのではなく、同じプロセスで測った値になる) こと。そして Phase 2 の
-復元重みが Phase 1 の dump と残存シナプス上で一致することを assert できるので、
-**復元経路そのものが自己検証になる**こと。代償は GeNN のコンパイルが 2 回走ること。
+- `NAME` は `hub` / `bridge` / `between` / `synapses` の 4 つ。**小文字のみ**
+  (`Bridge` は解釈されずエラー)。
+- 引数は `,` 区切りの `key=value`。空白は前後が除かれる。
+- **キーを 1 つも書かなくてよい。** 省略したキーは既定値になる (`hub` だけで
+  `hub:metric=participation,top=1,direction=out` と同じ)。
+- **未知のキーは即エラー。** `top` を `topk` と書いて黙って全件切る、が最悪の失敗なので。
+- 値の中で `+` は「複数並べる」の意味 (`parts=A+B` / `pairs=1-2+3-4`)。
+- YAML 上はクオート無しでも文字列として読めるが (`- bridge:kind=inter_cluster`)、
+  **クオートして書くのを既定にしている** —— コロンを含む値を足したときに黙って壊れないため。
+
+```yaml
+cut:
+  - "bridge:parts=BX1-3"
+  - "hub:metric=out_strength,top=5,direction=both"
+cut_combine: or
+```
+
+**書いたら `--dry-run` で数える。** GeNN を触らずに下見だけ走るので、spec を確かめるのは
+これが一番早い。切断本数・属性ごとの「切断群 vs 残存群」・幾何 vs 位相の突き合わせまで
+端末に出る。run ディレクトリに記録は残らない。
+
+```bash
+python -m scripts.lesion --parent outputs/develop/<条件> --dry-run
+```
+
+---
+
+### `bridge` —— 軸索が通ったブリッジで切る (幾何的)
+
+**その part の領域を軸索の折れ線が実際に通過したシナプス**を切る。pre / post がどの
+モジュールに属するかは見ない。
+
+| キー | 既定 | 値 |
+|---|---|---|
+| `kind` | `any` | `any` / `inter_cluster` (`BX*`) / `intra_cluster` (`BC*`) |
+| `parts` | (なし) | ブリッジ part 名を `+` で並べる。**書くと `kind` は無視される** |
+| `samples` | 関数の既定 | 折れ線をブリッジ判定するときのサンプル点数。上げると取りこぼしが減る |
+
+```yaml
+- "bridge:kind=inter_cluster"        # BX で始まる 4 本すべて
+- "bridge:kind=intra_cluster"        # BC で始まる 16 本すべて
+- "bridge:parts=BX1-3"               # クラスタ 1-3 を繋ぐ 1 本だけ
+- "bridge:parts=BX1-3+BX0-2"         # そのどちらかを通ったもの (OR)
+- "bridge:parts=BC1-0-2,samples=200" # クラスタ 1 内の 1 本、判定を細かく
+```
+
+**part 名は area が決める。** `hierarchical_modular_grid` なら
+`C{c}-M{m}` (モジュール 16) / `BC{c}-{m1}-{m2}` (クラスタ内ブリッジ 16) /
+`BX{c1}-{c2}` (クラスタ間ブリッジ 4)。実際の並びは:
+
+```
+BC0-0-1 BC0-0-2 BC0-1-3 BC0-2-3  BC1-0-1 … BC3-2-3      (16 本)
+BX0-1   BX0-2   BX1-3   BX2-3                            (4 本)
+```
+
+`kind` の `BX` / `BC` という接頭辞での分類は **`hierarchical_modular_grid` 固有の命名**に
+依存しているので、`selectors.py` (実験側) が判定を持つ。汎用側でのブリッジの定義は
+「`allow_soma: false` の part」1 つだけ (`src/utils/analysis/connectivity.bridge_part_indices`)。
+
+**切るのは「露出した通路を通った結合」。** ブリッジ part は union を連結にするため両端を
+`bridge_overlap` だけモジュールへ食い込ませてあるが、その食い込みはモジュールの内側なので
+判定から外す (`axons.synapse_crossed_bridges`)。ここを区別しないと、モジュール内で完結する
+軸索が食い込みをかすめただけで切られる —— 既定値では切断本数が 2〜3 倍に膨らみ、その
+半分近くが同一モジュール内の結合になる (`docs/technical/compat_breaks.md`)。
+
+判定範囲は **soma から「その結合の接触点」まで**なので、接触より後に通ったブリッジでは
+切られない。逆に、露出部へ出てから戻って接触した結合は切られる —— 軸索を 1 本の線として
+焼くのだから、切断点より遠位の結合は全部落ちるのが正しい。
+
+**要るもの**: 軸索の幾何 (`connection: axon_growth` 系) と、part を持つ area。
+`constant_prob` や `no_space` の run では使えない (明示的にエラーで止まる)。
+
+**止まる書き方**: 存在しない part 名 → 全 part 名を並べてエラー。モジュール part
+(`C1-M3` など) を書いた → 「条件に合うブリッジ part がありません」。
+
+---
+
+### `between` —— 軸のラベルが違う結合を切る (位相的)
+
+`layout` の軸を見て、**pre と post でラベルが違う**シナプスを切る。軸索がどこを通ったかは
+見ない。
+
+| キー | 既定 | 値 |
+|---|---|---|
+| `axis` | `module` | layout の軸名 |
+| `pairs` | (全部) | `A-B+C-D`。指定したラベル対だけに絞る。**向きは問わない** (A→B も B→A も) |
+
+```yaml
+- "between:axis=module"                          # module が違う結合すべて
+- "between:axis=polarity,pairs=excitatory-inhibitory"   # E→I と I→E だけ
+```
+
+**使える軸**は run によって違う。config だけから決まるのが `population` / `mode` /
+`polarity` の 3 つで、それに space や connection が貼る軸が加わる。
+`hierarchical_modular_grid` + `axon_growth` の run なら:
+
+```
+population    2 値   Layer_Exc / Layer_Inh
+mode          2 値   excitatory / inhibitory
+polarity      2 値   excitatory / inhibitory
+module       16 値   C0-M0 … C3-M3
+axon_length 255 値   (連続値。切断の軸には向かない)
+```
+
+**`pairs` はラベルにハイフンを含む軸では使えない。** 値は最初のハイフンで 2 つに割るので、
+`pairs=C1-M3-C2-M0` は `("C1", "M3-C2-M0")` と解釈され、どのラベルにも一致しない
+(結果 0 本になり、run は「切断対象が 0 本です」で止まる)。module 単位で絞りたいときは
+`bridge:parts=` を使うか、`axis=module` を丸ごと切ること。
+
+---
+
+### `hub` —— 指標の上位ニューロンの結合を切る
+
+ニューロン単位の指標を計算し、**上位 `top` 個**のニューロンに繋がるシナプスを切る。
+閾値ではなく順位で選ぶ。
+
+| キー | 既定 | 値 |
+|---|---|---|
+| `metric` | `participation` | 下表の 8 つ |
+| `top` | `1` | 上位いくつ取るか |
+| `direction` | `out` | `out` (そのニューロンが pre) / `in` (post) / `both` (和) |
+| `axis` | `module` | `participation` と `within_module_z` を測るときのモジュール軸 |
+
+| `metric` | 何の上位か |
+|---|---|
+| `out_degree` / `in_degree` / `degree` | 出次数 / 入次数 / 合計 |
+| `out_strength` / `in_strength` | 重み付き次数 (重みは**親から復元した実値**) |
+| `betweenness` | 媒介中心性 (有向、正規化済み) |
+| `participation` | Guimera-Amaral の参加係数 (モジュールをまたぐ度合い) |
+| `within_module_z` | モジュール内 z スコア (モジュール内でのハブ度) |
+
+```yaml
+- "hub:metric=participation,top=3,direction=out"   # コネクタ上位 3 個の出力
+- "hub:metric=out_strength,top=5,direction=both"   # 強い出力を持つ 5 個の入出力
+- "hub"                                            # = participation, top=1, out
+```
+
+**同点の扱いは決めていない。** 次数系の指標は小さい網だと同点が多く、`top=3` が同点の中から
+どの 3 個を取るかは規定されていない (`np.argsort` の順)。再現はするが、**「上位 3 個」に
+意味があるかは指標の分布を見てから決めること。**
+
+**`metric=betweenness` は N > 2000 で推定値に落ちる** (`graph.py` の
+`DEFAULT_MAX_EXACT_BETWEENNESS`)。ピボットのシードは固定なので run をまたいで再現するが、
+厳密解ではない。大きな網でこれを切断の基準にするなら、その前提を承知の上で使う。
+
+**指標はすべて切断前のネットワークで測る。** 切った後にハブが入れ替わっても選択は変わらない。
+
+---
+
+### `random` —— 極性で絞った結合から無作為に切る
+
+pre / post の極性で候補を絞り、その**候補のうち** `fraction` の割合を無作為に切る。
+E/I の釣り合いを意図的に崩す損傷 (E の出力だけを失わせる等) に使う。
+
+| キー | 既定 | 値 |
+|---|---|---|
+| `fraction` | — (必須) | (0, 1]。**候補の本数に対する**割合 |
+| `pre` | `any` | `exc` / `inh` / `any` |
+| `post` | `any` | `exc` / `inh` / `any` |
+| `seed` | `0` | 抽選の乱数。**シミュレーションの乱数とは独立** |
+
+```yaml
+- "random:pre=exc,fraction=0.1"            # E の出力 (E→E と E→I) の 10%
+- "random:pre=exc,post=exc,fraction=0.1"   # E→E だけの 10%。I が受ける E 入力は残る
+```
+
+**E→I も切るかどうかで意味が変わる。** `pre=exc` だけだと I ニューロンも E 入力を失うので、
+E が受ける I 駆動も一緒に落ちて E/I 比が崩れにくい。E が受ける E/I 比を崩したいなら
+`post=exc` まで絞る。
+
+同じ親 run・同じ spec なら同じシナプスが選ばれる (候補は COO の row-major 順、
+抽選は `seed` だけで決まる)。別の抽選を見たいときは `seed` を変える —— ディレクトリ名に
+入るので別の run になる。
+
+---
+
+### `synapses` —— 名指しで切る
+
+| キー | 既定 | 値 |
+|---|---|---|
+| `pairs` | — | `pre-post` を `+` で並べる。**グローバル ID** |
+| `file` | — | `pre` / `post` 列を持つ CSV へのパス。実行時のカレントからの相対 (ランチャ経由ならプロジェクトルート) |
+
+```yaml
+- "synapses:pairs=3-7+12-40"
+- "synapses:file=data/cut_list.csv"
+```
+
+**存在しないペアはエラー。** 黙って無視すると「何も切らなかった」が静かに通るため。
+ID はグローバル (`0..N-1`) で、population ローカルではない。
+
+---
+
+### 複数の spec を組み合わせる
+
+`cut` はリストなので何本でも書ける。合成は `cut_combine`:
+
+| `cut_combine` | 意味 |
+|---|---|
+| `or` (既定) | どれかに該当するシナプス |
+| `and` | 全部に該当するシナプス |
+
+```yaml
+cut:
+  - "bridge:kind=inter_cluster"
+  - "hub:metric=participation,top=3,direction=out"
+cut_combine: and        # ハブの出力のうち、クラスタ間ブリッジを通ったものだけ
+```
+
+`and` は交わりが空になりやすく、0 本なら run は止まる。`lesion.json` の
+`selector_detail.parts` に **spec ごとの本数**が残るので、どちらが効いたかは後から読める。
+
+### spec は run ディレクトリ名になる
+
+| spec | ディレクトリ名 |
+|---|---|
+| `bridge:kind=inter_cluster` | `bridge-inter_cluster` |
+| `bridge:parts=BX1-3` | `bridge-BX1-3` |
+| `between:axis=module` | `between-module-all` |
+| `hub:metric=participation,top=3,direction=out` | `hub-participation-top3-out` |
+| `random:pre=exc,post=exc,fraction=0.1` | `random-exc-exc-f0.1-seed0` |
+| `synapses:pairs=3-7+12-40` | `synapses-2` |
+| 上記 2 つを `and` | `<label1>_and_<label2>` |
+
+ネットワークを組む前に spec だけから決まる (`selectors.cut_label()`)。**同じ親を同じ spec で
+2 度切ることはできない** (既にあれば止まる)。
+
+### `bridge` と `between` は一致しない
+
+「ブリッジを横切った軸索が作った結合」と「module ラベルが違う結合」は別の集合で、本数も違う。
+モジュール内で完結しつつブリッジに出入りする軸索があるため。実測 (N=256 の run):
+
+```
+bridge_crossing_geometric : 1106 本   (どれかのブリッジを通った)
+between_module_topological:  542 本   (module ラベルが違う)
+bridge:kind=inter_cluster :  262 本   (BX* を通った = 実際に切った本数)
+```
+
+`lesion.json` の `cross_check` に前 2 つが入るので、**解釈するときに取り違えないこと。**
+
+---
+
+## 切断は再ビルド / ベースラインは親 run から
+
+GeNN のシナプス集団は `set_sparse_connections()` で確定し、実行中に行を削れない。
+だから構造的除去は「生成直後の COO から行を落としてから登録する」という形になる
+(`NetworkBuilder.build(transform_coo=...)`)。
+
+```
+下見 (build するが compile しない)
+  → 親の重みを (pre, post) で復元し、切断対象を決める
+  → 記録を書く (config / 結合 / lesion.json / 切断プロファイル)
+  → ベースライン (probe 0) = 親 run の記録時刻の窓をそのまま置く
+本番 (compile する 1 回きりの build)
+  → 復元した重みを載せ、切断マスクで行を削除
+  → settle → record_hours の各時刻で probe
+```
+
+**ベースラインは測り直さない。** 切断前のネットワークをもう一度走らせても、settle と
+記録窓のあいだに起きるのは親 run の続きでしかないので、親の `weights_{h}h.npz` と
+`spikes_{h}h.npz` をそのまま probe 0 に置く (引き継ぎ時刻は `task.from_hour`)。
+おかげで GeNN のコンパイルは run につき 1 回で済む。
+
+**ベースライン窓の幅は親のもの**で、`task.record_window_ms` とは違いうる。窓幅は窓ごとに
+npz が持つので発火率は正しく出るが、**全部を同じ幅で割ってはいけない**。
+
+復元経路は自己検証する。`setup()` の後に GeNN から重みを pull し、親から引き当てた値の
+残存ぶんと一致することを assert する。ここが狂うと以降の指標は全部別物になる。
 
 ### 重みの引き当ては位置ではなく (pre, post)
 
-親 run の重み、Phase 1 の dump、Phase 2 の COO —— どれも本数が違いうるので、
-`analysis/restore.py` が **(pre, post) の組で join** する。位置で対応づけると、1 本でも
-ずれたときに黙って別のシナプスへ値が乗る。引き当てに失敗したら止まる。
+**並べ替えのためではなく、検証のためにこの形にしてある。** COO は row-major ソート済み
+(ルート `CLAUDE.md` の不変条件 4) なので、親と同じネットワークが出ているなら並びも同じで、
+位置で対応づけても結果は変わらない。違うのは**同じでなかったときの振る舞い**:
+
+- 位置: 黙って別のシナプスへ値が乗る。どこも例外を出さない
+- join: 本数が違う / 保存側に無いシナプスがある / 保存側に重複がある、のどれかで止まる
+  (`src/utils/analysis/weights.align_saved_to_coo`)
+
+3 つを全部通ることは「結合集合として同一」と同値なので、**この join が
+「親 run と同じネットワークを組み直せた」ことの証明そのもの**になっている。
+位置で対応づけると、この証明ごと無くなる。コストは数十万本でも sort 1 回ぶん。
+
+### 外部軸は切断対象を決める前に読み戻す
+
+軸そのものは下見の build で各コンポーネントが貼り直す (`describe_axes()`)。親の
+`layout_axes.npz` を読み戻すのは、**貼り直した軸を記録された値に釘で留める**ため ——
+コンポーネントの実装が変われば、同じ config・同じ seed でも別のラベルになりうる。
+
+`between:axis=module` はその軸を見て切るので、読み戻しが選択より後だと
+**「親 run とは違うラベルで切った」ことに気づけないまま通る**。親が記録した軸を
+今回の build が貼らない場合も、読み戻しが後なら `labels()` の例外が出ずに
+別の選択になる。`run_one.py` は下見の build の直後・`select_cut()` の前に
+`load_axes_file()` する。
 
 ---
 
 ## 出力
 
-```
-outputs/lesion/<条件>/            親が 1 本  -> ここが run ディレクトリそのもの
-outputs/lesion/<条件>/seed01/     親が複数   -> ここが run ディレクトリ
-```
+run ディレクトリは `<親 run>/<切断条件>/`。
 
 ```
 <run>/
 ├── config.yaml           **run の記録**。親 run・切断 spec・タイムラインが全部入る
 ├── run.log
 ├── data/
-│   ├── connectivity_pre.npz  Phase 1 (切断前) の結合
-│   ├── connectivity.npz      Phase 2 (切断後) の結合
+│   ├── connectivity_pre.npz  切断**前**の結合 (全シナプス)
+│   ├── connectivity.npz      切断**後**の結合 (生き残り)
 │   ├── layout_axes.npz
 │   ├── coords.npz            soma の座標 (`no_space` の run には無い)。切断で動かない
 │   ├── lesion.json           **切断で何が起きたかの記録**
@@ -145,16 +432,51 @@ outputs/lesion/<条件>/seed01/     親が複数   -> ここが run ディレク
 │   ├── metrics.csv           probe ごとの指標 (**絶対値のみ、1 行ずつ追記**)
 │   ├── metrics_delta.csv     ベースラインとの差 (run 終了後に一括)
 │   ├── connection_probability.csv / bridge_hops.csv   切断**後**の群間結合確率
-│   ├── weights_p{NNN}.npz    その probe の重み
-│   └── spikes_p{NNN}.npz     スパイク + 窓の原点 / 窓幅 / phase
+│   ├── weights_p{NNN}.npz    その probe の重み (NNN = record_hours の添字)
+│   ├── spikes_p{NNN}.npz     スパイク + 窓の原点 / 窓幅 / phase
+│   ├── trace_p{NNN}.npz      膜電位トレース。**採った probe だけ**
+│   └── {kind}_baseline.npz   親から引き継いだベースライン (番号を持たない)
 └── figures/
     ├── structure/        切断**後**のネットワークの形
     ├── panels/           **probe ごと**の図。probe の数だけ増えるものはここへ
     │   ├── raster/
     │   ├── avalanche/
-    │   └── weight/       その probe の重み行列
-    └── overview/         weight_trajectories / weight_distribution_shift / firing_rate_scatter
+    │   ├── weight/               その probe の重み行列
+    │   ├── weight_distribution/  その probe の重み分布
+    │   ├── weight_network/       その probe の重みで描いたネットワーク図
+    │   ├── correlation/          その probe のニューロン間相関行列
+    │   ├── correlation_network/  相関の強いペアだけを空間に描いた無向グラフ
+    │   └── trace/                task.trace_neuron を指定した run のみ
+    └── overview/         weight_trajectories / weight_distribution_shift /
+                          firing_rate_scatter / mean_correlation_track / drive_track
 ```
+
+### `metrics.csv` の駆動の列 (`drive_*`)
+
+各ニューロンが E / I から実際に受け取った**時間平均コンダクタンス [nS]** を、後ニューロンの
+極性ごとに平均したもの (`analysis/drive.py`)。スパイク列から STP を再現して積むので、
+発火率や重みだけでは見えない「実際に届いた量」になる。
+
+| 列 | 意味 |
+|---|---|
+| `drive_exc_onto_e_ns` / `drive_inh_onto_e_ns` | E ニューロンが E / I から受けた駆動 |
+| `drive_ei_ratio_onto_e` | その比 (E / I) |
+| `drive_*_onto_i_*` | I ニューロンについて同じもの |
+
+**可塑性 `custom_Akita` × シナプス `ExpCond` の組でしか計算できない** (それ以外の run では
+`NotImplementedError` で止まる)。**電流ではなくコンダクタンス**なので、駆動力
+(V − E_rev) は掛かっていない。
+
+### `structure/` と `panels/` の出自は develop の複製
+
+`figures/` と `report/{structure,panels}.py` は **`scripts/develop/` から複製したもの**。
+いまのところ出る図の種類・ファイル名・描き方はほぼ同じで、窓のタイトルだけ `hour` では
+なく `label` (`baseline (-0.17 h)` / `post (+3.00 h)`) を使う —— 損傷実験では時刻だけでは
+切断の前後が読めないため。
+
+これは**出自の説明であって、揃え続ける決まりではない**。複製であって共有ではないのは、
+図が実験ごとに分岐するのが目的だから (ルート `CLAUDE.md`)。片方の図を直したときに
+もう片方へ持っていくかどうかは、**そのつど決める**。
 
 ### ファイル名が develop と違う
 
@@ -167,22 +489,33 @@ outputs/lesion/<条件>/seed01/     親が複数   -> ここが run ディレク
 **時刻の正は npz が持つ** (`record_start_ms` / `record_window_ms` / `phase`)。index は
 並べ替えと人間の目印だけに使う。これは develop と同じ約束で、違うのは名前の付け方だけ。
 
+**index は `task.record_hours` の添字。** `record_hours: [0..20]` なら `p000`〜`p020` で、
+3 番目の記録時刻が `p002`。ベースラインはこの並びに属さない (親 run 由来で窓幅も別) ので
+番号を持たず、`{kind}_baseline.npz` という名前で区別する。
+
+**図のファイル名も同じ token を使う** (`raster_p003.png` / `raster_baseline.png`)。
+npz と図を突き合わせるのに読み替えが要らない。
+
 ### `hour` の基準は切断時刻
 
 契約の `Window.hour` は「基準時刻からの経過 [h]」で、基準は実験が決める。develop は
 run の開始、**lesion は切断の瞬間**。baseline は窓の幅ぶん手前 (負) に置く —— 0.0 にすると
 post の最初の probe と重なり、切断の瞬間が図でも CSV でも判別できなくなる。
 
+**`settle_ms` はこの時間軸に含まれない。** `record_hours` の 0 h は「切断して落ち着かせた
+直後」で、切断からの実時間は settle のぶんだけ後ろにある。
+
 ### 窓幅は probe ごとに読む
 
-baseline と post で窓幅を変えられるので、**全部を同じ幅で割ってはいけない**。窓の違いが
-そのまま発火率の段差として現れる。窓幅は各 probe の npz が持つ。
+baseline は親 run の窓、post はこの run の窓なので**幅が違いうる**。全部を同じ幅で
+割ってはいけない —— 窓の違いがそのまま発火率の段差として現れる。窓幅は各 probe の
+npz が持つ。
 
 ---
 
 ## 結果を読むときの注意
 
-**sham (切らない対照) を作っていない。** ベースラインは切断直前の 1 点だけなので、
+**sham (切らない対照) を作っていない。** ベースラインは親 run の記録 1 点だけなので、
 「回復」と「損傷が無くても進んだ発達の続き」は原理的に分離できない。`lesion.json` の
 `parent_drift` に親 run の終盤の動きが入っているので、**回復幅がこのドリフト幅と同オーダー
 なら結論を出さないこと。**
@@ -194,7 +527,7 @@ baseline と post で窓幅を変えられるので、**全部を同じ幅で割
 ```
 scripts/lesion/
 ├── __main__.py     入口: ランチャ (親)。親 run を探して run ディレクトリを作り子を並列起動
-├── run_one.py      入口: 1 run (Phase 1 → 切断 → Phase 2)
+├── run_one.py      入口: 1 run (下見 → 記録 → 切断して build → probe)
 ├── replot.py       入口: 再解析。再ビルドして切り直し、指標と図を全部作り直す
 ├── task.yaml       損傷プロトコル
 │
@@ -210,7 +543,7 @@ scripts/lesion/
 ├── analysis/       何を測るか (表)
 │   ├── metrics.py     probe 1 つの指標 + 切断したものの素性
 │   ├── selectors.py   どこを切るか (spec のパースと選択)
-│   ├── restore.py     重みの引き当て ((pre, post) の join)
+│   ├── restore.py     再ビルドが親と同じネットワークかの検証 (軸索幾何)
 │   └── connectivity.py 群間結合確率
 └── figures/        どう描くか (図)
 ```
@@ -218,9 +551,9 @@ scripts/lesion/
 ### `store/parent.py` —— 実験どうしの横 import を作らないための場所
 
 lesion は develop の run を読むが、**`scripts/develop/` を import しない**。代わりに
-「develop 形式の記録を読む実装」をこちらが持つ。読むのは 6 つだけ
-(`config.yaml` / `connectivity.npz` / `weights_{h}h.npz` / `layout_axes.npz` /
-`axon_geometry.npz` / `metrics.csv`) で、これは develop の内部事情ではなく
+「develop 形式の記録を読む実装」をこちらが持つ。読むのは 7 つだけ
+(`config.yaml` / `connectivity.npz` / `weights_{h}h.npz` / `spikes_{h}h.npz` /
+`layout_axes.npz` / `axon_geometry.npz` / `metrics.csv`) で、これは develop の内部事情ではなく
 **develop と lesion の契約**。ファイル名も `store/parent.py` がローカルに宣言する。
 
 規約が変わったら直す場所は 1 つで、そのことがモジュールの docstring に書いてある。
@@ -232,9 +565,9 @@ lesion は develop の run を読むが、**`scripts/develop/` を import しな
 
 | 旧 | 新 |
 |---|---|
-| CLI 引数 19 個 | `--parent` / `--condition` / `--task` / `--parallel` / `--dry-run` |
+| CLI 引数 19 個 | `--parent` / `--task` / `--parallel` / `--dry-run` |
 | 実験条件が `run_lesion.sh` の設定ブロックにあり `config.yaml` に残らない | 全部 `config.yaml` の `task.*` に焼き込む |
-| 出力先が `outputs/lesion/<日時>_seedN_<label>/` = **ディレクトリ名から条件を読む形** | `outputs/lesion/<条件>/`。名前からは何も読まない |
+| 出力先が `outputs/lesion/<日時>_seedN_<label>/` = **ディレクトリ名から条件を読む形** | `<親 run>/<切断条件>/`。名前は切断 spec から機械的に決まり、読み取りには使わない |
 | 走り終えてから `organize_output()` で移す | 最初から `data/` へ書く |
 | 再解析の入口が無い | `replot.py` (本番と同じ関数を通り、図も `metrics.csv` もバイト一致) |
 | 時刻は `probes.csv` を index で引く | 窓の npz が原点・窓幅・phase を持つ |

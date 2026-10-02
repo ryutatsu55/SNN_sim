@@ -9,6 +9,8 @@ from __future__ import annotations
 from scripts.lesion.report import guard
 from scripts.lesion.store import paths
 from scripts.lesion.analysis.metrics import write_delta_table
+from scripts.lesion.figures.correlation_track import mean_correlation_track
+from scripts.lesion.figures.drive_track import drive_track
 from scripts.lesion.figures.firing_rate import firing_rate_scatter
 from scripts.lesion.figures.weight_track import (weight_distribution_shift,
                                                  weight_trajectories)
@@ -21,7 +23,11 @@ from scripts.lesion.figures.weight_track import (weight_distribution_shift,
 #
 # **記録時刻ごとに出る図はこの段階には無い。** probe ごとの図は `panels.py` が受け持つ。
 FIGURES = (
+    ("weight trajectories", weight_trajectories, "weight_trajectories.png"),
+    ("weight distribution shift", weight_distribution_shift, "weight_distribution_shift.png"),
     ("firing rate scatter", firing_rate_scatter, "firing_rate_scatter.png"),
+    ("mean correlation track", mean_correlation_track, "mean_correlation_track.png"),
+    ("drive track", drive_track, "drive_track.png"),
 )
 
 

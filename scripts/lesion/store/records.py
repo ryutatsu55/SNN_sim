@@ -9,7 +9,8 @@
 
 ## develop / akita_soc と規約が違う理由
 
-あちらは `{kind}_{hour}h.npz`、こちらは `{kind}_p{index:03d}.npz`。
+あちらは `{kind}_{hour}h.npz`、こちらは `{kind}_p{index:03d}.npz`
+(ベースラインだけ `{kind}_baseline.npz`)。
 
 1. **時刻をファイル名に埋めると精度を失う。** `f"{hour:g}h"` は probe 間隔が細かいと
    `1.66667e-05h.npz` になり、float の往復で元の時刻に戻らない。
@@ -22,16 +23,20 @@
 **時刻の正は npz が持つ** (`record_start_ms`)。ファイル名の index は並べ替えと人間の
 目印にしか使わない。これは develop と同じ約束で、違うのは名前の付け方だけ。
 
+**index は `task.record_hours` の添字**。`record_hours: [0..20]` なら p000..p020 で、
+3 番目の記録時刻が p002 になる。ベースラインはこの並びに属さない (親 run 由来で、
+窓幅も別) ので番号を持たず、`baseline` という名前で区別する。
+
 ## 結合構造が 2 つある
 
-損傷実験は**同じ run の中でシナプス本数が変わる**唯一の実験。Phase 1 (切断前) と
-Phase 2 (切断後) で COO が違うので、`connectivity.npz` を 2 本持つ。
+損傷実験は**同じ run の中でシナプス本数が変わる**唯一の実験。切断前と切断後で COO が
+違うので、`connectivity.npz` を 2 本持つ。
 
-    connectivity_pre.npz   Phase 1 の結合 (全シナプス)
-    connectivity.npz       Phase 2 の結合 (生き残ったシナプス)
+    connectivity_pre.npz   切断前の結合 (全シナプス)
+    connectivity.npz       切断後の結合 (生き残ったシナプス)
 
 どちらを使うかは probe の phase で決まる (`series.py` の `Window.wiring()`)。
-2 つをまたいで重みを比べるときは `analysis/restore.py` の `align_subset_to_coo()` で
+2 つをまたいで重みを比べるときは `src/utils/analysis/weights.py` の `align_subset_to_coo()` で
 生存シナプスへ引き当てる —— **位置で対応づけてはいけない。**
 """
 from __future__ import annotations
@@ -44,17 +49,20 @@ from pathlib import Path
 
 import numpy as np
 
-from src.utils.runview import MissingData, Spikes, Wiring
+from src.utils.runview import MissingData, Spikes, Trace, Wiring
 
-# 記録ファイル名 `<種別>_p<番号>.npz`。
-PROBE_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_p(?P<index>\d+)\.npz")
+# 記録ファイル名 `<種別>_p<番号>.npz` と `<種別>_baseline.npz`。
+PROBE_PATTERN = re.compile(
+    r"(?P<kind>[A-Za-z_]+)_(?:p(?P<index>\d+)|baseline)\.npz")
 
 SPIKES = "spikes"
 WEIGHTS = "weights"
+# 単一ニューロンの膜電位トレース (task.trace_neuron を指定した run だけが書く)。
+TRACE = "trace"
 
 # 結合構造。**2 つあるのが lesion の特徴**で、切断の前後で別ファイルに書く。
-POST_CONNECTIVITY_NAME = "connectivity.npz"      # Phase 2 (切断後)
-PRE_CONNECTIVITY_NAME = "connectivity_pre.npz"   # Phase 1 (切断前)
+POST_CONNECTIVITY_NAME = "connectivity.npz"      # 切断後 (生き残り)
+PRE_CONNECTIVITY_NAME = "connectivity_pre.npz"   # 切断前 (全シナプス)
 
 # soma の座標。結合構造と同じく run を通して不変なので 1 回だけ書く。
 #
@@ -71,6 +79,15 @@ METRICS_NAME = "metrics.csv"
 PHASE_BASELINE = "baseline"
 PHASE_POST = "post"
 
+# ベースラインの probe 番号。**この run では測らず、親 run の記録時刻の窓をそのまま置く。**
+#
+# 負の番号にしてあるのは、**post の番号を `task.record_hours` の添字と一致させる**ため。
+# baseline が 0 を取ると `record_hours: [0..20]` が p001..p021 になり、「3 番目の記録時刻」
+# と「p003」が食い違う。baseline はそもそも別種 (親 run 由来・窓幅も別) なので、
+# 番号を共有せずファイル名も `{kind}_baseline.npz` と分ける。
+BASELINE_INDEX = -1
+BASELINE_TOKEN = "baseline"
+
 MS_PER_HOUR = 60.0 * 60.0 * 1000.0
 
 # スパイク npz に埋める鍵。**ファイル名から復元しない**ためのもの。
@@ -85,26 +102,44 @@ class ProbeFile:
     path: Path
 
 
+def probe_token(index: int) -> str:
+    """probe を指す短い文字列。`p003` / baseline は `baseline`。
+
+    **ファイル名にも図のファイル名にも同じものを使う。** 片方だけ規約が変わると、
+    npz と図を突き合わせるのに読み替えが要る。
+    """
+    index = int(index)
+    return BASELINE_TOKEN if index == BASELINE_INDEX else f"p{index:03d}"
+
+
 def probe_filename(kind: str, index: int) -> str:
     """記録ファイル名を組み立てる。読み取り側と同じ規約を使うための唯一の入口。"""
-    return f"{kind}_p{int(index):03d}.npz"
+    return f"{kind}_{probe_token(index)}.npz"
 
 
 def parse_probe_name(name: str) -> tuple[str, int]:
-    """`spikes_p003.npz` -> ("spikes", 3)。規約に合わなければ ValueError。"""
+    """`spikes_p003.npz` -> ("spikes", 3)、`spikes_baseline.npz` -> ("spikes", -1)。
+
+    規約に合わなければ ValueError。
+    """
     match = PROBE_PATTERN.fullmatch(name)
     if match is None:
         raise ValueError(f"probe ファイル名の規約に合いません: {name}")
-    return match["kind"], int(match["index"])
+    index = BASELINE_INDEX if match["index"] is None else int(match["index"])
+    return match["kind"], index
 
 
 def discover_probes(directory: Path, kind: str) -> list[ProbeFile]:
-    """`directory` 直下の probe を index 昇順で返す。
+    """`directory` 直下の probe を index 昇順で返す (baseline は負なので先頭)。
 
-    glob は数字始まりに限る。同じ接頭辞を持つ probe 以外の記録を拾わないため。
+    glob は `p` + 数字と `baseline` に限る。同じ接頭辞を持つ probe 以外の記録を
+    拾わないため。
     """
+    directory = Path(directory)
+    paths = [*directory.glob(f"{kind}_p[0-9]*.npz"),
+             *directory.glob(f"{kind}_{BASELINE_TOKEN}.npz")]
     files = [ProbeFile(index=parse_probe_name(path.name)[1], path=path)
-             for path in Path(directory).glob(f"{kind}_p[0-9]*.npz")]
+             for path in paths]
     return sorted(files, key=lambda item: item.index)
 
 
@@ -208,12 +243,36 @@ def save_spikes(path: Path, times, ids, *, record_start_ms: float,
                 record_window_ms: float, phase: str) -> None:
     """スパイクと、**その窓が何であるか** (原点・窓幅・phase) を同じ npz に書く。
 
+    `times` は**切断軸**の時刻 (切断の瞬間が 0)。GeNN の時計は settle のぶん先を指すので、
+    書く側がそのずれを引いてから渡すこと。
+
     窓幅を窓ごとに持つので、baseline と post で幅が違っても発火率が正しく出る。
     """
-    np.savez_compressed(path, times=np.asarray(times), ids=np.asarray(ids),
+    times = np.asarray(times, dtype=np.float64)
+    _check_window_span(path, times, record_start_ms, record_window_ms)
+    np.savez_compressed(path, times=times, ids=np.asarray(ids),
                         **{RECORD_START_KEY: float(record_start_ms),
                            RECORD_WINDOW_KEY: float(record_window_ms),
                            PHASE_KEY: str(phase)})
+
+
+def _check_window_span(path: Path, times, record_start_ms: float,
+                       record_window_ms: float) -> None:
+    """スパイクが窓 `[原点, 原点+幅]` に収まっているか確かめる。
+
+    時間軸を取り違えた窓 (GeNN の時計をそのまま書いた等) は、どこも例外を出さないまま
+    **空のラスターとずれた burstiness** になるので、書く時点で落とす。
+    """
+    if times.size == 0:
+        return
+    lo = float(record_start_ms)
+    hi = lo + float(record_window_ms)
+    slack = 1.0  # [ms]。窓の端は dt 1 ステップぶん食い違いうる。
+    if times.min() < lo - slack or times.max() > hi + slack:
+        raise ValueError(
+            f"{path.name}: スパイク時刻 [{times.min():.1f}, {times.max():.1f}] ms が"
+            f" 窓 [{lo:.1f}, {hi:.1f}] ms の外です。時間軸が食い違っています。"
+        )
 
 
 def read_window_meta(path: Path) -> tuple[float, float, str]:
@@ -244,6 +303,26 @@ def load_spikes(path: Path) -> Spikes:
         times = np.asarray(data["times"], dtype=np.float64)
         ids = np.asarray(data["ids"])
     return Spikes(times=times - start_ms, ids=ids)
+
+
+def save_trace(path: Path, V, I, *, dt: float, neuron_id: int, window_s: float,
+               spike_times, spike_ids) -> None:
+    """膜電位トレースを書く。図だけでなく生データも残す (後から作れないため)。"""
+    np.savez_compressed(path, V=np.asarray(V), I=np.asarray(I), dt=float(dt),
+                        neuron_id=int(neuron_id), window_s=float(window_s),
+                        spike_times=np.asarray(spike_times),
+                        spike_ids=np.asarray(spike_ids))
+
+
+def load_trace(path: Path) -> Trace:
+    with np.load(path) as data:
+        return Trace(
+            V=np.asarray(data["V"]), I=np.asarray(data["I"]),
+            dt=float(data["dt"]), neuron_id=int(data["neuron_id"]),
+            window_s=float(data["window_s"]),
+            spike_times=np.asarray(data["spike_times"]),
+            spike_ids=np.asarray(data["spike_ids"]),
+        )
 
 
 # ======================================================================================

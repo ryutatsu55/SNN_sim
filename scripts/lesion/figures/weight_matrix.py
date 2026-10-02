@@ -1,4 +1,4 @@
-"""重み行列の imshow。probe 1 点ぶんの 1 枚。
+"""重み行列の imshow。記録時刻 1 点ぶんの 1 枚。
 
 並べ替えは `style.py` の仕組みに乗り、**粗視化結合図と同じ module > polarity** で
 ブロック化する。COO を受け取り、描画の直前にだけ密へ戻す (`densify`)。
@@ -52,11 +52,7 @@ def densify(row: np.ndarray, col: np.ndarray, values: np.ndarray, size: int) -> 
 
 
 def weight_matrix(window, out_path: Path) -> None:
-    """probe 1 点ぶんの重み行列を可視化する。
-
-    **切断前の probe は切断前の結合、切断後は切断後の結合**を描く (`window.wiring()`
-    が phase で切り替える)。したがって baseline と post では行列に載る本数が違う。
-    """
+    """1 記録時刻ぶんの重み行列を可視化する。"""
     coo = window.coo()
     layout = window.layout
     ordering = style.resolve_ordering(layout, style.available_order_axes(layout, ORDER_AXES))

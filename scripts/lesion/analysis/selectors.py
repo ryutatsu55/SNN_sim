@@ -1,11 +1,15 @@
 """損傷 (切断) セレクタ。
 
-**4 種類すべてが「M 本のシナプスに対する bool マスク」を返す**、という 1 点だけで
+**5 種類すべてが「M 本のシナプスに対する bool マスク」を返す**、という 1 点だけで
 統一してある。ハブ基準もモジュール間もブリッジも、結局は「どのシナプスを消すか」でしか
 ないので、合成 (and / or) が自明になり、マニフェストへの記録も 1 本の配列で済む。
 
 CLI の spec 文法は `NAME:key=value,key=value`。未知のキーは即エラーにする ——
 `top` を `topk` と書いて黙って全件切る、が最悪の失敗なので。
+
+**label は spec だけから決まる** (`cut_label()`)。ネットワークを組まなくても読めるので、
+ランチャが run ディレクトリ名に使える。`select()` が返す `LesionSelection.label` も
+同じ値で、実際に何本切れたかによっては変わらない。
 """
 from __future__ import annotations
 
@@ -15,10 +19,11 @@ from typing import Any
 
 import numpy as np
 
-from src.utils.analysis.axons import synapse_crossed_parts
+from src.utils.analysis.axons import synapse_crossed_bridges
 from src.utils.analysis.connectivity import bridge_part_indices
 from src.utils.analysis.graph import (betweenness_centrality, degree_table,
                                       module_participation)
+from src.utils.analysis.weights import excitatory_flags
 
 
 @dataclass(frozen=True)
@@ -34,7 +39,7 @@ class LesionContext:
 @dataclass(frozen=True)
 class LesionSelection:
     cut: np.ndarray               # bool (M,)
-    label: str                    # ディレクトリ名用の短い識別子
+    label: str                    # run ディレクトリ名になる短い識別子。spec だけで決まる
     description: str              # 人が読む 1 行
     detail: dict = field(default_factory=dict)   # 選択根拠。lesion.json へそのまま入る
 
@@ -52,6 +57,7 @@ class HubSelector:
         if direction not in ("out", "in", "both"):
             raise ValueError(f"未知の direction: {direction!r} (out | in | both)")
         self.metric, self.top, self.direction, self.axis = metric, int(top), direction, axis
+        self.label = f"hub-{self.metric}-top{self.top}-{self.direction}"
 
     def select(self, ctx: LesionContext) -> LesionSelection:
         coo = ctx.coo
@@ -76,7 +82,7 @@ class HubSelector:
             mask |= np.isin(col, chosen)
         return LesionSelection(
             cut=mask,
-            label=f"hub-{self.metric}-top{self.top}-{self.direction}",
+            label=self.label,
             description=(f"{self.metric} 上位 {self.top} ニューロンの"
                          f"{ {'out':'出力','in':'入力','both':'入出力'}[self.direction] }シナプス"),
             detail={"metric": self.metric, "direction": self.direction,
@@ -90,6 +96,7 @@ class SynapseSelector:
 
     def __init__(self, pairs):
         self.pairs = [(int(a), int(b)) for a, b in pairs]
+        self.label = f"synapses-{len(self.pairs)}"
 
     def select(self, ctx: LesionContext) -> LesionSelection:
         coo = ctx.coo
@@ -111,7 +118,7 @@ class SynapseSelector:
             # 存在しないペアを黙って無視すると「何も切らなかった」が静かに通る。
             raise ValueError(f"指定されたシナプスが存在しません: {missing[:10]}")
         return LesionSelection(
-            cut=mask, label=f"synapses-{len(self.pairs)}",
+            cut=mask, label=self.label,
             description=f"明示指定した {len(self.pairs)} 本のシナプス",
             detail={"pairs": self.pairs},
         )
@@ -123,6 +130,9 @@ class BetweenGroupSelector:
     def __init__(self, axis: str = "module", pairs=None):
         self.axis = axis
         self.pairs = [tuple(sorted(p)) for p in pairs] if pairs else None
+        self.pair_label = ("all" if self.pairs is None
+                           else "+".join(f"{a}-{b}" for a, b in self.pairs))
+        self.label = f"between-{self.axis}-{self.pair_label}"
 
     def select(self, ctx: LesionContext) -> LesionSelection:
         labels = np.asarray(ctx.layout.labels(self.axis))
@@ -134,10 +144,9 @@ class BetweenGroupSelector:
             for a, b in self.pairs:
                 wanted |= ((src == a) & (tgt == b)) | ((src == b) & (tgt == a))
             mask &= wanted
-        pair_label = "all" if self.pairs is None else "+".join(f"{a}-{b}" for a, b in self.pairs)
         return LesionSelection(
-            cut=mask, label=f"between-{self.axis}-{pair_label}",
-            description=f"{self.axis} 軸で異なるグループをまたぐシナプス ({pair_label})",
+            cut=mask, label=self.label,
+            description=f"{self.axis} 軸で異なるグループをまたぐシナプス ({self.pair_label})",
             detail={"axis": self.axis, "pairs": self.pairs},
         )
 
@@ -159,6 +168,8 @@ class BridgeSelector:
         self.parts = list(parts) if parts else None
         self.kind = kind
         self.samples = samples
+        self.label = (f"bridge-{self.kind}" if self.parts is None
+                      else "bridge-" + "+".join(self.parts))
 
     def _target_indices(self, area) -> np.ndarray:
         indices = bridge_part_indices(area)
@@ -191,16 +202,56 @@ class BridgeSelector:
             raise ValueError(f"条件に合うブリッジ part がありません (kind={self.kind}, parts={self.parts})")
 
         kwargs = {} if self.samples is None else {"samples": self.samples}
-        crossed = synapse_crossed_parts(ctx.geometry, ctx.area, targets, **kwargs)
+        crossed = synapse_crossed_bridges(ctx.geometry, ctx.area, targets, **kwargs)
         mask = crossed.any(axis=1)
         names = list(ctx.area.part_names)
         per_part = {str(names[int(p)]): int(crossed[:, j].sum()) for j, p in enumerate(targets)}
-        label = f"bridge-{self.kind}" if self.parts is None else "bridge-" + "+".join(self.parts)
         return LesionSelection(
-            cut=mask, label=label,
+            cut=mask, label=self.label,
             description=f"軸索が通ったブリッジ ({self.kind}) の結合 {int(mask.sum())} 本",
             detail={"kind": self.kind, "parts": [str(names[int(p)]) for p in targets],
                     "per_part_counts": per_part},
+        )
+
+
+class RandomSelector:
+    """pre / post の極性で絞った結合から、決まった割合を無作為に切る。
+
+    **切る本数は候補の本数 × fraction を丸めたもの** (全シナプスに対する割合ではない)。
+    抽選は `seed` だけで決まる専用の乱数で行い、シミュレーションの乱数ストリームには
+    触れない。候補の並びは COO の row-major 順なので、同じ親 run・同じ spec なら
+    同じシナプスが選ばれる。
+    """
+
+    POLARITIES = ("exc", "inh", "any")
+
+    def __init__(self, fraction: float, pre: str = "any", post: str = "any", seed: int = 0):
+        if not 0.0 < float(fraction) <= 1.0:
+            raise ValueError(f"fraction は (0, 1] で指定してください: {fraction!r}")
+        for name, value in (("pre", pre), ("post", post)):
+            if value not in self.POLARITIES:
+                raise ValueError(f"未知の {name}: {value!r} (使えるのは {self.POLARITIES})")
+        self.fraction, self.pre, self.post, self.seed = float(fraction), pre, post, int(seed)
+        self.label = f"random-{self.pre}-{self.post}-f{self.fraction:g}-seed{self.seed}"
+
+    def select(self, ctx: LesionContext) -> LesionSelection:
+        row = np.asarray(ctx.coo.row, dtype=np.int64)
+        col = np.asarray(ctx.coo.col, dtype=np.int64)
+        is_exc = excitatory_flags(ctx.layout, int(ctx.coo.shape[0]))
+        wanted = {"exc": is_exc, "inh": ~is_exc, "any": np.ones_like(is_exc)}
+        candidates = np.flatnonzero(wanted[self.pre][row] & wanted[self.post][col])
+        if candidates.size == 0:
+            raise ValueError(f"条件に合うシナプスがありません (pre={self.pre}, post={self.post})")
+        num_cut = int(round(self.fraction * candidates.size))
+        chosen = np.random.default_rng(self.seed).choice(candidates, size=num_cut, replace=False)
+        mask = np.zeros(row.size, dtype=bool)
+        mask[chosen] = True
+        return LesionSelection(
+            cut=mask, label=self.label,
+            description=(f"pre={self.pre} → post={self.post} の結合 {candidates.size} 本から"
+                         f" {num_cut} 本 ({self.fraction:.0%}) を無作為に"),
+            detail={"pre": self.pre, "post": self.post, "fraction": self.fraction,
+                    "seed": self.seed, "num_candidates": int(candidates.size)},
         )
 
 
@@ -249,6 +300,13 @@ def parse_cut_spec(spec: str):
         if "pairs" in args:
             pairs = [tuple(p.split("-", 1)) for p in args["pairs"].split("+")]
         return BetweenGroupSelector(axis=args.get("axis", "module"), pairs=pairs)
+    if name == "random":
+        take({"fraction", "pre", "post", "seed"})
+        if "fraction" not in args:
+            raise ValueError("random には fraction が必要です (例: random:pre=exc,fraction=0.1)")
+        return RandomSelector(fraction=float(args["fraction"]),
+                              pre=args.get("pre", "any"), post=args.get("post", "any"),
+                              seed=int(args.get("seed", 0)))
     if name == "synapses":
         take({"pairs", "file"})
         if "file" in args:
@@ -257,7 +315,7 @@ def parse_cut_spec(spec: str):
                 rows = list(csv.DictReader(handle))
             return SynapseSelector([(r["pre"], r["post"]) for r in rows])
         return SynapseSelector([tuple(p.split("-", 1)) for p in args["pairs"].split("+")])
-    raise ValueError(f"未知のセレクタ名: {name!r} (hub | bridge | between | synapses)")
+    raise ValueError(f"未知のセレクタ名: {name!r} (hub | bridge | between | random | synapses)")
 
 
 def combine(selections, mode: str = "or") -> LesionSelection:
@@ -279,3 +337,17 @@ def combine(selections, mode: str = "or") -> LesionSelection:
                 "parts": [{"label": s.label, "num_cut": int(s.cut.sum()), **s.detail}
                           for s in selections]},
     )
+
+
+def cut_label(specs, mode: str = "or") -> str:
+    """切断 spec の並びから run ディレクトリ名を作る。**ネットワークを組まずに決まる。**
+
+    `combine()` が付ける label と同じ値。ランチャは build より前にこれを呼んで
+    `<親 run>/<label>/` を作るので、両者が食い違うと run の置き場所と記録が食い違う。
+    """
+    specs = list(specs)
+    if not specs:
+        raise ValueError("切断 spec が 1 つも指定されていません。")
+    if mode not in ("or", "and"):
+        raise ValueError(f"未知の合成モード: {mode!r} (or | and)")
+    return f"_{mode}_".join(parse_cut_spec(spec).label for spec in specs)
