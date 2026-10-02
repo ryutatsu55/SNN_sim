@@ -763,7 +763,7 @@ if __name__ == "__main__":
     
     # 5. タスク設定が正しく読み込まれているか
     if config.task:
-        print(f"Active Task Duration: {config.task.duration} ms")
+        print(f"Active Task Profile: {config.task.profile_name}")
 
     # `python -m src.core.config_manager` は **解決済み config を表示するだけ**。
     # ここで save_config() を呼ばないのは、デバッグ実行がリポジトリのどこかに

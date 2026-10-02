@@ -1,6 +1,6 @@
 """単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描く。
 
-x 軸の上限を `config.task.duration` ではなく引数 `window_s` で固定するため、長時間
+x 軸の上限を記録窓の幅ではなく引数 `window_s` で固定するため、長時間
 シミュレーション (72h 等) から切り出した短い窓をそのまま表示できる。
 """
 import matplotlib.pyplot as plt
@@ -11,9 +11,9 @@ from scripts.develop.figures import save
 def neuron_trace(window, out_path):
     """単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描画する。
 
-    neuron_test と同じレイアウト (ラスター / V / I) だが、x 軸上限を
-    `config.task.duration` ではなくトレース窓の幅で固定するため、長時間
-    シミュレーション (72h 等) から切り出した短い窓をそのまま表示できる。
+    neuron_test と同じレイアウト (ラスター / V / I) だが、x 軸上限をトレース窓の幅で
+    固定するため、長時間シミュレーション (72h 等) から切り出した短い窓を
+    そのまま表示できる。
 
     トレースを採っていない run では `window.trace()` が `MissingData` を投げ、
     登録簿がそれを受けてこの図を飛ばす。**ここに分岐は書かない。**

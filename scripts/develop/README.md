@@ -102,8 +102,8 @@ record_hours: [0, 1..6, 24]   # 混在
 書き方は `simulation.seed` と同じ規則。**リストは書いたとおりに読む**ので、`[0, 6, 72]`
 は 3 点。範囲を書けるのは入力 YAML だけで、run の `config.yaml` には展開後の時刻が並ぶ。
 
-`duration` は記録として残るだけで run 長を決めないが、`record_hours` の最大値 +
-`record_window_ms` と食い違わせないこと (記録を読んだ人が run 長を誤読する)。
+run 長は `record_hours` の最大値 + `record_window_ms` で決まる。**総時間を別に書く
+フィールドは持たない** —— 手計算した値と実際の run 長が食い違う余地を作らないため。
 
 ### 膜電位トレース
 

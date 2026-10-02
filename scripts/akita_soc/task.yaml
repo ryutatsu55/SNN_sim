@@ -12,13 +12,8 @@
 # 記録条件は結果を変えるので、選択も config 側にある (CLI の引数にはしない)。
 
 akita_soc:
-  # 総シミュレーション時間 [ms]。
-  # **実際の run 長を決めるのは record_hours の最大値 + record_window_ms であって、
-  # この値ではない。** 記録として config.yaml に残るだけなので、record_hours と
-  # 食い違わせないこと。
-  duration: 259800000.0       # 72 h
-
-  # 記録する時刻 [h]。論文 Fig.2 は 0 / 6 / 72 h の 3 点。
+  # 記録する時刻 [h]。**run 長はこの最大値 + record_window_ms で決まる。**
+  # 論文 Fig.2 は 0 / 6 / 72 h の 3 点。
   # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲 (`[0..12]` / `[0..3:0.5]`)。
   # **リストは範囲にならない。** 書き方は `config_manager.expand_hours_spec()` を参照。
   record_hours: [0, 6, 72]
@@ -41,7 +36,6 @@ akita_soc_sequential_probe:
   # 遷移の時刻を細かく追うためのプロファイル。
   # **記録プロトコルとして本質的に別物**なのでプロファイルを分けてある
   # (条件を変えるだけなら config を書き換えればよく、プロファイルは増やさない)。
-  duration: 259800000.0       # 72 h
   record_hours: [0..72]
   record_window_ms: 600000.0  # 10 min
   record_buffer_ms: 10000.0

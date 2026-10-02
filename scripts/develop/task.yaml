@@ -19,13 +19,8 @@
 
 
 develop:
-  # 総シミュレーション時間 [ms]。
-  # **実際の run 長を決めるのは record_hours の最大値 + record_window_ms であって、
-  # この値ではない。** 記録として config.yaml に残るだけなので、record_hours と
-  # 食い違わせないこと (食い違うと、記録を読んだ人が run 長を誤読する)。
-  duration: 43800000.0        # 12 h + 最後の窓 10 min
-
   # 記録する時刻 [h]。ここに並べた各時刻で record_window_ms ぶんの窓を採る。
+  # **run 長はこの最大値 + record_window_ms で決まる。**
   #
   # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲。混ぜて書ける。
   #
@@ -62,7 +57,6 @@ develop:
   trace_window_s: 10.0
 
 develop20h:
-  duration: 72600000.0  
   record_hours: [0..20]
   record_window_ms: 600000.0  # 10 min
   record_buffer_ms: 10000.0
@@ -70,7 +64,6 @@ develop20h:
   trace_window_s: 10.0
 
 develop72h:
-  duration: 259800000.0  
   record_hours: [0..72]
   record_window_ms: 600000.0  # 10 min
   record_buffer_ms: 10000.0

@@ -16,7 +16,6 @@ connection_probability / distance_distribution) は最初から出ません。
 
 ```yaml
 smoke:
-  duration: 20000.0
   record_hours: [0, 0.0013888888888888889]   # 0 h と 5 s。**非整数を含めるのが要点**
   record_window_ms: 5000.0
   record_buffer_ms: 1000.0

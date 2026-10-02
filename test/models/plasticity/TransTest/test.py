@@ -17,6 +17,7 @@ from src.core.NetworkBuilder import NetworkBuilder
 from src.core.simulator import GeNNSimulator  # クラス名変更に対応
 # from src.models.readouts.ridge_reg import RidgeReadout
 import src.utils.plotting as plotting
+from src.utils.runview import BuiltNetwork
 
 # --- プラグイン(モデル)の登録トリガー ---
 # ここでインポートすることで、@register デコレータが実行されレジストリに登録される
@@ -123,13 +124,8 @@ def main():
         out_path="test/models/plasticity/TransTest/neuron_test.png",
     )
 
-    coo = builder.global_coo()
-    plotting.network(
-        coo.row, coo.col, coo.weights,
-        coords=builder.global_coords,
-        config=config,
-        out_path="test/models/plasticity/TransTest/network.png",
-        )
+    out_dir = Path("test/models/plasticity/TransTest")
+    plotting.network(BuiltNetwork.from_builder(builder, out_dir), out_dir / "network.png")
 
     # plotting.plot_raster(
     #     trial_results["times"],

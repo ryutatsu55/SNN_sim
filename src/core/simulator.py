@@ -20,7 +20,14 @@ class GeNNSimulator:
         # スパイク記録バッファ長。長時間実験では記録窓ぶんだけ確保する。
         recording_buffer_ms = getattr(self.config.task, "record_buffer_ms", None)
         if recording_buffer_ms is None:
-            recording_buffer_ms = getattr(self.config.task, "record_window_ms", self.config.task.duration)
+            # 記録プロトコルを持たない task (入出力タスク) は `duration` しか持たない。
+            recording_buffer_ms = getattr(self.config.task, "record_window_ms", None)
+        if recording_buffer_ms is None:
+            recording_buffer_ms = getattr(self.config.task, "duration", None)
+        if recording_buffer_ms is None:
+            raise ValueError(
+                "task に record_buffer_ms / record_window_ms / duration のどれもありません。"
+                " スパイク記録バッファの長さが決まりません。")
         self.max_timesteps = int(recording_buffer_ms / self.dt)
         self.total_neurons = self.layout.total_neurons
 
