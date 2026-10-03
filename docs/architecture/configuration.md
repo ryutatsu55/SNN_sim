@@ -31,7 +31,7 @@
 | `criticality_test2.yaml` | 3600 | 臨界テスト。`no_space` + `beggs_plenz` (確率ベース) |
 | `celegans.yaml` / `celegans_distance.yaml` | 81 | C. elegans コネクトーム由来の構成 |
 | `bench_dc_arrival.yaml` / `_400.yaml` | 100 / 400 | per-synapse 遅延 (到着イベント駆動) の性能計測 (`docs/technical/gpu_vs_cpu.md`) |
-| `profile_axonal.yaml` / `profile_dc.yaml` | 100 | 均一遅延 (`delay_by_target` あり) と per-synapse 遅延の比較 |
+| `profile_axonal.yaml` / `profile_dc.yaml` | 100 | 軸索遅延 (`akita_soc_axonal`) と per-synapse 遅延の比較 |
 
 これらは主に `python -m scripts.tools.visualize_network_structure <config>` で構造だけを
 見るために使う。実験に食わせたいときは `--config configs/criticality_test.yaml` のように

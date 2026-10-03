@@ -51,7 +51,7 @@ EXPECTED = {
     },
     "no_space": {
         "num_synapses": 9900, "wiring": "027efa4e777a8b86", "weights": "433daa6185c417d3",
-        "delays": "b7cd97a205c0893a", "coords": "3aea65f81c858dd6",
+        "delays": "989ea72ac3ec0eed", "coords": "3aea65f81c858dd6",
     },
 }
 

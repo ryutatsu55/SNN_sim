@@ -37,9 +37,6 @@ neurons:
 synapses:
   from_Exc:
     source: [Layer_Exc]
-    delay_by_target:
-      Layer_Exc: 1.5
-      Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
       mode: e-stdp
@@ -49,9 +46,6 @@ synapses:
       mode: excitatory
   from_Inh:
     source: [Layer_Inh]
-    delay_by_target:
-      Layer_Exc: 0.8
-      Layer_Inh: 0.8
     plasticity:
       type: custom_Akita
       mode: i-stdp
@@ -65,4 +59,4 @@ network:
   space: no_space
   connection: constant_prob_full
   weight: constant_zero
-  delay: constant
+  delay: akita_soc_axonal

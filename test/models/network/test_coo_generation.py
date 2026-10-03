@@ -187,6 +187,18 @@ def test_type_based_delay_zero_for_unclassified_neurons():
     np.testing.assert_array_equal(values, np.array([1.0, 2.0, 3.0, 0.0], dtype=np.float32))
 
 
+def test_type_based_axonal_delay_matches_type_based():
+    """type_based_axonal は type_based と同じ値を返し、axonal だけが違う。"""
+    layout = NS(ids_by=lambda axis: {"excitatory": np.array([0, 1]), "inhibitory": np.array([2])})
+    cfg = NS(d_ee=1.5, d_ei=0.8, d_ie=0.8, d_ii=0.8)
+    rows = np.array([0, 0, 2, 2], dtype=np.int32)
+    cols = np.array([1, 2, 0, 1], dtype=np.int32)
+    plain = D.TypeBasedDelay(cfg, 3, None, layout=layout).generate(rows, cols)
+    axonal = D.TypeBasedAxonalDelay(cfg, 3, None, layout=layout).generate(rows, cols)
+    np.testing.assert_array_equal(axonal, plain)
+    assert D.TypeBasedAxonalDelay.axonal and not D.TypeBasedDelay.axonal
+
+
 if __name__ == "__main__":
     # GOLDEN を作り直すときの出力 (実現値を意図して変えたときだけ使う)
     for name, cls, cfg, n, coords, layout in CONNECTIONS:

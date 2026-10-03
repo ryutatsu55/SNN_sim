@@ -152,6 +152,8 @@ class NetworkBuilder:
         self.connection = None
         # 生成したグローバル結合 (`global_coo()` が返すもの)
         self._global_coo: GlobalCOO | None = None
+        # 遅延モデルが (送信集団, 受信集団) ごとの一様遅延を約束しているか (`BaseDelay.axonal`)
+        self._axonal_delay = False
         # グローバルID -> (集団コード, ローカルindex) 索引表 (遅延構築)
         self._index_table = None
         # "src_to_tgt" -> SynapseIndex。_build_synapses が GeNN へ登録した接続順を記録する。
@@ -251,6 +253,7 @@ class NetworkBuilder:
         )
         delays = delay.generate(rows, cols)
         self._inject_axes(delay)
+        self._axonal_delay = delayClass.axonal
 
         print(f"    Connectivity: {rows.size} synapses "
               f"({rows.size / max(self.total_neurons, 1):.1f} per neuron)")
@@ -501,7 +504,12 @@ class NetworkBuilder:
         # source は population 名のリスト (単一名も ConfigManager が 1 要素に正規化済み)。
         # 同じ極性のニューロンを動特性 mode 別に複数 population へ分けても、シナプス種別
         # (可塑性・コンダクタンス) の定義は 1 箇所で済む。
-        for syn_cfg in self.config.synapses.values():
+        for group_name, syn_cfg in self.config.synapses.items():
+            if getattr(syn_cfg, "delay_by_target", None) is not None:
+                raise ValueError(
+                    f"synapses.{group_name}.delay_by_target は廃止されました。遅延は network.delay"
+                    f" で指定してください (旧 Akita 条件は akita_soc_axonal と同値)。"
+                )
             for src_name, tgt_name in itertools.product(syn_cfg.source, self.config.neurons):
                 print(f"src:{src_name}, tgt:{tgt_name}")
 
@@ -510,16 +518,6 @@ class NetworkBuilder:
 
                 local_src_idx, local_tgt_idx, weights_flat, delays_flat_ms, positions = \
                     self._pair_coo(src_name, tgt_name)
-
-                delay_by_target = getattr(syn_cfg, "delay_by_target", None)
-                # delay_by_target 指定は集団内で単一定数 = 均一遅延。この場合のみ GeNN の
-                # 軸索遅延(axonal_delay_steps)を使い、pre_spike_syn_code を到着時刻に
-                # イベント駆動化して毎ステップの syn_dynamics_code を撤廃する(高速化)。
-                use_axonal = delay_by_target is not None and tgt_name in delay_by_target
-                if use_axonal:
-                    delays_flat_ms = np.full_like(delays_flat_ms, float(delay_by_target[tgt_name]))
-                elif hasattr(syn_cfg, "delay"):
-                    delays_flat_ms = np.full_like(delays_flat_ms, float(syn_cfg.delay))
 
                 if len(local_src_idx) == 0:
                     print(f"    Skipping SynapseGroup: {src_name}_to_{tgt_name} (No connections found)")
@@ -530,20 +528,28 @@ class NetworkBuilder:
                 tgt_pop = self.genn_model.neuron_populations[tgt_name]
 
                 PlasClass = PLASTICITY_MODELS.get(syn_cfg.plasticity.type)
-                # 可塑性モデルが axonal_delay_steps を受け取れる場合のみ軸索遅延経路を適用する
-                # (= opt-in)。標準モデルは受け取らないため従来の dendritic delay 経路のまま。
-                supports_axonal = "axonal_delay_steps" in inspect.signature(PlasClass.__init__).parameters
+                # 遅延モデルが集団ペアごとの一様遅延を約束し (`BaseDelay.axonal`)、かつ可塑性
+                # モデルが axonal_delay_steps を受け取れる場合のみ GeNN の軸索遅延経路を使い、
+                # pre_spike_syn_code を到着時刻にイベント駆動化する。それ以外は dendritic 経路。
+                use_axonal = (
+                    self._axonal_delay
+                    and "axonal_delay_steps" in inspect.signature(PlasClass.__init__).parameters
+                )
                 axonal_steps = None
-                if use_axonal and supports_axonal:
-                    uniform_delay_ms = float(delay_by_target[tgt_name])
+                if use_axonal:
                     # STDP の実効到着時刻は emission + axonal_delay_steps*dt になる(learn-post /
                     # pre_spike_syn の処理ステップ基準。実測で確認済み)。よって STDP タイミングを
                     # delay_corrected と一致させるには steps = round(D/dt)。
                     # ※電流(addToPost)の到着は (steps+1)*dt となり D より 1dt(=dt)遅いが、
                     #   PSC は指数減衰でならされるため重み学習への影響は無視できる。
-                    axonal_steps = max(0, int(round(uniform_delay_ms / self.config.simulation.dt)))
-                else:
-                    use_axonal = False  # 非対応モデルには適用しない
+                    steps = np.unique(delays_flat)
+                    if steps.size != 1:
+                        raise ValueError(
+                            f"{src_name}_to_{tgt_name}: 遅延モデル "
+                            f"{self.config.network.delay.profile_name!r} は axonal ですが、"
+                            f"集団内の遅延が一様ではありません ({steps.size} 種類のステップ数)。"
+                        )
+                    axonal_steps = int(steps[0])
 
                 plas_kwargs = dict(
                     config=syn_cfg.plasticity,

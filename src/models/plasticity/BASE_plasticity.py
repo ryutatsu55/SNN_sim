@@ -20,8 +20,8 @@ class BasePlasticityModel(ABC):
         self.delay = delay
         self.num_pre = num_pre
         self.num_post = num_post
-        # None 以外なら「軸索遅延(axonal delay)経路」。NetworkBuilder が delay_by_target 指定
-        # (=集団内均一遅延)を検出したときにステップ数を渡す。GeNN が pre_spike_syn_code を
+        # None 以外なら「軸索遅延(axonal delay)経路」。遅延モデルが axonal
+        # (=集団内均一遅延, `BaseDelay.axonal`)のとき NetworkBuilder がステップ数を渡す。GeNN が pre_spike_syn_code を
         # 到着時刻にイベント駆動で呼ぶため、毎ステップの syn_dynamics_code を撤廃できる。
         # snippet が文字列の標準モデルはこの引数を無視する。
         self.axonal_delay_steps = axonal_delay_steps

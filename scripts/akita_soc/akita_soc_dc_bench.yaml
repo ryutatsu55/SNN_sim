@@ -1,7 +1,7 @@
 # akita_soc_delay.yaml の dc(per-synapse 到着イベント駆動)版。
 # akita_soc_delay.yaml と同一のネットワーク(ニューロン/シナプス/結合/重み/遅延)だが、
-# delay_by_target(=axonal 経路)を使わず、種別ペア別遅延(E→E:1.5, E→I:0.8, I→E:0.8,
-# I→I:0.8 ms)を network.delay=akita_soc(type_based)で与える → 非axonal の per-synapse
+# 種別ペア別遅延(E→E:1.5, E→I:0.8, I→E:0.8, I→I:0.8 ms)を akita_soc_axonal ではなく
+# network.delay=akita_soc(type_based)で与える → 非axonal の per-synapse
 # dc 経路(pre_arrival_syn_code, 到着イベント駆動)になる。両者の学習挙動比較用のベンチ。
 simulation:
   N: 100
@@ -52,4 +52,4 @@ network:
   space: no_space
   connection: constant_prob_full
   weight: constant_zero
-  delay: akita_soc         # 種別ペア別遅延 = akita_soc_delay.yaml の delay_by_target と同値 (非axonal dc 経路)
+  delay: akita_soc         # 種別ペア別遅延 = akita_soc_axonal と同値 (非axonal dc 経路)

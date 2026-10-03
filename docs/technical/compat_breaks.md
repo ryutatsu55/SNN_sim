@@ -698,3 +698,24 @@ overlap 50) では、ブリッジ矩形 300 um のうち 100 um = 1/3 がモジ�
 `weight_distribution.png`) が skip される。lesion の旧 run は切断後の軸索幾何も無いので
 `axon_network.png` も skip。それ以外の図と `metrics.csv` は以前と同じものが出る。
 欲しければ run をやり直すこと。
+
+---
+
+## `delay_by_target` 廃止 → Akita の COO 遅延が実値に
+
+シナプス群ごとの `delay_by_target` を廃止し、遅延プロファイル `akita_soc_axonal`
+(`type_based_axonal`。`BaseDelay.axonal = True`) で同じ条件を表すようにした。
+軸索遅延経路を使うかは遅延クラスの `axonal` 属性で決まる。
+
+**力学は変わらない。** 旧 `delay_by_target` 版と新版で、GeNN に渡る結合・重み・
+`axonal_delay_steps` (E→E 15 / その他 8 @ dt=0.1)・可塑性モデルの全状態が一致することを
+`scripts/akita_soc/` の 4 config (`akita_soc` / `_delay` / `_delay_cap` / `_delay_clip`) で確認済み。
+
+変わったのは**記録される遅延**だけ。旧版は GeNN 登録の直前で遅延を上書きしていたので、
+`global_coo().delays` (= `connectivity.npz` の遅延) にはダミーの `constant` 1.0 ms が
+入っていた。新版は実値 (1.5 / 0.8 ms) が入る。golden の `no_space` の delays ハッシュを更新した。
+
+旧 run の `config.yaml` には `delay_by_target` が残っている。解析 (読み出し) はそのまま通るが、
+それを `NetworkBuilder.build()` に渡すとエラーになる (無言で 1.0 ms の別条件で走るのを防ぐため)。
+親 run から再シミュレーションする場合 (lesion, `replot --verify`) は、
+`delay_by_target` を消して `network.delay` を `akita_soc_axonal` に書き換えること。

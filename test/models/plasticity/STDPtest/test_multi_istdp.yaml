@@ -52,8 +52,6 @@ synapses:
       beta_I: 1.12
       Wmin: 0.0
       Wmax: 1.0
-    # delay_by_target:
-    #   Layer_Inh: 0.8
 network:
   area:
     profile_name: no_space

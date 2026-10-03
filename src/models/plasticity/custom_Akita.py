@@ -4,7 +4,7 @@
 
     - 極性  : mode = e-stdp / i-stdp   ... 興奮性 / 抑制性 STDP (mode.startswith で判定)
     - pairing: nearest / trace          ... 最近接ペア / trace 型 all-to-all (明示フィールド)
-    - axonal : delay_by_target 指定時のみ ... NetworkBuilder が axonal_delay_steps を渡す
+    - axonal : 遅延モデルが axonal のときのみ ... NetworkBuilder が axonal_delay_steps を渡す
 
     → 実装は pairing × axonal の 4 経路:
         nearest × 非axonal → _nearest_dc_syn (到着イベント駆動 per-syn)
@@ -157,7 +157,7 @@ class CustomAkitaModel(BasePlasticityModel):
                 f"CustomAkitaModel requires pairing='nearest' or 'trace' (got {self.pairing!r})."
             )
         self.trace_mode = self.pairing == "trace"
-        # 軸索遅延経路: NetworkBuilder が delay_by_target(=集団内均一遅延)を検出したとき有効化される。
+        # 軸索遅延経路: 遅延モデルが axonal (=集団内均一遅延) のとき有効化される。
         # GeNN が axonal_delay_steps 分だけ遅延スロットからスパイクを読み、pre_spike_syn_code を
         # 到着時刻にイベント駆動で実行し、st_pre も到着時刻へ補正する。よって毎ステップの
         # syn_dynamics_code は不要になり、STDP は到着時刻基準(=遅延補正済み)の数式で

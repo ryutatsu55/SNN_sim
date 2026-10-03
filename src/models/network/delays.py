@@ -7,6 +7,11 @@ from src.core.registry import DELAY_MODELS
 class BaseDelay(ABC):
     """シナプスの伝播遅延を生成する基底クラス"""
 
+    # True のクラスは「(送信集団, 受信集団) ごとに単一値の遅延」を返すことを約束する。
+    # NetworkBuilder はそれを GeNN の軸索遅延 (SynapseGroup 一様の axonal_delay_steps) で
+    # 実装する (可塑性モデルが axonal_delay_steps を受け取れる場合のみ)。
+    axonal = False
+
     def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState = None, layout=None):
         self.config = config
         self.num_neurons = num_neurons
@@ -96,9 +101,8 @@ class TypeBasedDelay(BaseDelay):
     """種別(E/I)ペア別の均一遅延。
 
     `layout.ids_by("polarity")` で興奮性/抑制性のグローバルIDを分け、送信種別 × 受信種別の
-    4 ブロック(EE/EI/IE/II)にそれぞれ一定の遅延[ms]を割り当てる。`delay_by_target`
-    (= NetworkBuilder の axonal 経路)を使わずに per-(src,tgt)-type 遅延を network.delay
-    経由(非axonal の per-synapse dc 経路)で与えるための手段。空間座標は不要(coords 非依存)。
+    4 ブロック(EE/EI/IE/II)にそれぞれ一定の遅延[ms]を割り当てる。GeNN 上は per-synapse
+    遅延 (dendritic) として実装される。空間座標は不要(coords 非依存)。
 
     config(フラットなスカラーフィールド, 単位 [ms]):
         d_ee (Exc→Exc), d_ei (Exc→Inh), d_ie (Inh→Exc), d_ii (Inh→Inh)
@@ -148,10 +152,23 @@ class TypeBasedDelay(BaseDelay):
             values.append(v)
         return exc, inh, values
 
+@DELAY_MODELS.register("type_based_axonal")
+class TypeBasedAxonalDelay(TypeBasedDelay):
+    """`type_based` と同じ値を、GeNN の軸索遅延として実装させる種別ペア別遅延。
+
+    polarity は集団ごとに 1 つなので、種別ペアで一様なら (送信集団, 受信集団) でも一様になる。
+    """
+    axonal = True
+
 @DELAY_MODELS.register("akita_soc")
 class AkitaSocTypeDelay(TypeBasedDelay):
-    """akita_soc_delay.yaml の delay_by_target と同一の遅延を network.delay 経由で再現する
-    種別ペア別均一遅延プロファイル。具体値は YAML から読む。"""
+    """Akita SoC の種別ペア別遅延を per-synapse 遅延 (dendritic) で実装するプロファイル。
+    具体値は YAML から読む。"""
+    pass
+
+@DELAY_MODELS.register("akita_soc_axonal")
+class AkitaSocAxonalDelay(TypeBasedAxonalDelay):
+    """Akita SoC の種別ペア別遅延を軸索遅延で実装するプロファイル。具体値は YAML から読む。"""
     pass
 
 @DELAY_MODELS.register("random")
