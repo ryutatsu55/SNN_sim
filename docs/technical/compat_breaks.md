@@ -352,9 +352,9 @@ RNG を引く) ので、従来は**再ビルドしないと空間の図が描け
 判定にしている (akita_soc の論文再現 config は常にこちら)。
 
 **旧 run にはこのファイルが無い。** replot しても座標を要する図だけは skip される
-(`skip weight network: coords がありません`)。**replot は書き足さない** —— 再ビルドの
-ついでに backfill することはできるが、記録を後から作る経路を持たない方針。
-欲しければ run をやり直すこと。
+(`skip weight network: coords がありません (この記録を足す前に走った run です ...)`)。
+**replot は書き足さない** —— 記録を後から作る経路を持たない方針。欲しければ run を
+やり直すこと。
 
 ### 追加: 記録窓ごとの重み分布 (develop / akita_soc)
 
@@ -496,7 +496,7 @@ Watanabe et al. (2026) *Communications Engineering* 5:150 の "neuronal correlat
 
 これに伴う変更が 2 つ:
 
-- 両実験の `store/series.py` に **`Series.area()` / `Window.area()`** が増えた (config から
+- 両実験の `store/views.py` に **`Series.area()` / `Window.area()`** が増えた (config から
   area を組み直す)。`BaseArea` は RNG を消費しないので run の再現性には影響しない
 - `figures/network.py` の `_draw_nodes` / `_apply_axis_limits` / `_excitatory_mask` が
   `draw_nodes` / `apply_axis_limits` / `excitatory_mask` へ改名された
@@ -662,3 +662,39 @@ overlap 50) では、ブリッジ矩形 300 um のうち 100 um = 1/3 がモジ�
   develop の seed 掃引, distance_based, beggs_plenz, C.elegans, akita_soc 遅延)。全クラス単体でも
   旧密版との一致を確認済みで、`test/models/network/test_coo_generation.py` がその実現値を固定している。
 - 保存済み config.yaml にある `network.sparse` は読み込み時に無視される (どちらの値でも結果は同じ)。
+
+---
+
+## 2026-10-02 — 構造図を build の記録から描く (replot は再ビルドしない)。実現値は変わらない
+
+**何が変わったか:**
+
+- build の直後に記録が増えた (3 実験とも。一覧は各 `scripts/<実験>/store/build_record.py`):
+  - `data/delays.npz` —— 遅延 [ms]。`connectivity.npz` と index 整合
+  - `data/weights_initial.npz` —— build 直後の重み (lesion は切断直後 = 親から復元した値)。
+    `record_hours` が 0 を含むかどうかによらず必ず書く
+  - lesion の `data/axon_geometry.npz` —— **切断後**の軸索幾何 (以前は書いていなかった)
+- `connectivity.npz` を書くタイミングが `sim.setup()` の後から **build の直後**へ移った。
+  中身は同じ (`builder.global_coo()` の row / col / shape)。lesion の `connectivity.npz`
+  (切断後) も同じ
+- 構造図は本番も replot も `series.built()` (記録を読む view) から描く。**replot は
+  ネットワークを組み直さない。** 再ビルドして記録と照合するのは `replot --verify` のときだけ。
+  ふだんの守りは golden テスト (`test/test_network_golden.py`)
+- `GeNNSimulator.synapse_connectivity_coo()` を削除した。結合構造は `builder.global_coo()`
+  から取る (`pull_synapse_coo()` の戻り値は変わらない)
+- `store/series.py` → `store/views.py`、lesion の `store/parent.py` → `store/parent_run.py` へ改名
+- 記録を足す前に走った run でファイルが無いときの `MissingData` のメッセージが
+  「この記録を足す前に走った run です」になった (`no_space` の「空間を持たない config です」と
+  区別する)
+
+**影響 (実測):** 図も指標も変わらない。develop / akita_soc / lesion の小さな run (CPU) で、
+`run_one` と `replot --verify` の出力 (図・CSV・npz) がそれぞれ 40 / 22 / 57 ファイル
+すべてバイト一致した。lesion の構造図 8 枚は旧経路 (再ビルドして切り直して描く) とも
+バイト一致。builder から直接描いた構造図と記録から描いた構造図は、`axon_growth` (disk) と
+`axon_growth_hierarchy` (ブリッジつき) の 2 構成で 8 枚と CSV 2 本がすべてバイト一致した。
+
+**古い run:** replot はそのまま通る。`delays.npz` / `weights_initial.npz` が無いので、
+構造図のうち `delay_distribution.png` と `weight_distribution_initial.png` (lesion は
+`weight_distribution.png`) が skip される。lesion の旧 run は切断後の軸索幾何も無いので
+`axon_network.png` も skip。それ以外の図と `metrics.csv` は以前と同じものが出る。
+欲しければ run をやり直すこと。

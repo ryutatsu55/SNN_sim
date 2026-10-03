@@ -8,8 +8,9 @@ layout_axes.npz は `layout.py` が持つ) には置かず、この実験のモ�
 だけでなく、**npz の中の鍵の名前**も書き出しと読み取りが対で持つ (`save_spikes` /
 `load_spikes` など)。片方だけ変えて食い違うことがない。
 
-ファイルを**置く場所**は `paths.py` が持ち、**run 1 つを時刻順に読む**のは `series.py`。
-このモジュールはファイル 1 つの読み書きまでを受け持つ。
+ファイルを**置く場所**は `paths.py` が持ち、**run 1 つを時刻順に読む**のは `views.py`。
+このモジュールはファイル 1 つの読み書きまでを受け持つ。build 直後に何を書くかの一覧は
+`build_record.py`。
 
 返す値の形は `src/utils/runview.py` の契約 (`Spikes` / `Trace` / `Wiring`) に従う。
 **この実験に固有なのはファイル名と npz の鍵名だけで、読めた値の形は全実験共通。**
@@ -26,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from src.utils.runview import MissingData, Spikes, Trace, Wiring
 
@@ -46,8 +48,17 @@ CONNECTIVITY_NAME = "connectivity.npz"
 #
 # **`no_space` の run は持たない。** config だけからは復元できない (空間コンポーネントが
 # RNG を引く) ので、axes と同じ理由でここに残す。これがあると記録窓の view からも
-# 空間の図が描ける —— 無ければ座標を要する図は再ビルドしないと出せない。
+# 空間の図が描ける。
 COORDS_NAME = "coords.npz"
+
+# 伝播遅延 [ms]。結合構造と同じく run を通して不変なので 1 回だけ書く。
+# `connectivity.npz` の row/col と index 整合する値ベクトル (重みと同じ形)。
+DELAYS_NAME = "delays.npz"
+
+# **build 直後**の重み。記録時刻ごとの `weights_{h}h.npz` と同じ形 (値ベクトル) だが、
+# `record_hours` が 0 を含むかどうかによらず必ず書く。名前が `weights_*h.npz` の
+# glob に掛からない (末尾が `h.npz` でない) ので、記録時刻の列挙には混ざらない。
+INITIAL_WEIGHTS_NAME = "weights_initial.npz"
 
 # 記録時刻ごとの指標。本番の run も再解析も**同じこのファイル**に書く
 # (どちらも metrics.build_row() を通るので列も値も一致する)。
@@ -111,6 +122,8 @@ def discover_records(directory: Path, kind: str) -> list[RecordFile]:
 
 def load_connectivity(directory: Path) -> Wiring:
     """`connectivity.npz` を読んで `Wiring` にする。run につき 1 回だけ呼ぶこと。
+
+    ファイルの中身は `Wiring` そのもの (`row` / `col` / `shape`)。遅延と重みは別ファイル。
 
     構造はシミュレーション中に変わらないので run に 1 ファイル。各記録の
     `weights_{h}h.npz` は値ベクトル (`data`) だけを持ち、この row/col と index が整合する。
@@ -223,6 +236,22 @@ def save_weight_values(path: Path, values: np.ndarray) -> None:
     np.savez_compressed(path, data=np.asarray(values))
 
 
+def save_delays(path: Path, values) -> None:
+    """遅延 [ms] を値ベクトルとして書く。`connectivity.npz` の row/col と index 整合。"""
+    np.savez_compressed(path, data=np.asarray(values, dtype=np.float64))
+
+
+def load_delays(path: Path) -> np.ndarray:
+    """`save_delays()` が書いた遅延 [ms] を読む。"""
+    with np.load(path) as data:
+        return np.asarray(data["data"], dtype=np.float64).reshape(-1)
+
+
+def load_metrics(path: Path) -> pd.DataFrame:
+    """`MetricsWriter` が書いた `metrics.csv` を読む。書きと読みの対。"""
+    return pd.read_csv(path)
+
+
 def save_spikes(path: Path, times, ids, record_start_ms: float) -> None:
     """スパイクと**記録窓の原点**を書く。原点を一緒に残すのがこの関数の要点。"""
     np.savez_compressed(path, times=np.asarray(times), ids=np.asarray(ids),
@@ -281,6 +310,12 @@ class MetricsWriter:
     """`metrics.csv` を **1 行ずつ追記**する。途中で落ちた run もそこまでが読める。
 
     ヘッダは**最初の行で確定**する。以降の行でキーが変わると例外。
+
+    **`metrics.csv` は図ではなく記録ファイル**なので、npz と同じくこのモジュールに置く。
+    run の途中で書かれ (`run_one.py`)、`load_metrics()` で読まれ (`Series.metrics()`)、
+    再解析が作り直す。ここが知っているのは「どのファイルにどういう作法で書くか」だけで、
+    列の中身は `analysis/metrics.py` が決める。書く側だけが `save_*` 関数ではなくクラスなのは、
+    記録窓をまたいで「最初の行で確定したヘッダ」を持ち続けるため。
     """
 
     def __init__(self, path: Path | str):

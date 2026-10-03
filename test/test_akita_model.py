@@ -354,7 +354,7 @@ def minimal_layout(num_exc: int = 2, num_inh: int = 2):
 def load_run_layout(run_dir: Path):
     """保存物から NetworkLayout を復元する (各 main() が行う手続きと同じ)。
 
-    config は run ルート、軸は `data/`。**実験の `store/series.py` と同じ置き場所。**
+    config は run ルート、軸は `data/`。**実験の `store/views.py` と同じ置き場所。**
     """
     config = ConfigManager().load_resolved(run_dir / CONFIG_NAME)
     layout = NetworkLayout.from_config(config)

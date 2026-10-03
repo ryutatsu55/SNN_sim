@@ -206,10 +206,9 @@ class GeNNSimulator:
     def _iter_synapse_index(self):
         """(集団名, GeNN シナプス集団, SynapseIndex) を **COO の連結順**で列挙する。
 
-        `synapse_connectivity_coo()` と `pull_synapse_coo()` が並びを共有するための
-        唯一の走査。両者が別々にループすると、`connectivity.npz` の row/col と
-        `weights_*h.npz` の data がずれ、重みが別のシナプスに対応づけられたまま
-        **無言で誤った図と指標**が出る。
+        `pull_synapse_coo()` の値の取り出しと `_global_positions()` の散布先が並びを
+        共有するための唯一の走査。両者が別々にループすると、値が別のシナプスの位置に
+        散布され、**無言で誤った図と指標**が出る。
         """
         for syn_pop_name, syn_pop in self.model.synapse_populations.items():
             index = self.builder.synapse_index.get(syn_pop_name)
@@ -248,29 +247,6 @@ class GeNNSimulator:
             )
         return positions
 
-    def synapse_connectivity_coo(self) -> Dict[str, Any]:
-        """結合構造だけを COO で返す (値は含まない)。
-
-        Returns:
-            row / col       : int32, グローバル pre/post ID。**行優先ソート済み**
-            shape           : (total_neurons, total_neurons)
-
-        構造はシミュレーション中に変わらないので、run につき 1 回保存すれば足りる
-        (`connectivity.npz`)。各記録時刻の `weights_*h.npz` は値だけを持てばよい。
-
-        **構造そのものは `NetworkBuilder.global_coo()` から取る** (Hard Rule 4:
-        `global_coo()` が唯一の入口)。ここで GeNN 側の並びを組み直していた頃は、同じ
-        ネットワークに本数の等しい 2 系統の並びが存在し、位置で対応づけたコードが黙って
-        別のシナプスに値を乗せる状態だった。
-        """
-        coo = self.builder.global_coo()
-        self._global_positions()   # GeNN が結合を網羅していることの確認
-        return {
-            "row": np.asarray(coo.row, dtype=np.int32),
-            "col": np.asarray(coo.col, dtype=np.int32),
-            "shape": np.array([self.total_neurons, self.total_neurons], dtype=np.int64),
-        }
-
     def pull_synapse_coo(self, var_name: str) -> Dict[str, Any]:
         """シナプス変数をグローバルID空間の COO 形式で引き上げる。
 
@@ -279,8 +255,10 @@ class GeNNSimulator:
             data            : float32, 対応する変数値
             shape           : (total_neurons, total_neurons)
 
-        GeNN から取り出した値を `SynapseIndex.global_positions` へ散布するだけなので、
-        row/col と data の並びは必ず一致する。**ソートは無い** (`_global_positions()` 参照)。
+        **row/col は `NetworkBuilder.global_coo()` そのもの** (Hard Rule 4: `global_coo()` が
+        唯一の入口)。GeNN から取り出した値を `SynapseIndex.global_positions` へ散布するだけ
+        なので、row/col と data の並びは必ず一致する。**ソートは無い**
+        (`_global_positions()` 参照)。結合構造だけが要るときは `global_coo()` を直接使う。
         """
         datas = []
         for syn_pop_name, syn_pop, index in self._iter_synapse_index():
@@ -293,13 +271,18 @@ class GeNNSimulator:
                 )
             datas.append(values)
 
-        coo = self.synapse_connectivity_coo()
+        coo = self.builder.global_coo()
         values = np.concatenate(datas) if datas else np.array([], dtype=np.float32)
         # **散布**する。GeNN の連結順 i 番目の値は global_coo() の positions[i] 番目。
-        scattered = np.empty(coo["row"].size, dtype=np.float32)
+        # `_global_positions()` は GeNN が結合を網羅していることもここで確かめる。
+        scattered = np.empty(coo.num_synapses, dtype=np.float32)
         scattered[self._global_positions()] = values
-        coo["data"] = scattered
-        return coo
+        return {
+            "row": np.asarray(coo.row, dtype=np.int32),
+            "col": np.asarray(coo.col, dtype=np.int32),
+            "data": scattered,
+            "shape": np.array([self.total_neurons, self.total_neurons], dtype=np.int64),
+        }
 
     def pull_synapse(self, var_name: str) -> np.ndarray:
         """シナプス変数を (total_neurons, total_neurons) の密行列として引き上げる。

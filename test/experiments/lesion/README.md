@@ -54,13 +54,13 @@ find "$RUN" -name "*.png" | sort | xargs md5sum > /tmp/lesion_before.md5
 
 ### 3. 再解析して突き合わせる
 
-`replot` は構造図のために**再ビルドして切り直す**ので、同じ run に対して 2 通りの経路で
-図が作られることになります。切断マスクは `lesion_cut.npz` の (row, col) から引き当てる
-ので、一致すれば**再ビルドが元の run と同じネットワークを作り、同じシナプスを切った**
-証拠になります。
+`replot` は構造図も本番と同じく切断直後の記録から描くので、全部の png が一致するはずです。
+`--verify` を付けると、親と同じネットワークを再ビルドして記録どおりに切り、記録と同じ
+結合と軸索幾何が出ることも併せて確かめます (切断マスクは `lesion_cut.npz` の (row, col)
+から引き当てる)。
 
 ```bash
-python -m scripts.lesion.replot "$RUN"
+python -m scripts.lesion.replot "$RUN" --verify
 find "$RUN" -name "*.png" | sort | xargs md5sum | diff - /tmp/lesion_before.md5
 ```
 

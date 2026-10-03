@@ -22,7 +22,7 @@ settle と記録窓のあいだに起きるのは親 run の続きでしかな�
 そのままベースラインにする (引き継ぎ時刻は `task.from_hour`)。
 
 **ベースライン窓の幅は親のもの**で、`task.record_window_ms` とは違いうる。窓幅は窓ごとに
-npz が持つので、発火率は正しく出る (`store/series.py`)。
+npz が持つので、発火率は正しく出る (`store/views.py`)。
 
 構造的除去が再ビルドを意味するのは GeNN の事情による —— シナプス集団は
 `set_sparse_connections()` で確定し、実行中に行を削れない。切断は「生成直後の COO から
@@ -44,29 +44,27 @@ if str(project_root) not in sys.path:
 
 from src.core.config_manager import CONFIG_NAME, ConfigManager
 from src.core.NetworkBuilder import GlobalCOO, NetworkBuilder
-from src.core.layout import AXES_NAME
 from src.core.simulator import GeNNSimulator
-from src.utils.analysis.axons import subset_geometry, synapse_crossed_bridges
+from src.utils.analysis.axons import synapse_crossed_bridges
 from src.utils.analysis.connectivity import bridge_part_indices
-from src.utils.runview import BuiltNetwork
 
 from scripts.lesion.analysis import metrics as lesion_metrics
 from src.utils.analysis.weights import align_saved_to_coo
 from scripts.lesion.analysis.restore import (verify_axon_geometry,
                                              verify_geometry_alignment)
 from scripts.lesion.analysis.selectors import LesionContext, combine, parse_cut_spec
-from scripts.lesion.store.parent import load_parent
+from scripts.lesion.store.parent_run import load_parent
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import (COORDS_NAME, METRICS_NAME, MS_PER_HOUR,
+from scripts.lesion.store.build_record import write_build_record
+from scripts.lesion.store.records import (METRICS_NAME, MS_PER_HOUR,
                                           PHASE_BASELINE, PHASE_POST, SPIKES, TRACE,
                                           WEIGHTS, CUT_PROFILE_NAME, MetricsWriter,
-                                          probe_filename, save_connectivity, save_coords,
-                                          save_cut, save_manifest, save_spikes, save_trace,
+                                          probe_filename, save_cut, save_manifest,
+                                          save_spikes, save_trace,
                                           save_weight_values, write_table)
-from scripts.lesion.store.records import (BASELINE_INDEX, POST_CONNECTIVITY_NAME,
-                                          pre_connectivity_path)
-from scripts.lesion.store.series import open_run
+from scripts.lesion.store.records import BASELINE_INDEX
+from scripts.lesion.store.views import open_run
 
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
@@ -480,17 +478,20 @@ def main():
     # **ここが「run の記録」を書く唯一の場所。** build() を通った後なので記録になる。
     manager.save_config(config, save_dir=run_dir)
     (run_dir / paths.PENDING_CONFIG_NAME).unlink(missing_ok=True)
-    layout.save_axes(paths.data_path(run_dir, AXES_NAME))
 
-    # 座標も config だけからは復元できない。**`no_space` では書かない** ——
-    # 「ファイルが無い = 空間を持たない run」を読む側の判定にしているため。
-    coords = builder.global_coords
-    if coords is not None and np.all(np.isfinite(coords)):
-        save_coords(paths.data_path(run_dir, COORDS_NAME), coords)
+    # 切断直後 (= この run の build 直後) の記録。何を書くかは `store/build_record.py` の
+    # 一覧。**軸索幾何はここで切断後へ絞って書く** (コネクタの幾何は
+    # `replace_global_coo()` の影響を受けない)。
+    write_build_record(run_dir, builder, layout, pre_coo=coo, keep=keep, geometry=geometry)
+    save_manifest(paths.data_dir(run_dir), manifest)
+    save_cut(paths.data_dir(run_dir), per_synapse)
+    write_table(comparison, paths.data_path(run_dir, CUT_PROFILE_NAME))
 
-    # 切断**前**の結合は下見の COO そのもの。ベースラインの窓がこれを使う。
-    save_connectivity(pre_connectivity_path(paths.data_dir(run_dir)),
-                      coo.row, coo.col, np.asarray(coo.shape, dtype=np.int64))
+    # **書いたら読み直す。** 構造図も probe ごとの図と同じく記録から描くので、
+    # `replot.py` とまったく同じ呼び出しになる。probe はこれから書くので 0 個。
+    series = open_run(run_dir, require_windows=False)
+    print("\nGenerating post-lesion structure figures...")
+    structure.emit(series.built())
 
     sim = GeNNSimulator(model, config, builder)
     sim.setup(backup_initial_states=False)   # 復元前の重みを initial_states に残さない
@@ -504,25 +505,8 @@ def main():
         raise RuntimeError("復元した重みが GeNN 上の値と一致しません (復元経路の破損)。")
     print("  親 run の重みが残存シナプスへ正しく入ったことを確認しました")
 
-    # 切断後の結合は GeNN が持っているものを記録する。**`open_run()` は 2 本とも要求する**
-    # ので、ベースラインを読み直す時点で揃っている必要がある。
-    connectivity = sim.synapse_connectivity_coo()
-    save_connectivity(paths.data_path(run_dir, POST_CONNECTIVITY_NAME), connectivity["row"],
-                      connectivity["col"], connectivity["shape"])
-    save_manifest(paths.data_dir(run_dir), manifest)
-    save_cut(paths.data_dir(run_dir), per_synapse)
-    write_table(comparison, paths.data_path(run_dir, CUT_PROFILE_NAME))
-
     metrics_csv = MetricsWriter(paths.data_path(run_dir, METRICS_NAME))
-    series = open_run(run_dir, require_windows=False)
     write_baseline(series, run_dir, parent, restored, metrics_csv)
-
-    # 構造図。**切断後の幾何を渡すこと。** builder のコネクタが持つ幾何は
-    # replace_global_coo() の影響を受けないので、既定のままだと axon_network.png に
-    # 切ったはずの結合まで描かれる。
-    print("\nGenerating post-lesion structure figures...")
-    post_geometry = subset_geometry(geometry, keep) if geometry is not None else None
-    structure.emit(BuiltNetwork.from_builder(builder, run_dir, geometry=post_geometry))
 
     # **settle は時間軸に含まれない。** record_hours の 0 h は settle 明けの時刻。
     # そのぶん GeNN の時計は切断軸より先を指すので、ずれを持っておいて probe へ渡す。

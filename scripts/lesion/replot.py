@@ -1,6 +1,6 @@
 """既存の損傷 run から図と指標を作り直す (再解析)。
 
-    python -m scripts.lesion.replot <run ディレクトリ>
+    python -m scripts.lesion.replot <run ディレクトリ> [--verify]
 
 **本番と同じ関数を通る。** probe ごとの出力は `report.panels.emit()`、run 全体は
 `report.overview.emit()`、切断後の構造は `report.structure.emit()` で、どれも
@@ -9,19 +9,18 @@
 **作り直すのは全部。** 構造図も probe ごとの図も run 全体の図も、指標も、例外なく
 上書きする。一部だけ新しい状態を作らないため。
 
-**構造図のためにネットワークを再ビルドして切り直し、重みを戻す。** 構造図は「切断後の
-ネットワークそのもの」を見る図なので npz からは作れない。GeNN のコード生成とコンパイルは
-`setup()` の側にあり `builder.build()` は走らせないので安い。
+**構造図も記録から描く。** 切断直後の記録 (`store/build_record.py`: 切断後の結合・遅延・
+重み・軸索幾何) を `series.built()` で読むので、本番の run と同じ呼び出しになる。
+ネットワークは組み直さない。
 
-重みを戻すのを忘れると、config が生成した初期重み (この実験では全 0) のまま描くことに
-なり、本番の構造図と食い違う —— しかも `network_sample.png` は重み 0 の結合を描かない
-ので、**エッジが 1 本も無い図が黙って出る**。
-
-切断マスクは `lesion_cut.npz` の (row, col) から**引き当てる**。位置で復元しないのは、
-再ビルドした COO の並びが記録と同じであることを仮定しないため —— 仮定するのではなく、
-引き当てに失敗したら止まる形にしてある。
+`--verify` を付けたときだけ、`config.yaml` からネットワークを**再ビルド**し、記録どおりに
+切って、記録と同じ結合集合 (と軸索幾何) が出るかを確かめる。切断マスクは
+`lesion_cut.npz` の (row, col) から**引き当てる** —— 位置で復元すると、並びが 1 本でも
+ずれたときに黙って別のシナプスを切ることになる。ふだんの守りは golden テスト
+(`test/test_network_golden.py`)。
 """
 import argparse
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -35,14 +34,13 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.core.NetworkBuilder import NetworkBuilder
-from src.utils.analysis.axons import subset_geometry
-from src.utils.analysis.weights import align_subset_to_coo
-from src.utils.runview import BuiltNetwork
+from src.utils.runview import BuiltNetwork, optional
 
+from scripts.lesion.analysis.restore import verify_axon_geometry
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
 from scripts.lesion.store.records import METRICS_NAME, MetricsWriter
-from scripts.lesion.store.series import open_run
+from scripts.lesion.store.views import open_run
 
 # プロファイル名を Python クラスへ解決するために必要 (@register は import で走る)。
 import src.models.neurons.akita_escape_lif
@@ -55,8 +53,8 @@ import src.models.plasticity.custom_Akita
 import src.models.synapses.standard_models
 import src.models.synapses.custom
 
-# 再ビルドに使うバックエンド。**構造は backend に依存しない**ので、CUDA の無い環境でも
-# cuda の run を再解析できるよう cpu に固定する。
+# `--verify` の再ビルドに使うバックエンド。**構造は backend に依存しない**ので、CUDA の
+# 無い環境でも cuda の run を確かめられるよう cpu に固定する。
 REBUILD_BACKEND = "cpu"
 # 再ビルド用の GeNN モデル名。コンパイルはしないので <名前>_CODE は作られない。
 REBUILD_MODEL_NAME = "lesion_replot"
@@ -66,7 +64,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="既存の損傷 run の図と指標を作り直す。")
     parser.add_argument("run_dir", help="config.yaml と data/ を持つ run ディレクトリ")
     parser.add_argument("--no-structure", action="store_true",
-                        help="構造図を飛ばす (再ビルドしない)。大きい run で時間を惜しむとき")
+                        help="構造図を飛ばす")
+    parser.add_argument("--verify", action="store_true",
+                        help="config.yaml から再ビルドして切り直し、記録と同じ結合が出るか確かめる")
     return parser.parse_args()
 
 
@@ -85,34 +85,17 @@ def cut_mask_for(coo, cut_row, cut_col) -> np.ndarray:
     if np.any(position >= keys.size) or not np.array_equal(keys[order][np.clip(position, 0, keys.size - 1)], wanted):
         raise SystemExit(
             "lesion_cut.npz の切断シナプスを再ビルドしたネットワークに引き当てられません。"
-            " 同じ seed から別のネットワークが出ています。構造図は描けません。")
+            " 同じ seed から別のネットワークが出ています。")
     mask = np.zeros(keys.size, dtype=bool)
     mask[order[position]] = True
     return mask
 
 
-def weights_at_cut(series, row, col) -> np.ndarray:
-    """**切断の瞬間の**重みを、生き残ったシナプス `(row, col)` の上に並べ直す。
+def verify_rebuild(series) -> None:
+    """`config.yaml` からネットワークを組み直して記録どおりに切り、記録と一致するか確かめる。
 
-    構造図は重みを使う (ネットワーク図の線の太さ、重み分布のヒストグラム) ので、
-    config が生成した初期重みのまま描くと本番と別の図になる。**本番が流し込んだのは
-    親 run から復元した重み**で、それは `weights_baseline.npz` そのもの。
-
-    引き当ては (pre, post) の join。ベースラインは切断前の全シナプスぶんあるので、
-    位置では並ばない。
+    結合は (row, col) の集合として、軸索幾何は記録があれば配列ごと比べる。違えば止める。
     """
-    baseline = next((window for window in series.windows if window.is_baseline), None)
-    if baseline is None:
-        raise SystemExit(
-            "baseline の probe がありません。切断の瞬間の重みが決まらないので、"
-            " 構造図は描けません (--no-structure で飛ばせます)。")
-    pre = series.wiring_pre()
-    return align_subset_to_coo(pre.row, pre.col, baseline.weights(),
-                               row, col, int(pre.shape[1]))
-
-
-def rebuild(series) -> BuiltNetwork:
-    """`config.yaml` からネットワークを組み直し、記録どおりに切って重みを戻す。"""
     config = series.config.model_copy(deep=True)
     config.simulation.backend = REBUILD_BACKEND
     builder = NetworkBuilder(config, model_name=REBUILD_MODEL_NAME)
@@ -121,31 +104,37 @@ def rebuild(series) -> BuiltNetwork:
     cut = series.cut()
     coo = builder.global_coo()
     keep = ~cut_mask_for(coo, cut["row"], cut["col"])
-
-    geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
-    post_geometry = subset_geometry(geometry, keep) if geometry is not None else None
-
-    row, col = coo.row[keep], coo.col[keep]
     builder.replace_global_coo(
-        coo._replace(row=row, col=col, weights=weights_at_cut(series, row, col),
+        coo._replace(row=coo.row[keep], col=coo.col[keep], weights=coo.weights[keep],
                      delays=coo.delays[keep]),
         preserve_fan_in_scale=True)
+    BuiltNetwork.from_builder(builder, series.run_dir).verify_against(series.wiring())
 
-    built = BuiltNetwork.from_builder(builder, series.run_dir, geometry=post_geometry)
-    built.verify_against(series.wiring())
-    return built
+    geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
+    recorded = optional(series.geometry)
+    if geometry is not None and recorded is not None:
+        rebuilt = dataclasses.replace(
+            geometry,
+            pre=geometry.pre[keep], post=geometry.post[keep],
+            contact_seg=geometry.contact_seg[keep], contact_t=geometry.contact_t[keep])
+        verify_axon_geometry(rebuilt, recorded)
+    print("  再ビルドして切り直した結合は記録と一致しました。")
 
 
-def replot(run_dir: Path, *, with_structure: bool = True) -> Path:
+def replot(run_dir: Path, *, with_structure: bool = True, verify: bool = False) -> Path:
     run_dir = Path(run_dir)
     series = open_run(run_dir)
     print(f"Replot: {run_dir} (N={series.total_neurons}, probe={len(series.windows)})")
 
     paths.prepare(run_dir)
 
+    if verify:
+        print("\nRebuilding lesioned network to verify it against the record...")
+        verify_rebuild(series)
+
     if with_structure:
-        print("\nRebuilding lesioned network for structure figures...")
-        structure.emit(rebuild(series))
+        print("\nGenerating post-lesion structure figures...")
+        structure.emit(series.built())
 
     metrics_csv = MetricsWriter(paths.data_path(run_dir, METRICS_NAME))
     for window in series.windows:
@@ -161,7 +150,7 @@ def replot(run_dir: Path, *, with_structure: bool = True) -> Path:
 
 def main():
     args = parse_args()
-    replot(Path(args.run_dir), with_structure=not args.no_structure)
+    replot(Path(args.run_dir), with_structure=not args.no_structure, verify=args.verify)
 
 
 if __name__ == "__main__":

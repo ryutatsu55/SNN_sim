@@ -61,8 +61,8 @@ scripts/develop/
 ├── store/           読み書きだけ。加工しない
 │   ├── paths.py        run 内部のディレクトリ規約
 │   ├── records.py      1 ファイルの読み書き（名前 ↔ 中身）
-│   ├── series.py       Window / Series
-│   └── (Built は契約の側 = src/utils/runview.py の BuiltNetwork)
+│   ├── build_record.py build 直後に何を書くかの一覧 (write_build_record)
+│   └── views.py        Built / Window / Series (records と契約をつなぐ)。open_run()
 │
 ├── analysis/        表を作る
 │   ├── metrics.py
@@ -195,43 +195,56 @@ def emit(window, *, metrics) -> None:
 
 ---
 
-## 6. replot は再ビルドする
+## 6. 構造図も記録から描く (replot は再ビルドしない)
 
-構造図は `Built` が要るので、これまで再解析できなかった。**再ビルドして描く。**
-
-調べた条件:
-
-- **構造生成の乱数源は 1 つだけ。** `NetworkBuilder.__init__` の
-  `self.rng = np.random.RandomState(config.simulation.seed)`。
-  backend が効くのは GeNN のデバイス RNG（= スパイク列）で、**構造には影響しない**
-- **再ビルドは安い。** コード生成とコンパイルは `sim.setup()` の `model.build()` 側。
-  `builder.build()` は GeNN モデルオブジェクトを組み立てるだけ
-- したがって **cuda で走らせた run でも replot は cpu バックエンドで再ビルドしてよい**（CUDA 不要）
-
-### 自己検証
+**build の直後に記録を書き、それを読み直して構造図を描く。** 窓ごとの図 (`panels`) と
+同じ「書いてから読み直す」形で、本番と再解析が同じ経路を通る:
 
 ```python
-built = Built.from_builder(builder, run_dir)
-built.verify_against(series.wiring())     # 一致しなければ落とす
+write_build_record(run_dir, builder)                  # store/build_record.py
+series = open_run(run_dir, require_windows=False)
+structure.emit(series.built())                        # run_one も replot も同じ 1 行
 ```
 
-**「再ビルドが元の run と同じネットワークか」が replot のたびに検証される。**
-再現性を仮定するのではなく毎回確かめる。
+書くもの (`store/build_record.py` の一覧): 外部軸・座標・軸索幾何・結合・遅延・build 直後の
+重み。自前のスキーマを持つオブジェクト (`NetworkLayout` / `AxonGeometry`) は自分で直列化し、
+ただの配列は `records.py` が直列化する。`area` は記録せず config から組み直す (`BaseArea` は
+乱数を使わないので config の純関数。中身は SDF の合成 = コードなので npz に落とす意味が無い)。
 
-比べるのは**結合の集合**。並び順には依存しない形にしてある (この関数が答えるのは
-「同じネットワークか」であって「同じ並びか」ではないので)。
+### 以前は replot のたびに再ビルドしていた
 
-実装中、この照合が一度誤検知した。当時は `builder.global_coo()` が行優先、
+構造図が「構築されたネットワークそのもの」を見る図で、記録が結合マスクしか持っていなかった
+ため。そのついでに `BuiltNetwork.verify_against()` で「再ビルドが記録と同じ結合を作ったか」を
+毎回確かめていた。やめた理由は 2 つ:
+
+- **構造図だけが「書いてから読み直す」の例外だった。** 本番はメモリ上の builder から、
+  再解析は再ビルドした builder から描くので、描画経路が 2 本あった
+- **その検査は run ではなくコードの性質を見ている。** 「seed から同じネットワークが出るか」が
+  崩れるのは、リファクタで乱数の消費順が変わったときだけ。それを run を replot したときに
+  初めて知るのでは遅い。**golden テスト (`test/test_network_golden.py`) がコミット前に捕まえる**。
+  意図した変更で落ちたら期待値を更新し、`docs/technical/compat_breaks.md` に追記する
+
+ついでに速くなった: develop の `axon_growth_fine` (N=256, 記録窓 13) で replot 1 本が
+約 5 分 → 図を描く時間だけになった (その 5 分はほぼ全部が軸索伸長の作り直しだった)。
+
+再ビルドは `replot --verify` として残してある (古い run がいまのコードでも同じネットワークを
+作るか確かめたいとき用。cuda の run も cpu で再ビルドしてよい —— 構造生成の乱数源は
+`NetworkBuilder.rng` の 1 本だけで、backend が効くのは GeNN のデバイス RNG = スパイク列)。
+比べるのは**結合の集合**で、並び順には依存しない。
+
+**seed からの再現に本番が依存している場所は lesion だけ** (親 run を組み直して重みを戻す)。
+そこには `verify_axon_geometry()` という、結合集合の一致より強い実行時の検査がある。
+
+### 並びが 2 通りあった件
+
+再ビルド照合は一度誤検知した。当時は `builder.global_coo()` が行優先、
 `data/connectivity.npz` が GeNN の格納順 (集団ごとのブロック連結) で、**同じネットワークに
 本数の等しい 2 通りの並びが存在していた**。位置で対応づけると黙って別のシナプスに値が
-乗る状態だったので、`simulator.synapse_connectivity_coo()` の側で並びを揃えた
-(`docs/technical/compat_breaks.md`)。いまは COO の並びはプロジェクト全体で 1 つ。
+乗る状態だったので並びを揃えた (`docs/technical/compat_breaks.md`)。いまは COO の並びは
+プロジェクト全体で 1 つで、`connectivity.npz` は builder の `global_coo()` から直接書く。
 
 旧い run の npz は古い並びのままなので、`store/records.py::load_connectivity()` が
 読んだ時点で行優先かを検査して弾く。
-
-コスト: 大きい run（N=40000 級）では `build()` のシナプス登録に時間とメモリがかかる。
-先回りせず、実装後に実測して必要なら考える。
 
 ---
 
@@ -243,8 +256,8 @@ built.verify_against(series.wiring())     # 一致しなければ落とす
   README.md。`scripts/akita_soc/`（15 枚）と `scripts/lesion/` にも同じ基準がある
 - 重みパネル 2 枚は `run_dir.name` をタイトルに埋めるので、run を `_ref` に改名して replot し、
   全 21 枚で比較する
-- **今回は replot が構造図も描くので、`run_one` の構造図と `replot` の構造図が
-  バイト一致することが追加の検査になる**（= 再ビルドが同じネットワークを作った証拠）
+- `run_one` の構造図と `replot` の構造図もバイト一致する（どちらも build の記録から描く）。
+  `replot --verify` を付ければ、再ビルドが同じネットワークを作ることも併せて確かめられる
 - 新規 CSV は `run.log` の整形表と突き合わせる
 - `pytest test/ -q`（criticality の 5 件は既知の未修正分）
 
@@ -252,7 +265,8 @@ built.verify_against(series.wiring())     # 一致しなければ落とす
 
 ## 8. 新しい実験を足すとき
 
-1. `store/` を書く（契約の実装。ファイル名の規約はその実験のもの）
+1. `store/` を書く（契約の実装。ファイル名の規約はその実験のもの）。build 直後の記録は
+   `store/build_record.py`、読み口は `store/views.py` の `Built` / `Window` / `Series`
 2. 出力を 3 つのタイミングに割り振って `report/` に登録する
 3. 図を `(view, out_path)` で書く（共有層から複製してよい）
 4. `run_one` を「書いてから読み直す」形にする

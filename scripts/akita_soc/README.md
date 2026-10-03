@@ -34,8 +34,11 @@ python -m scripts.akita_soc.run_one outputs/akita_soc/<条件>/seed03
 図と指標を作り直す (本番と同じ関数を通り、`metrics.csv` を上書きする):
 
 ```bash
-python -m scripts.akita_soc.replot <run ディレクトリ> [--no-structure]
+python -m scripts.akita_soc.replot <run ディレクトリ> [--verify] [--no-structure]
 ```
+
+構造図も build の記録から描きます (ネットワークは組み直さない)。`--verify` を付けたとき
+だけ再ビルドして、記録と同じ結合が出るかを確かめます。詳しくは `scripts/develop/README.md`。
 
 ### 条件ディレクトリを丸ごと作り直す
 
@@ -49,8 +52,7 @@ for d in outputs/akita_soc/<条件>/seed*; do
 done
 ```
 
-`no_space` の確率結合なので再ビルドは一瞬で、N=100・記録窓 73 個の条件で
-**1 run あたり約 45 秒**でした (CPU)。
+N=100・記録窓 73 個の条件で **1 run あたり約 45 秒**でした (CPU。ほぼ全部が作図)。
 
 **引数・出力ディレクトリ・seed の書き方・並列度・`pending_config.yaml` の意味は
 `scripts/develop/README.md` と同じ。** そちらに詳しく書いてある。

@@ -35,7 +35,7 @@
     connectivity_pre.npz   切断前の結合 (全シナプス)
     connectivity.npz       切断後の結合 (生き残ったシナプス)
 
-どちらを使うかは probe の phase で決まる (`series.py` の `Window.wiring()`)。
+どちらを使うかは probe の phase で決まる (`views.py` の `Window.wiring()`)。
 2 つをまたいで重みを比べるときは `src/utils/analysis/weights.py` の `align_subset_to_coo()` で
 生存シナプスへ引き当てる —— **位置で対応づけてはいけない。**
 """
@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from src.utils.runview import MissingData, Spikes, Trace, Wiring
 
@@ -68,8 +69,16 @@ PRE_CONNECTIVITY_NAME = "connectivity_pre.npz"   # 切断前 (全シナプス)
 #
 # **`no_space` の run は持たない。** config だけからは復元できない (空間コンポーネントが
 # RNG を引く) ので、axes と同じ理由でここに残す。これがあると記録窓の view からも
-# 空間の図が描ける —— 無ければ座標を要する図は再ビルドしないと出せない。
+# 空間の図が描ける。
 COORDS_NAME = "coords.npz"
+
+# 伝播遅延 [ms]。**切断後**の結合 (`connectivity.npz`) と index 整合する値ベクトル。
+DELAYS_NAME = "delays.npz"
+
+# **切断直後**の重み (親 run から復元して残存シナプスに流し込んだ値)。この run の
+# build 直後の重みにあたる。`connectivity.npz` と index 整合。probe の名前規約
+# (`weights_p*.npz` / `weights_baseline.npz`) には掛からない。
+INITIAL_WEIGHTS_NAME = "weights_initial.npz"
 
 MANIFEST_NAME = "lesion.json"
 CUT_NAME = "lesion_cut.npz"
@@ -154,7 +163,10 @@ def save_connectivity(path: Path, row, col, shape) -> None:
 
 
 def load_connectivity(path: Path) -> Wiring:
-    """`connectivity*.npz` を読んで `Wiring` にする。"""
+    """`connectivity*.npz` を読んで `Wiring` にする。
+
+    ファイルの中身は `Wiring` そのもの (`row` / `col` / `shape`)。遅延と重みは別ファイル。
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
@@ -237,6 +249,17 @@ def load_weight_values(path: Path) -> np.ndarray:
     if "data" not in data.files:
         raise KeyError(f"{path} にキー 'data' がありません。")
     return np.asarray(data["data"], dtype=np.float64).reshape(-1)
+
+
+def save_delays(path: Path, values) -> None:
+    """遅延 [ms] を値ベクトルとして書く。切断後の結合と index 整合。"""
+    np.savez_compressed(path, data=np.asarray(values, dtype=np.float64))
+
+
+def load_delays(path: Path) -> np.ndarray:
+    """`save_delays()` が書いた遅延 [ms] を読む。"""
+    with np.load(path) as data:
+        return np.asarray(data["data"], dtype=np.float64).reshape(-1)
 
 
 def save_spikes(path: Path, times, ids, *, record_start_ms: float,
@@ -381,10 +404,21 @@ def write_table(rows: list[dict], out_path: Path) -> Path:
     return out_path
 
 
+def load_metrics(path: Path) -> pd.DataFrame:
+    """`MetricsWriter` が書いた `metrics.csv` を読む。書きと読みの対。"""
+    return pd.read_csv(path)
+
+
 class MetricsWriter:
     """`metrics.csv` を **1 行ずつ追記**する。途中で落ちた run もそこまでが読める。
 
     ヘッダは**最初の行で確定**する。以降の行でキーが変わると例外。
+
+    **`metrics.csv` は図ではなく記録ファイル**なので、npz と同じくこのモジュールに置く。
+    run の途中で書かれ (`run_one.py`)、`load_metrics()` で読まれ (`Series.metrics()`)、
+    再解析が作り直す。ここが知っているのは「どのファイルにどういう作法で書くか」だけで、
+    列の中身は `analysis/metrics.py` が決める。書く側だけが `save_*` 関数ではなくクラスなのは、
+    記録窓をまたいで「最初の行で確定したヘッダ」を持ち続けるため。
     """
 
     def __init__(self, path: Path | str):

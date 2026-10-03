@@ -55,7 +55,7 @@ def emit(window, *, metrics) -> None:
     """記録時刻 1 点ぶんの出力。
 
     Args:
-        window: `store/series.py` の `Window`。**直前に書いた npz を読み直したもの。**
+        window: `store/views.py` の `Window`。**直前に書いた npz を読み直したもの。**
         metrics: `records.MetricsWriter`。この窓の行を 1 行追記する。
     """
     # --- 表 ---

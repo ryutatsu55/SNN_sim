@@ -7,6 +7,7 @@
 - 指標の列が 1 通りしかないこと (本番と再解析で食い違わない)
 - 再解析が、figure が読む場所に figure が読む名前で指標を置くこと
 - 記録時刻の正が npz にあり、ファイル名の丸めに影響されないこと
+- build の記録を読み直した `Built` が、builder から直接見たものと同じであること
 """
 import sys
 import tempfile
@@ -25,13 +26,17 @@ from scripts.develop.store import paths
 from scripts.develop.store.records import METRICS_NAME, MS_PER_HOUR, SPIKES, WEIGHTS, \
     record_filename, save_spikes, save_weight_values
 from scripts.develop.replot import replot
-from scripts.develop.store.series import open_run
+from scripts.develop.store.views import open_run
 from src.core.config_manager import (ConfigManager, expand_hours_spec,
                                      expand_seed_spec, load_yaml)
 from src.core.layout import NetworkLayout
 from src.core.config_manager import CONFIG_NAME
 from scripts.develop.store.paths import DATA_SUBDIR
 from scripts.develop.store.records import CONNECTIVITY_NAME
+from scripts.develop.store.build_record import write_build_record
+from scripts.develop.report import structure
+from src.core.NetworkBuilder import NetworkBuilder
+from src.utils.runview import BuiltNetwork, MissingData
 
 TASK_PATH = root_path / "scripts" / "develop" / "task.yaml"
 # テスト用のネットワーク設定。**実験の config を借りない** ——
@@ -462,6 +467,71 @@ class RunSeriesTest(unittest.TestCase):
                 series.windows[0].weights()
 
 
+class BuildRecordTest(unittest.TestCase):
+    """build の記録を書いて読み直した `Built` が、builder から直接見たものと同じであること。
+
+    構造図は本番も再解析もこの読み直しを通る。ここがずれると、構造図が「記録された
+    ネットワーク」ではなく別物を描く。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        run_dir = Path(cls._tmp.name)
+        paths.prepare(run_dir)
+        config = _resolved_config()
+        ConfigManager().save_config(config, save_dir=run_dir)
+        builder = NetworkBuilder(config)
+        builder._generate_global_matrices()
+        write_build_record(run_dir, builder)
+        cls.builder = builder
+        cls.direct = BuiltNetwork.from_builder(builder, run_dir)
+        cls.recorded = open_run(run_dir, require_windows=False).built()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_coo_matches_the_builder(self):
+        expected, actual = self.direct.coo(), self.recorded.coo()
+        for field in ("row", "col", "weights", "delays"):
+            np.testing.assert_array_equal(getattr(actual, field), getattr(expected, field),
+                                          err_msg=field)
+        self.assertEqual(actual.shape, expected.shape)
+
+    def test_structure_figures_are_byte_identical(self):
+        """同じ図関数に渡したとき、builder 由来と記録由来で PNG がバイト単位で一致すること。"""
+        drawn = 0
+        with tempfile.TemporaryDirectory() as out:
+            out = Path(out)
+            for label, draw, name in structure.FIGURES:
+                try:
+                    draw(self.direct, out / f"direct_{name}")
+                except MissingData:
+                    with self.assertRaises(MissingData, msg=label):
+                        draw(self.recorded, out / f"recorded_{name}")
+                    continue
+                draw(self.recorded, out / f"recorded_{name}")
+                self.assertEqual((out / f"direct_{name}").read_bytes(),
+                                 (out / f"recorded_{name}").read_bytes(), label)
+                drawn += 1
+        self.assertGreater(drawn, 0, "比べた図が 1 枚も無い")
+
+    def test_no_space_says_it_has_no_space(self):
+        with self.assertRaises(MissingData) as caught:
+            self.recorded.coords()
+        self.assertIn("空間を持たない", str(caught.exception))
+
+    def test_run_without_the_build_record_says_so(self):
+        """build の記録を足す前の run では、構造図の重み・遅延が「古い run」として skip されること。"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            built = open_run(_make_run(tmp_dir)).built()
+            with self.assertRaises(MissingData) as caught:
+                built.coo()
+            self.assertIn("記録を足す前", str(caught.exception))
+            self.assertEqual(built.wiring().num_synapses, 300)   # 配線は読める
+
+
 class ReplotPlacementTest(unittest.TestCase):
     """再解析した指標が figure の読む場所に、figure が読む名前で置かれること。
 
@@ -488,17 +558,28 @@ class ReplotPlacementTest(unittest.TestCase):
             replot(run_dir, with_structure=False)
             self._assert_placement(run_dir)
 
-    def test_rebuild_must_match_the_recorded_connectivity(self):
-        """構造図のための再ビルドが、記録と違うネットワークを作ったら落ちること。
+    def test_verify_rejects_a_different_network(self):
+        """`--verify` の再ビルドが、記録と違うネットワークを作ったら落ちること。
 
         このフィクスチャの COO は本物のビルド結果ではないので、再ビルドすれば必ず
-        食い違う。**黙って別のネットワークの構造図を描かない**ことをここで押さえる
-        (他のテストが `with_structure=False` を渡しているのはこのため)。
+        食い違う。
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = _make_run(tmp_dir)
             with self.assertRaises(SystemExit):
-                replot(run_dir)
+                replot(run_dir, with_structure=False, verify=True)
+
+    def test_structure_does_not_rebuild(self):
+        """構造図は記録から描く。build の記録を持たない run では該当図が skip になるだけ。
+
+        このフィクスチャは `connectivity.npz` しか持たない (遅延も初期重みも無い) ので、
+        再ビルドしていたら verify で落ちるところ、記録読みなら最後まで通る。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir)
+            replot(run_dir)
+            self.assertTrue(paths.fig_path(run_dir, paths.STRUCTURE,
+                                           "connection_mask_coarse.png").exists())
 
     def test_metrics_hour_matches_the_series(self):
         """`metrics.csv` の hour 列と npz 由来の時刻が一致すること。

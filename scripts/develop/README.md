@@ -234,15 +234,25 @@ run 全体の図 (fig2c / fig2d / 重み行列) も、例外なく上書きし�
 します** —— 同じ関数が同じ列を作るので別名に逃がす理由がありません (逃がしておく方が
 むしろ危険で、図がどちらを読むかを明示しないと例外を出さずに古い値が描かれます)。
 
-**構造図のためにネットワークを再ビルドします。** 構造図は「構築されたネットワークその
-もの」を見る図なので npz からは作れません。GeNN のコード生成とコンパイルは `setup()` の
-側にあり `replot` は通らないので、再ビルド自体は安いです。ネットワークの生成は
-`config.simulation.seed` だけに依存する (backend は GeNN のデバイス RNG = スパイク列に
-しか効かない) ので、cuda で走らせた run でも cpu で再ビルドできます。
+**構造図も記録から描きます (ネットワークは組み直しません)。** 本番の run は build の直後に
+「build の記録」(結合・遅延・build 直後の重み・座標・軸索幾何・外部軸。一覧は
+`store/build_record.py`) を書き、それを `series.built()` で読み直して構造図を描きます。
+replot も同じ `series.built()` を呼ぶだけです。
 
-そして**再ビルドが元の run と同じ結合を作ったことを毎回確かめます。** `connectivity.npz`
-の row/col と突き合わせ、食い違えば止まります。再現性を仮定するのではなく、replot の
-たびに検証している形です。大きい run で再ビルドの時間を惜しむときは `--no-structure`。
+`--verify` を付けると、`config.yaml` からネットワークを**再ビルド**して、記録と同じ結合が
+出るかを確かめます (食い違えば止まる)。確かめているのは「いまのコードでその seed から同じ
+ネットワークが出るか」= コードの性質で、ふだんは golden テスト (`test/test_network_golden.py`)
+が守っています。ネットワークの生成は `config.simulation.seed` だけに依存する (backend は
+GeNN のデバイス RNG = スパイク列にしか効かない) ので、cuda で走らせた run でも cpu で
+再ビルドできます。
+
+```bash
+python -m scripts.develop.replot <run ディレクトリ> [--verify] [--no-structure]
+```
+
+**build の記録を足す前に走った run** (`delays.npz` / `weights_initial.npz` が無い) では、
+構造図のうち遅延の分布と初期重みの分布が `skip ...: この記録を足す前に走った run です` に
+なり、残りは描けます。
 
 **旧レイアウトの run は受け付けません。** `data/` に npz が無い run、`connectivity.npz` を
 持たない run (密形式)、記録窓の原点を持たない run はエラーで止まります。列や図を減らして
@@ -261,9 +271,8 @@ for d in outputs/develop/<条件>/seed*; do
 done
 ```
 
-1 run あたりの時間は再ビルドが支配します。`axon_growth` 系は軸索を伸ばし直すので
-重く、`segment_length: 1.0` / N=256 の条件で **1 run あたり約 5 分**でした
-(記録窓 13 個・CPU)。大きい sweep で構造図が要らないなら `--no-structure`。
+1 run あたりの時間は図を描く時間だけです (`--verify` を付けると、`axon_growth` 系は軸索を
+伸ばし直すぶん重くなります。`segment_length: 1.0` / N=256 で約 5 分)。
 
 ---
 
@@ -343,12 +352,12 @@ def emit(built) -> None:
 | ファイル | 役割 |
 |---|---|
 | `paths.py` | run の内部構造。`data/` と `figures/` と引き継ぎファイル名を知るのはここだけ |
-| `records.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ。CSV は**書き出しだけ** (`MetricsWriter` / `write_table`) —— `metrics.csv` を読むのは `series.py` の `pd.read_csv` 1 か所、結合確率の 2 本は人間向けで誰も読み返さない |
-| `series.py` | `Window` (記録窓 1 つ) と `Series` (run 全体)。`open_run()` が入口 |
+| `records.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ (`metrics.csv` も `MetricsWriter` / `load_metrics`)。結合確率の 2 本 (`write_table`) は人間向けで誰も読み返さない |
+| `build_record.py` | build 直後に何を書くかの一覧 (`write_build_record`)。外部軸・座標・軸索幾何・結合・遅延・初期重み |
+| `views.py` | 記録 (`records.py`) を契約 (`src/utils/runview.py`) の形に組む。`Built` (build 直後)・`Window` (記録窓 1 つ)・`Series` (run 全体)。`open_run()` が入口、`series.built()` が構造図の入口 |
 
-`Built` (build 直後のネットワーク) だけは実装まで全実験共通なので、契約の側
-(`src/utils/runview.py` の `BuiltNetwork`) にある。build 直後に手元にあるのはどの実験でも
-同じ `NetworkBuilder` 1 つしかなく、分岐する余地が無いため。
+run を通して不変なもの (結合・座標・領域・軸索・遅延) は `Series` が持ち、`Built` と
+`Window` はそれを借ります。両者の違いは「どの時点の重みか」だけです。
 
 **読み出しだけで、加工はしません。** 「run 全体を通した計算」(重み軌跡・発火レートの
 時系列) は、それを使う図のファイルにあります。
@@ -436,7 +445,7 @@ in-memory の値をそのまま渡すと本番と再解析で描画経路が 2 �
 | `src/core/` | ConfigManager / NetworkBuilder / GeNNSimulator / NetworkLayout。シミュレータ本体 |
 | `src/utils/analysis/` | 数式。matplotlib を import しない層 |
 
-このほかに `src/utils/runview.py` (読み出し契約と `BuiltNetwork` / `guard`) を見ます。
+このほかに `src/utils/runview.py` (読み出し契約と `guard`) を見ます。
 `src/utils/plotting/` がこの契約に対して書かれているので、契約は `src/` 側にあります。
 
 `src/utils/plotting/` は**使いません**。相当するものは `figures/` に複製してあります。

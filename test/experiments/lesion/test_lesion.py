@@ -407,10 +407,48 @@ class _StubSeries:
     """
 
     def __init__(self, run_dir: Path):
-        from scripts.lesion.store.series import Series
+        from scripts.lesion.store.views import Series
         self.run_dir = run_dir
         self._avalanche_bin_ms = None
         self.avalanche_bin_ms = Series.avalanche_bin_ms.__get__(self)
+
+
+class BuildRecordTest(unittest.TestCase):
+    """切断直後の記録を書いて読み直した `Built` が、切断後の builder と同じであること。"""
+
+    def test_built_reads_the_post_lesion_network(self):
+        from scripts.lesion.store import paths
+        from scripts.lesion.store.build_record import write_build_record
+        from scripts.lesion.store.views import open_run
+
+        builder = _builder()
+        pre = builder.global_coo()
+        keep = np.ones(pre.num_synapses, dtype=bool)
+        keep[::3] = False
+        weights = np.linspace(0.0, 1.0, pre.num_synapses)
+        builder.replace_global_coo(GlobalCOO(pre.row[keep], pre.col[keep], weights[keep],
+                                             pre.delays[keep], pre.shape))
+        post = builder.global_coo()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            paths.prepare(run_dir)
+            ConfigManager().save_config(builder.config, save_dir=run_dir)
+            write_build_record(run_dir, builder, builder.layout, pre_coo=pre, keep=keep)
+            series = open_run(run_dir, require_windows=False)
+            coo = series.built().coo()
+            np.testing.assert_array_equal(coo.row, post.row)
+            np.testing.assert_array_equal(coo.col, post.col)
+            np.testing.assert_array_equal(coo.weights, post.weights)
+            np.testing.assert_array_equal(coo.delays, post.delays)
+            np.testing.assert_array_equal(series.wiring_pre().row, pre.row)
+
+    def test_initial_weights_are_not_mistaken_for_a_probe(self):
+        """`weights_initial.npz` が probe の glob に拾われないこと。"""
+        from scripts.lesion.store.records import (INITIAL_WEIGHTS_NAME, WEIGHTS,
+                                                  discover_probes)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            np.savez_compressed(Path(tmp_dir) / INITIAL_WEIGHTS_NAME, data=np.array([1.0]))
+            self.assertEqual(discover_probes(Path(tmp_dir), WEIGHTS), [])
 
 
 class ProbeIoTest(unittest.TestCase):

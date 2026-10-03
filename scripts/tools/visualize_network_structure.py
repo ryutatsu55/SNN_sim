@@ -15,7 +15,7 @@
 
 ビルドした結果は `BuiltNetwork` (`src/utils/runview.py`) に載せてから図へ渡す。
 図が `NetworkBuilder` の内部 API を直に叩かないのはそのため —— 図の側から見ると、
-config からビルドしたものも run を再ビルドしたものも同じ `Built` でしかない。
+config からビルドしたものも、実験が build の記録から読み直したものも同じ `Built` でしかない。
 """
 from __future__ import annotations
 

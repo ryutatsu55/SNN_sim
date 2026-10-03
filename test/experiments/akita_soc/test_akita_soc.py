@@ -25,7 +25,7 @@ from scripts.akita_soc.store import paths
 from scripts.akita_soc.store.records import (MS_PER_HOUR, SPIKES, WEIGHTS, discover_records,
                                              parse_hour, record_filename, save_spikes,
                                              save_weight_values)
-from scripts.akita_soc.store.series import open_run
+from scripts.akita_soc.store.views import open_run
 from src.core.config_manager import ConfigManager
 from scripts.akita_soc.store.records import CONNECTIVITY_NAME
 

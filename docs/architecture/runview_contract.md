@@ -107,14 +107,24 @@ def guard(label, fn, *args):
 
 | view | いつ | 持つもの |
 |---|---|---|
-| `Built` | build 直後。まだ回していない | `wiring` `coo` `coords` `area` `geometry` |
-| `Window` | 記録窓 1 つ | `hour` `record_start_ms` `wiring` `coo` `weights` `coords` `spikes` `trace` |
-| `Series` | run 全体 | `windows` `wiring` `coords` `metrics` |
+| `Built` | build 直後。まだ回していない | `wiring` `coo` `weights` `coords` `area` `geometry` |
+| `Window` | 記録窓 1 つ | `hour` `record_start_ms` `wiring` `coo` `weights` `coords` `area` `geometry` `spikes` `trace` |
+| `Series` | run 全体 | `windows` `wiring` `coords` `area` `geometry` `metrics` |
 
-`coords` は **run を通して不変**なので `Series` が持ち、`Window` はそれを借りる。
-`data/coords.npz` として記録する (config だけからは復元できないため)。`no_space` の
-run はファイルごと持たないので `MissingData` になる —— `area` や `geometry` と同じく、
-**それは正常な状態**。
+**run を通して不変なもの** (`wiring` / `coords` / `area` / `geometry`) は `Series` が持ち、
+`Built` と `Window` はそれを借りる。`Built` と `Window` の違いは「どの時点の重みか」だけ
+(`Built` は build 直後 = `weights_initial.npz`、`Window` はその記録窓の直前)。
+
+実験は 3 つとも**記録から読む**。build の直後に記録 (各実験の `store/build_record.py` の
+一覧) を書き、`series.built()` で読み直して構造図に渡すので、本番と再解析が同じ経路を通る。
+`coords` は `data/coords.npz`、`geometry` は `data/axon_geometry.npz`、`coo().delays` は
+`data/delays.npz`。`area` は記録せず config から組み直す (`BaseArea` は乱数を使わないので
+config の純関数。area はデータではなく SDF の合成 = コードなので、npz に落とす意味が無い)。
+
+`no_space` の run は座標をファイルごと持たないので `MissingData` になる —— `area` や
+`geometry` と同じく、**それは正常な状態**。記録を足す前に走った run で同じファイルが
+無いときは、メッセージで区別する (「この記録を足す前に走った run です」)。どちらかは
+config から決まる。
 
 ```python
 class Built(RunView):   ...
@@ -171,8 +181,8 @@ window.record_start_ms       # 絶対へ戻すための原点
 | 層 | 場所 | 分岐 |
 |---|---|---|
 | **契約** (`RunView` / `MissingData` / `guard` / `Wiring` / `Coo` / `Spikes` / `Trace`) | `src/utils/runview.py` | **だめ。** ここが drift したら意味が消える |
-| `Built` の実装 (`BuiltNetwork`) | `src/utils/runview.py` | **だめ。** build 直後に手元にあるのはどの実験でも同じ `NetworkBuilder` 1 つで、分岐する余地が無い |
-| リーダーの実装 (`Window` / `Series`) | 各実験の `store/` | 実験ごと。記録ファイル名の規約が違う |
+| リーダーの実装 (`Built` / `Window` / `Series`) | 各実験の `store/views.py` | 実験ごと。記録ファイル名の規約が違う |
+| 記録を持たない道具の実装 (`BuiltNetwork` / `MemoryWindow`) | `src/utils/runview.py` | **だめ。** builder やメモリ上の配列をそのまま載せるだけで、分岐する余地が無い |
 | 解析・描画関数 | 契約にしか依存しない → **どちらにも置ける** | 図ごとに判断 |
 | ステージ登録簿 | 各実験の `report/` | 実験ごと |
 
@@ -206,7 +216,7 @@ develop の内部事情ではなく **develop と lesion の契約**だった
 
 契約があれば、lesion は契約の実装を使うだけで develop の中身を import しない。
 
-実際にそうなった: `scripts/lesion/store/parent.py` が「develop 形式の記録を読む」実装を
+実際にそうなった: `scripts/lesion/store/parent_run.py` が「develop 形式の記録を読む」実装を
 **lesion 側に**持つ。読むのは 5 つ (`config.yaml` / `connectivity.npz` /
 `weights_{h}h.npz` / `layout_axes.npz` / `axon_geometry.npz`) で、これは develop の内部
 事情ではなく develop と lesion の契約。規約が変わったら直す場所は 1 つで、そのことが

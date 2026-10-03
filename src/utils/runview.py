@@ -5,7 +5,8 @@
 
     RunView          1 つの run を、ある時点から見たもの
     ├── Built        build 直後。まだ回していない
-    │   └── BuiltNetwork   ビルド済み NetworkBuilder から作る唯一の実装
+    │   └── BuiltNetwork   記録を持たない道具のための実装 (NetworkBuilder から作る)
+    │                      実験の実装は各実験の store/views.py (build の記録を読む)
     ├── Window       記録窓 1 つ
     │   └── MemoryWindow   記録を持たない道具のための実装
     └── Series       run 全体
@@ -78,7 +79,7 @@ def guard(label: str, fn, *args) -> None:
 
 
 # ======================================================================================
-# 読み出した値の形。**フィールド名は npz のキー名と揃える。**
+# 読み出した値の形 (メモリ上)。ディスク上の形 (ファイル名・キー名) は各実験の store が持つ。
 # ======================================================================================
 
 class Wiring(NamedTuple):
@@ -193,7 +194,9 @@ class RunView:
 class Built(RunView):
     """build 直後。シミュレーションの結果ではなく**ネットワークそのもの**。
 
-    ここにしかない情報 (エリアの実体・軸索の幾何・初期重み) を扱う。
+    構造図が受け取る。`coo()` の重みは build 直後 (可塑性が 1 ステップも走る前) の値。
+    実験の実装は各実験の `store/views.py` (記録を読む)、記録を持たない道具の実装は
+    `BuiltNetwork` (builder から作る)。
     """
 
 
@@ -220,10 +223,13 @@ class Series(RunView):
 
 
 class BuiltNetwork(Built):
-    """ビルド済み `NetworkBuilder` を `Built` として見る。
+    """ビルド済み `NetworkBuilder` をそのまま `Built` として見る。
 
-    契約のうち**実装まで全実験で共通な唯一のもの**。構造図は builder の内部 API を
-    知らずに済み、本番の builder と再解析で再ビルドした builder が同じ型になる。
+    **記録を持たない道具 (`scripts/tools/`) とテスト専用。** `MemoryWindow` と対になる。
+    実験は使わない —— 実験は build の記録を一度書いてから各実験の `store/views.py` の
+    `Built` で読み直し、本番と再解析の描画経路を 1 本に保つ。
+
+    `verify_against()` は再解析の `--verify` (再ビルドした結合が記録と一致するか) が使う。
     """
 
     def __init__(self, run_dir: Path, config, layout, coo: Coo,
@@ -307,7 +313,7 @@ class BuiltNetwork(Built):
     def verify_against(self, wiring: Wiring) -> None:
         """記録済みの結合と**同じ結合集合**であることを確かめ、違えば止める。
 
-        再解析が構造図のために再ビルドしたときに呼ぶ。比べるのは集合なので、
+        再解析の `--verify` が再ビルドしたときに呼ぶ。比べるのは集合なので、
         答えるのは「同じネットワークか」であって「同じ並びか」ではない。
         """
         mine = self.wiring()

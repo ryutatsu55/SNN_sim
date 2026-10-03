@@ -4,9 +4,8 @@ develop の `structure.py` が「build 直後」に出すのに対し、lesion �
 ネットワーク**の形を出す。切断前の形は親 run の `figures/structure/` に残っているので、
 ここで両方は出さない。
 
-**渡す軸索幾何は必ず切断後のもの。** builder のコネクタが持つ幾何は
-`replace_global_coo()` の影響を受けないので、既定のままだと `axon_network.png` に
-切ったはずの結合まで描かれる (`analysis/axons.subset_geometry()` で絞る)。
+受け取るのは `series.built()` (切断直後の記録を読む view)。軸索幾何は切断後に絞った
+ものが記録されている (`store/build_record.py`) ので、切ったはずの結合は描かれない。
 
 図が 1 枚描けなくても止めない。`no_space` の config には座標が無く、`constant_prob` は
 軸索の幾何を持たないが、それは異常ではないので `MissingData` として 1 枚ずつ報告される。

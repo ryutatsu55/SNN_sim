@@ -5,7 +5,7 @@
 `src/utils/analysis/correlation.py`。
 
 横軸は**切断からの経過時間**なので、切断は x = 0。ベースラインは負の側に 1 点だけ置かれ、
-それが**この run の測定ではなく親 run の窓**であることを図でも区別する (`store/series.py`)。
+それが**この run の測定ではなく親 run の窓**であることを図でも区別する (`store/views.py`)。
 """
 from __future__ import annotations
 from pathlib import Path
@@ -41,7 +41,7 @@ def mean_correlation_track(series, out_path: Path) -> None:
     hours = table[HOUR_COLUMN].to_numpy(dtype=np.float64)
     values = table[COLUMN].to_numpy(dtype=np.float64)
 
-    # ベースラインは負の時刻に置かれる —— それが切断軸の定義そのもの (`store/series.py`)。
+    # ベースラインは負の時刻に置かれる —— それが切断軸の定義そのもの (`store/views.py`)。
     # phase の文字列を見に行かずに済むので、この図は `store/` を知らなくてよい。
     is_baseline = hours < 0.0
 

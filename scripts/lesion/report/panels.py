@@ -56,7 +56,7 @@ def emit(window, *, metrics) -> None:
     """probe 1 点ぶんの出力。
 
     Args:
-        window: `store/series.py` の `Window`。**直前に書いた npz を読み直したもの。**
+        window: `store/views.py` の `Window`。**直前に書いた npz を読み直したもの。**
         metrics: `records.MetricsWriter`。このprobeの行を 1 行追記する。
     """
     # --- 表 ---

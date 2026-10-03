@@ -24,21 +24,15 @@ if str(project_root) not in sys.path:
 
 from src.core.config_manager import CONFIG_NAME, ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.layout import AXES_NAME
-from src.models.network.connectors import AXONS_NAME
 from src.core.simulator import GeNNSimulator
 from scripts.develop.analysis import metrics
 from scripts.develop.report import overview, panels, structure
 from scripts.develop.store import paths
-from src.utils.runview import BuiltNetwork as Built
-from scripts.develop.store.records import (CONNECTIVITY_NAME, COORDS_NAME, METRICS_NAME,
-                                           MS_PER_HOUR,
-                                           SPIKES, TRACE, WEIGHTS,
-                                           MetricsWriter, record_filename,
-                                           save_connectivity, save_coords,
-                                           save_spikes, save_trace,
-                                           save_weight_values)
-from scripts.develop.store.series import open_run
+from scripts.develop.store.build_record import write_build_record
+from scripts.develop.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
+                                           MetricsWriter, record_filename, save_spikes,
+                                           save_trace, save_weight_values)
+from scripts.develop.store.views import open_run
 
 import src.models.neurons.akita_escape_lif
 import src.models.neurons.akita_escape_lif_physical
@@ -260,39 +254,20 @@ def main():
     manager.save_config(config, save_dir=run_dir)
     (run_dir / paths.PENDING_CONFIG_NAME).unlink(missing_ok=True)
 
-    # 外部軸 (layer / module など) は config だけからは復元できないので保存しておく。
-    # 解析側は config.yaml から自動軸を再構築し、これを load_axes_file() で読み戻す。
-    layout.save_axes(paths.data_path(run_dir, AXES_NAME))
-
-    # 座標も config だけからは復元できない。**`no_space` では書かない** ——
-    # 「ファイルが無い = 空間を持たない run」を読む側の判定にしているため。
-    coords = builder.global_coords
-    if coords is not None and np.all(np.isfinite(coords)):
-        save_coords(paths.data_path(run_dir, COORDS_NAME), coords)
-
-    # 軸索の折れ線は「どの軸索がどのブリッジを通ったか」= 損傷実験に要る記録。
-    # 幾何を残すのは axon_growth 系のコネクタだけなので、持たないものは素通りさせる。
-    geometry = getattr(builder.connection, "axon_geometry", lambda: None)()
-    if geometry is not None:
-        geometry.save(paths.data_path(run_dir, AXONS_NAME))
-        print(f"  Saved axon geometry: {geometry.seg_owner.size} segments -> {AXONS_NAME}")
+    # build 直後の記録 (結合・遅延・初期重み・座標・軸索・外部軸)。何を書くかは
+    # `store/build_record.py` の一覧。**書いたら読み直す** —— 構造図も窓ごとの図と同じく
+    # 記録から描くので、`replot.py` とまったく同じ呼び出しになる。
+    write_build_record(run_dir, builder)
+    # 記録窓はこれから書くので 0 個。`series.window(hour)` が 1 窓ずつ拾っていく。
+    series = open_run(run_dir, require_windows=False)
 
     # 構造図と数値レポート。シミュレーション結果には依存しないので、長い run が途中で
     # 落ちても構造の記録だけは残るよう **setup の前**に出す。
     print("\nGenerating network structure figures...")
-    structure.emit(Built.from_builder(builder, run_dir, geometry=geometry))
+    structure.emit(series.built())
 
     sim = GeNNSimulator(genn_model, config, builder)
     sim.setup()
-
-    # 重み記録は常に COO の値だけ。結合構造はシミュレーション中に変わらないので
-    # run につき 1 回だけ書く。row/col は pull_synapse_coo と同じ走査から得るので、
-    # 値との並びが必ず一致する。
-    connectivity = sim.synapse_connectivity_coo()
-    weights_row, weights_col = connectivity["row"], connectivity["col"]
-    save_connectivity(paths.data_path(run_dir, CONNECTIVITY_NAME),
-                      weights_row, weights_col, connectivity["shape"])
-    print(f"  Saved connectivity: {weights_row.size} synapses -> {CONNECTIVITY_NAME}")
 
     print(f"  Avalanche fit range: "
           f"[1, {metrics.resolve_avalanche_smax(config)}] (N={builder.total_neurons})")
@@ -305,8 +280,6 @@ def main():
 
     # **1 行ずつ書く。** 途中で落ちた run も、そこまでの指標が読める。
     metrics_csv = MetricsWriter(paths.data_path(run_dir, METRICS_NAME))
-    # 記録はこれから書くので窓は 0 個。`series.window(hour)` が 1 窓ずつ拾っていく。
-    series = open_run(run_dir, require_windows=False)
     current_ms = 0.0
     for record_start_ms in record_starts:
         develop_ms = record_start_ms - current_ms

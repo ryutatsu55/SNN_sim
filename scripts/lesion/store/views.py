@@ -1,4 +1,4 @@
-"""lesion の run を読む。`Window` (probe 1 つ) と `Series` (run 全体)。
+"""lesion の run を読む。`Built` (切断直後)、`Window` (probe 1 つ)、`Series` (run 全体)。
 
 `src/utils/runview.py` の契約を、この実験のファイル名規約 (`records.py`) の上に
 実装したもの。**ここは読み出しだけ。加工はしない。** 「run 全体を通した計算」
@@ -25,6 +25,15 @@ phase に応じて切断前 / 切断後の結合を返す。`Series.wiring()` �
 **切断後 (生き残り)** —— run 全体を代表するのはそちらなので。
 
 2 つをまたいで重みを比べる図は `src/utils/analysis/weights.align_subset_to_coo()` で引き当てる。
+
+## `Built` は**切断直後**
+
+この run の「build 直後」は、親のネットワークを組み直して切り、親の重みを流し込んだ
+瞬間。`Built` はその時点の切断後のネットワークを見る (重みは `weights_initial.npz`)。
+
+**記録が無いときの `MissingData` は理由を 2 つに分ける。** その run が本来持たない
+(`no_space` に座標が無い) のか、記録を足す前に走った run なのか。どちらかは config から
+決まるので、ファイルの有無から推測はしない。
 """
 from __future__ import annotations
 
@@ -42,15 +51,72 @@ from src.utils.analysis.avalanche import mean_iei_ms
 from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
 
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import (BASELINE_INDEX, COORDS_NAME, METRICS_NAME,
+from scripts.lesion.store.records import (BASELINE_INDEX, COORDS_NAME, DELAYS_NAME,
+                                          INITIAL_WEIGHTS_NAME, METRICS_NAME,
                                           MS_PER_HOUR,
                                           PHASE_BASELINE, SPIKES, TRACE, WEIGHTS,
                                           discover_probes,
                                           load_coords, load_cut, load_connectivity,
-                                          load_manifest, load_spikes, load_trace,
+                                          load_delays, load_manifest, load_metrics,
+                                          load_spikes, load_trace,
                                           load_weight_values,
                                           post_connectivity_path, pre_connectivity_path,
                                           probe_filename, read_window_meta)
+
+
+def _not_recorded(what: str, path: Path) -> MissingData:
+    """記録を足す前に走った run であることを示す `MissingData`。"""
+    return MissingData(what, f"この記録を足す前に走った run です ({path.name} が無い)。"
+                             "再実行すれば出ます")
+
+
+def _load_value_vector(path: Path, wiring: Wiring, loader) -> np.ndarray:
+    """シナプスごとの値ベクトルを読み、**wiring と本数が合うことを確かめる。**
+
+    合わないまま下流へ流すと、ブロック分けが 1 本ずつずれた図と指標になる
+    (どこも例外を出さない)。
+    """
+    values = loader(path)
+    if values.size != wiring.row.size:
+        raise ValueError(
+            f"{path} の値 {values.size} 本が結合 {wiring.row.size} 本と一致しません。"
+        )
+    return values
+
+
+class Built(runview.Built):
+    """切断直後の記録。**切断後**のネットワークを、可塑性が 1 ステップも走る前に見る。
+
+    `Series.built()` が作る。結合・座標・領域・軸索は `Series` から借りる。
+    """
+
+    def __init__(self, series: "Series"):
+        super().__init__(series.run_dir, series.config, series.layout)
+        self._series = series
+
+    def wiring(self) -> Wiring:
+        return self._series.wiring()
+
+    def coords(self) -> np.ndarray:
+        return self._series.coords()
+
+    def area(self):
+        return self._series.area()
+
+    def geometry(self):
+        return self._series.geometry()
+
+    def weights(self) -> np.ndarray:
+        """切断直後の重み (1D, 切断後の wiring と index 整合)。"""
+        path = paths.data_path(self.run_dir, INITIAL_WEIGHTS_NAME)
+        if not path.exists():
+            raise _not_recorded("initial weights", path)
+        return _load_value_vector(path, self.wiring(), load_weight_values)
+
+    def coo(self) -> Coo:
+        wiring = self.wiring()
+        return Coo(row=wiring.row, col=wiring.col, weights=self.weights(),
+                   delays=self._series.delays(), shape=wiring.shape)
 
 
 class Window(runview.Window):
@@ -105,6 +171,10 @@ class Window(runview.Window):
         """ニューロンが置かれる領域。**run を通して不変**なので series が持つものを返す。"""
         return self._series.area()
 
+    def geometry(self):
+        """**切断後**の軸索幾何。series が持つものを返す (baseline の窓でも切断後)。"""
+        return self._series.geometry()
+
     def avalanche_bin_ms(self) -> float:
         """アバランチのビン幅。**run 全体で固定**なので series が持つものを返す。"""
         return self._series.avalanche_bin_ms()
@@ -115,14 +185,7 @@ class Window(runview.Window):
         合わないまま下流へ流すと、ブロック分けが 1 本ずつずれた図と指標になる
         (どこも例外を出さない)。
         """
-        values = load_weight_values(self.weights_path)
-        wiring = self.wiring()
-        if values.size != wiring.row.size:
-            raise ValueError(
-                f"{self.weights_path} の重み {values.size} 本が phase={self.phase} の"
-                f" 結合 {wiring.row.size} 本と一致しません。"
-            )
-        return values
+        return _load_value_vector(self.weights_path, self.wiring(), load_weight_values)
 
     def coo(self) -> Coo:
         wiring = self.wiring()
@@ -154,6 +217,8 @@ class Series(runview.Series):
         self._windows = windows
         # area は config から組み直すので 1 度だけ作って持つ (`area()` 参照)。
         self._area = None
+        # 軸索の幾何は大きいので 1 度だけ読んで持つ。
+        self._geometry = None
         # アバランチのビンは baseline の窓で決めて固定する (`avalanche_bin_ms()` 参照)。
         self._avalanche_bin_ms = None
 
@@ -177,8 +242,37 @@ class Series(runview.Series):
         """
         path = paths.data_path(self.run_dir, COORDS_NAME)
         if not path.exists():
-            raise MissingData("coords", "空間を持たない config です")
+            if self.config.network.area.profile_name == "no_space":
+                raise MissingData("coords", "空間を持たない config です")
+            raise _not_recorded("coords", path)
         return load_coords(path)
+
+    def geometry(self):
+        """**切断後**の軸索幾何 (`AxonGeometry`)。axon_growth 系のコネクタの run だけが持つ。
+
+        切ったのはシナプスなので、軸索の折れ線は切断前と同じで、接触点だけが絞られている。
+        """
+        if self._geometry is None:
+            from src.core.registry import CONNECTION_MODELS
+            from src.models.network.connectors import AXONS_NAME, AxonGeometry
+            name = self.config.network.connection.profile_name
+            path = paths.data_path(self.run_dir, AXONS_NAME)
+            if not path.exists():
+                if not hasattr(CONNECTION_MODELS.get(name), "axon_geometry"):
+                    raise MissingData("geometry", f"connection ({name}) が軸索の幾何を持ちません")
+                raise _not_recorded("geometry", path)
+            self._geometry = AxonGeometry.load(path)
+        return self._geometry
+
+    def delays(self) -> np.ndarray:
+        """切断後の伝播遅延 [ms] (1D, `wiring()` と index 整合)。
+
+        契約のアクセサではない。`Coo.delays` を埋めるために `Built` が使う。
+        """
+        path = paths.data_path(self.run_dir, DELAYS_NAME)
+        if not path.exists():
+            raise _not_recorded("delays", path)
+        return _load_value_vector(path, self.wiring(), load_delays)
 
     def area(self):
         """ニューロンが置かれる領域。**config から組み直す** (記録には残っていない)。
@@ -226,7 +320,7 @@ class Series(runview.Series):
         path = paths.data_path(self.run_dir, METRICS_NAME)
         if not path.exists():
             raise MissingData(METRICS_NAME, f"{path} がありません")
-        return pd.read_csv(path)
+        return load_metrics(path)
 
     def manifest(self) -> dict:
         """`lesion.json`。切断で何が起きたかの記録。"""
@@ -241,6 +335,10 @@ class Series(runview.Series):
             return load_cut(paths.data_dir(self.run_dir))
         except FileNotFoundError as error:
             raise MissingData("lesion_cut.npz", str(error)) from None
+
+    def built(self) -> Built:
+        """切断直後の時点から見た view。構造図 (`report/structure.py`) に渡す。"""
+        return Built(self)
 
     # --- 走りながら使う口 ---------------------------------------------------------
 

@@ -52,8 +52,13 @@ run ディレクトリへ置く。
 
 ```bash
 python -m scripts.lesion.run_one <親>/seed03/bridge-inter_cluster
-python -m scripts.lesion.replot  <親>/seed03/bridge-inter_cluster [--no-structure]
+python -m scripts.lesion.replot  <親>/seed03/bridge-inter_cluster [--verify] [--no-structure]
 ```
+
+構造図も切断直後の記録 (切断後の結合・遅延・重み・軸索幾何。一覧は `store/build_record.py`)
+から描きます (ネットワークは組み直さない)。`--verify` を付けたときだけ、親と同じ
+ネットワークを再ビルドして記録どおりに切り、記録と同じ結合と軸索幾何が出るかを確かめます。
+切断後の軸索幾何を記録する前に走った run では `axon network` が skip になります。
 
 ### sweep を丸ごと作り直す
 
@@ -67,8 +72,8 @@ for d in outputs/develop/<条件>/seed*/bridge-inter_cluster; do
 done
 ```
 
-1 run あたりの時間は再ビルドが支配します。lesion は親と同じネットワークを組んでから
-切り直すので、親の `connection` プロファイルの重さがそのまま効きます。
+1 run あたりの時間は図を描く時間だけです。`--verify` を付けると親と同じネットワークを
+組み直すので、親の `connection` プロファイルの重さがそのまま効きます。
 
 ---
 
@@ -367,10 +372,11 @@ GeNN のシナプス集団は `set_sparse_connections()` で確定し、実行�
 ```
 下見 (build するが compile しない)
   → 親の重みを (pre, post) で復元し、切断対象を決める
-  → 記録を書く (config / 結合 / lesion.json / 切断プロファイル)
-  → ベースライン (probe 0) = 親 run の記録時刻の窓をそのまま置く
 本番 (compile する 1 回きりの build)
   → 復元した重みを載せ、切断マスクで行を削除
+  → 記録を書く (config / 切断前後の結合・遅延・重み・軸索幾何 / lesion.json / 切断プロファイル)
+  → 読み直して構造図 (series.built())
+  → ベースライン (probe 0) = 親 run の記録時刻の窓をそのまま置く
   → settle → record_hours の各時刻で probe
 ```
 
@@ -528,7 +534,7 @@ npz が持つ。
 scripts/lesion/
 ├── __main__.py     入口: ランチャ (親)。親 run を探して run ディレクトリを作り子を並列起動
 ├── run_one.py      入口: 1 run (下見 → 記録 → 切断して build → probe)
-├── replot.py       入口: 再解析。再ビルドして切り直し、指標と図を全部作り直す
+├── replot.py       入口: 再解析。記録から指標と図を全部作り直す (--verify で再ビルド照合)
 ├── task.yaml       損傷プロトコル
 │
 ├── report/         いつ何を出すか
@@ -538,8 +544,9 @@ scripts/lesion/
 ├── store/          どこに何があり、どう読み書きするか
 │   ├── paths.py       run 内部のディレクトリ規約
 │   ├── records.py     記録ファイル 1 つの読み書き
-│   ├── series.py      Window (probe 1 つ) / Series (run 全体)
-│   └── parent.py      **親 run (develop 形式) を読む唯一の場所**
+│   ├── build_record.py 切断直後に何を書くかの一覧 (write_build_record)
+│   ├── views.py       Built (切断直後) / Window (probe 1 つ) / Series (run 全体)
+│   └── parent_run.py  **親 run (develop 形式) を読む唯一の場所**
 ├── analysis/       何を測るか (表)
 │   ├── metrics.py     probe 1 つの指標 + 切断したものの素性
 │   ├── selectors.py   どこを切るか (spec のパースと選択)
@@ -548,13 +555,13 @@ scripts/lesion/
 └── figures/        どう描くか (図)
 ```
 
-### `store/parent.py` —— 実験どうしの横 import を作らないための場所
+### `store/parent_run.py` —— 実験どうしの横 import を作らないための場所
 
 lesion は develop の run を読むが、**`scripts/develop/` を import しない**。代わりに
 「develop 形式の記録を読む実装」をこちらが持つ。読むのは 7 つだけ
 (`config.yaml` / `connectivity.npz` / `weights_{h}h.npz` / `spikes_{h}h.npz` /
 `layout_axes.npz` / `axon_geometry.npz` / `metrics.csv`) で、これは develop の内部事情ではなく
-**develop と lesion の契約**。ファイル名も `store/parent.py` がローカルに宣言する。
+**develop と lesion の契約**。ファイル名も `store/parent_run.py` がローカルに宣言する。
 
 規約が変わったら直す場所は 1 つで、そのことがモジュールの docstring に書いてある。
 **この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**

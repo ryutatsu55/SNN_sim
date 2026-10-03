@@ -72,7 +72,7 @@ def build_row(window) -> dict:
         smax=resolve_avalanche_smax(window.config),
         dt_ms=float(window.config.simulation.dt),
         # **アバランチのビンはベースラインで固定。** 窓ごとに合わせると、発火率が
-        # 落ちるだけで σ_bp が上がって見える (`store/series.py` の docstring)。
+        # 落ちるだけで σ_bp が上がって見える (`store/views.py` の docstring)。
         avalanche_bin_ms=window.avalanche_bin_ms(),
     ))
     out.update(structure_metrics(
