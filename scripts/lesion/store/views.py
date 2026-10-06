@@ -52,7 +52,7 @@ from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
 
 from scripts.lesion.store import paths
 from scripts.lesion.store.records import (BASELINE_INDEX, COORDS_NAME, DELAYS_NAME,
-                                          INITIAL_WEIGHTS_NAME, METRICS_NAME,
+                                          INITIAL_WEIGHTS_NAME, METRICS_NAME, RTE_NAME,
                                           MS_PER_HOUR,
                                           PHASE_BASELINE, SPIKES, TRACE, WEIGHTS,
                                           discover_probes,
@@ -320,6 +320,13 @@ class Series(runview.Series):
         path = paths.data_path(self.run_dir, METRICS_NAME)
         if not path.exists():
             raise MissingData(METRICS_NAME, f"{path} がありません")
+        return load_metrics(path)
+
+    def rte(self) -> pd.DataFrame:
+        """`rte.csv` を読む。`metrics()` と同じく**呼ばれた時点で読む。**"""
+        path = paths.data_path(self.run_dir, RTE_NAME)
+        if not path.exists():
+            raise MissingData(RTE_NAME, f"{path} がありません")
         return load_metrics(path)
 
     def manifest(self) -> dict:

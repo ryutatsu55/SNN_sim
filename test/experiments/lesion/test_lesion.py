@@ -176,6 +176,14 @@ class SelectorTest(unittest.TestCase):
         np.testing.assert_array_equal(a, b)
         self.assertFalse(np.array_equal(a, c))
 
+    def test_random_cuts_are_nested_across_fractions(self):
+        # 同じ seed なら、多く切る条件は少なく切る条件の切断を必ず含む (用量反応の前提)。
+        cuts = [RandomSelector(fraction=f, seed=0).select(self.ctx).cut
+                for f in (0.1, 0.25, 0.5, 0.9)]
+        for small, large in zip(cuts, cuts[1:]):
+            self.assertTrue(np.all(large[small]))
+            self.assertGreater(large.sum(), small.sum())
+
     def test_random_label_carries_the_whole_spec(self):
         self.assertEqual(cut_label(["random:pre=exc,post=exc,fraction=0.1,seed=2"]),
                          "random-exc-exc-f0.1-seed2")

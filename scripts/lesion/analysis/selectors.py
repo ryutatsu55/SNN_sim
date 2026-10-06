@@ -221,6 +221,10 @@ class RandomSelector:
     抽選は `seed` だけで決まる専用の乱数で行い、シミュレーションの乱数ストリームには
     触れない。候補の並びは COO の row-major 順なので、同じ親 run・同じ spec なら
     同じシナプスが選ばれる。
+
+    **同じ親 run・同じ pre / post / seed なら、切る集合は fraction について入れ子になる**
+    (2.5% で切るシナプスは 5% でも必ず切られる)。用量反応で、割合の差が「追加で切った
+    シナプス」だけになるようにするため。
     """
 
     POLARITIES = ("exc", "inh", "any")
@@ -243,7 +247,9 @@ class RandomSelector:
         if candidates.size == 0:
             raise ValueError(f"条件に合うシナプスがありません (pre={self.pre}, post={self.post})")
         num_cut = int(round(self.fraction * candidates.size))
-        chosen = np.random.default_rng(self.seed).choice(candidates, size=num_cut, replace=False)
+        # 候補を 1 度だけ並べ替えて先頭から取る。同じ seed なら fraction を上げても
+        # 下の fraction で選んだシナプスを必ず含む (入れ子)。
+        chosen = np.random.default_rng(self.seed).permutation(candidates)[:num_cut]
         mask = np.zeros(row.size, dtype=bool)
         mask[chosen] = True
         return LesionSelection(

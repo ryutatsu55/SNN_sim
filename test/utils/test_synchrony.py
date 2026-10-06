@@ -121,3 +121,50 @@ def test_event_columns_names_are_stable():
                             "event_participation_ceiling", "synchronous_fraction",
                             "active_fraction_median"}
     assert 0.0 < ACTIVE_FRACTION < 1.0
+
+
+# --- 群ごとの同期 (active_fraction_series / golomb_chi) ------------------------------
+
+from src.utils.analysis.synchrony import (active_fraction_series, chi_floor,  # noqa: E402
+                                          golomb_chi)
+
+
+def test_active_fraction_counts_only_members():
+    times = np.array([10.0, 20.0, 30.0, 150.0])
+    ids = np.array([0, 1, 5, 1])
+    # members = {0, 1, 2, 3}: ビン 0 で 0 と 1 (5 は群の外)、ビン 1 で 1
+    fraction = active_fraction_series(times, ids, [0, 1, 2, 3], 200.0, bin_ms=100.0)
+    np.testing.assert_allclose(fraction, [0.5, 0.25])
+
+
+def test_chi_is_one_when_all_fire_together_and_low_when_independent():
+    rng = np.random.default_rng(0)
+    members = np.arange(N)
+    # 全員が同じ時刻に撃つ
+    event_times = np.sort(rng.uniform(0, DURATION_MS, 200))
+    times = np.repeat(event_times, N)
+    ids = np.tile(members, event_times.size)
+    assert golomb_chi(times, ids, members, DURATION_MS) == pytest.approx(1.0)
+    # 独立なポアソン
+    count = 200 * N
+    times = rng.uniform(0, DURATION_MS, count)
+    ids = rng.integers(0, N, count)
+    chi = golomb_chi(times, ids, members, DURATION_MS)
+    assert chi == pytest.approx(chi_floor(N), rel=0.3)
+
+
+def test_chi_ignores_neurons_outside_group():
+    rng = np.random.default_rng(1)
+    event_times = np.sort(rng.uniform(0, DURATION_MS, 100))
+    times = np.repeat(event_times, 5)
+    ids = np.tile(np.arange(5), event_times.size)
+    # 群の外 (ID 10..19) にばらばらの発火を足しても、群 0..4 の χ は 1 のまま
+    noise_t = rng.uniform(0, DURATION_MS, 2000)
+    noise_id = rng.integers(10, 20, 2000)
+    chi = golomb_chi(np.concatenate([times, noise_t]), np.concatenate([ids, noise_id]),
+                     np.arange(5), DURATION_MS)
+    assert chi == pytest.approx(1.0)
+
+
+def test_chi_nan_when_group_silent():
+    assert np.isnan(golomb_chi(np.array([5.0]), np.array([9]), [0, 1], DURATION_MS))

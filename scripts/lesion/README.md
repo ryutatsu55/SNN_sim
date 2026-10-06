@@ -437,6 +437,7 @@ run ディレクトリは `<親 run>/<切断条件>/`。
 │   ├── cut_profile.csv       属性ごとの「切断群 vs 残存群」
 │   ├── metrics.csv           probe ごとの指標 (**絶対値のみ、1 行ずつ追記**)
 │   ├── metrics_delta.csv     ベースラインとの差 (run 終了後に一括)
+│   ├── rte.csv               probe ごとの RTE (実効結合の損傷前比。run 終了後に一括)
 │   ├── connection_probability.csv / bridge_hops.csv   切断**後**の群間結合確率
 │   ├── weights_p{NNN}.npz    その probe の重み (NNN = record_hours の添字)
 │   ├── spikes_p{NNN}.npz     スパイク + 窓の原点 / 窓幅 / phase
@@ -454,7 +455,8 @@ run ディレクトリは `<親 run>/<切断条件>/`。
     │   ├── correlation_network/  相関の強いペアだけを空間に描いた無向グラフ
     │   └── trace/                task.trace_neuron を指定した run のみ
     └── overview/         weight_trajectories / weight_distribution_shift /
-                          firing_rate_scatter / mean_correlation_track / drive_track
+                          firing_rate_scatter / mean_correlation_track / drive_track /
+                          chi_track / participation_heatmap / rte_track
 ```
 
 ### `metrics.csv` の駆動の列 (`drive_*`)
@@ -472,6 +474,35 @@ run ディレクトリは `<親 run>/<切断条件>/`。
 **可塑性 `custom_Akita` × シナプス `ExpCond` の組でしか計算できない** (それ以外の run では
 `NotImplementedError` で止まる)。**電流ではなくコンダクタンス**なので、駆動力
 (V − E_rev) は掛かっていない。
+
+### 群ごとの同期 (`chi_*` の列、`chi_track` / `participation_heatmap`)
+
+群は `module` ラベルの `-` より前 (`C0-M1` → `C0`)。全体 (`all`) と群ごとに測る
+(`figures/style.py` の `synchrony_groups`)。
+
+| 出力 | 中身 |
+|---|---|
+| `chi_<群>` (metrics.csv) | Golomb の同期指標 χ。50 ms ビンのスパイク数で、χ² = 群平均の分散 ÷ 各ニューロンの分散の平均。全員揃って 1、独立で約 1/√n |
+| `chi_track.png` | χ の推移。群の人数で決まる独立時の底 (1/√n) を同じ色の点線で引く |
+| `participation_heatmap.png` | 100 ms ビンごとの参加率 (群の何割が撃ったか) の分布。横 = probe、縦 = 参加率、色 = 1 秒あたりの出現回数。群の誰かが撃ったビンを全部数え、イベント閾値 0.2 は線で重ねるだけ |
+
+### 実効結合 (`rte.csv`、`rte_track`)
+
+Watanabe et al. 2026 の GTE → RTE (`src/utils/analysis/transfer_entropy.py`)。50 ms
+フレームに 1 発以上で 1、マルコフ次数 2、大域状態での条件づけなし、全ニューロン。
+**基準は baseline の窓**で、そこで z > 1 だった結合の集合 C を固定し、各 probe の TE を
+baseline の TE で割った比を C の上で平均する。基準の窓が決まらないと値が決まらないので
+`metrics.csv` には入れず、run 終了後に `rte.csv` として一括で書く (`analysis/effective.py`)。
+
+| 列 | 意味 |
+|---|---|
+| `rte` | C の上の TE / TE₀ の平均。baseline の行は 1 |
+| `rte_connections` | \|C\| |
+| `mean_te_bits` | その窓の全ペアの TE の平均 [bit]。C に限らない水準 |
+
+**RTE は C の外を見ない**ので、損傷後に生まれた経路は `rte` に出ない。`mean_te_bits` が
+`rte` より戻っていれば、元の経路以外で情報が流れている。TE はフレーム数で偏るので、
+baseline と post の窓幅は揃えておくこと (今の task.yaml はどちらも 10 分)。
 
 ### `structure/` と `panels/` の出自は develop の複製
 
@@ -540,7 +571,7 @@ scripts/lesion/
 ├── report/         いつ何を出すか
 │   ├── structure.py   切断直後: 切断後のネットワークの形
 │   ├── panels.py      probe ごと: ラスター / アバランチ / metrics 1 行
-│   └── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 差の表
+│   └── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 同期 / RTE / 差の表
 ├── store/          どこに何があり、どう読み書きするか
 │   ├── paths.py       run 内部のディレクトリ規約
 │   ├── records.py     記録ファイル 1 つの読み書き
@@ -549,6 +580,7 @@ scripts/lesion/
 │   └── parent_run.py  **親 run (develop 形式) を読む唯一の場所**
 ├── analysis/       何を測るか (表)
 │   ├── metrics.py     probe 1 つの指標 + 切断したものの素性
+│   ├── effective.py   probe ごとの RTE (baseline を基準に一括) → rte.csv
 │   ├── selectors.py   どこを切るか (spec のパースと選択)
 │   ├── restore.py     再ビルドが親と同じネットワークかの検証 (軸索幾何)
 │   └── connectivity.py 群間結合確率

@@ -105,3 +105,60 @@ def event_columns(times, ids, num_neurons: int, duration_ms: float,
         "synchronous_fraction": events.synchronous_fraction,
         "active_fraction_median": events.active_fraction_median,
     }
+
+
+# ======================================================================================
+# 群ごとの同期 —— 参加率の時系列と Golomb の χ
+#
+# 上の `population_events()` はネットワーク全体を 1 つの数に畳む。ここは**群
+# (クラスタなど) を渡して**、その中だけで測る。損傷は特定の群を孤立させるので、
+# 全体の平均では「どこの同期が崩れたか」が見えない。
+# ======================================================================================
+
+# χ のビン幅 [ms]。相関・移動エントロピーと同じ 50 ms (論文のフレーム)。
+CHI_BIN_MS = 50.0
+
+
+def _group_counts(times, ids, members, duration_ms: float, bin_ms: float) -> np.ndarray:
+    """`members` だけの (群の人数, ビン数) の発火率時系列。行は `members` を昇順にした順。"""
+    members = np.unique(np.asarray(members, dtype=np.int64))
+    if members.size == 0:
+        raise ValueError("members が空です。")
+    times = np.asarray(times, dtype=np.float64)
+    ids = np.asarray(ids, dtype=np.int64)
+    in_group = np.isin(ids, members)
+    return firing_rate_series(times[in_group], np.searchsorted(members, ids[in_group]),
+                              members.size, duration_ms, bin_ms)
+
+
+def active_fraction_series(times, ids, members, duration_ms: float,
+                           bin_ms: float = EVENT_BIN_MS) -> np.ndarray:
+    """`members` のうち各ビンで 1 発以上撃った割合。長さはビン数。
+
+    `times` は**窓の先頭を 0 とするローカル時刻** [ms]、`members` はグローバル ID。
+    """
+    return (_group_counts(times, ids, members, duration_ms, bin_ms) > 0).mean(axis=0)
+
+
+def golomb_chi(times, ids, members, duration_ms: float,
+               bin_ms: float = CHI_BIN_MS) -> float:
+    """Golomb の同期指標 χ。`members` の中だけで測る。
+
+        χ² = Var_t[ 群の平均活動 ] / 平均_i( Var_t[ ニューロン i の活動 ] )
+
+    活動は**ビンごとのスパイク数** (膜電位を全員ぶん記録していないので、スパイク版)。
+    全員が揃って揺れれば 1、独立に撃てば約 1/√n (n = 群の人数) に落ちる —— 小さい群
+    ほど底が高いので、群どうしを比べるときは `chi_floor(n)` と並べて読むこと。
+
+    群の誰も揺れない (全員が 1 発も撃たない) 窓では `nan`。
+    """
+    counts = _group_counts(times, ids, members, duration_ms, bin_ms)
+    single = float(counts.var(axis=1).mean())
+    if single <= 0.0:
+        return float("nan")
+    return float(np.sqrt(counts.mean(axis=0).var() / single))
+
+
+def chi_floor(num_members: int) -> float:
+    """独立に撃つ `num_members` 本の群で χ が取る値 (の目安 1/√n)。"""
+    return 1.0 / float(np.sqrt(num_members)) if num_members > 0 else float("nan")

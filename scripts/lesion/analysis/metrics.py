@@ -25,12 +25,15 @@ from src.utils.analysis.graph import (betweenness_centrality, classify_roles,
 from src.utils.analysis.isi import isi_metrics
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
-from src.utils.analysis.synchrony import event_columns
+from src.utils.analysis.synchrony import event_columns, golomb_chi
 from src.utils.analysis.weights import (block_values, excitatory_flags,
                                         synapse_distances, weight_block_metrics)
 from src.utils.analysis.avalanche import analyze_avalanches
 
 from scripts.lesion.analysis.drive import drive_columns
+# 群分けは図 (χ の推移・参加率のヒートマップ) と同じものでなければ、列と絵が別の群を指す。
+# 借りるのは matplotlib を使わない `style.py` の関数だけ (develop の analysis/connectivity.py と同じ形)。
+from scripts.lesion.figures.style import synchrony_groups
 
 
 def resolve_avalanche_smax(config) -> int:
@@ -81,7 +84,18 @@ def build_row(window) -> dict:
     out.update(drive_columns(
         spikes.times, spikes.ids, coo.row, coo.col, coo.weights,
         window.layout, window.config, window.record_window_ms))
+    out.update(chi_columns(spikes.times, spikes.ids, window.layout, window.record_window_ms))
     return add_diagnosis(out)
+
+
+def chi_columns(times, ids, layout, window_ms: float) -> dict:
+    """群ごとの同期指標 χ (Golomb)。列は `chi_<群名>` (`chi_all`, `chi_C0`, …)。
+
+    損傷は特定のクラスタを孤立させるので、全体の χ だけでは「どこの同期が崩れたか」が
+    見えない。群の人数で底 (独立なら約 1/√n) が違うので、群どうしは図で底と並べて読む。
+    """
+    return {f"chi_{name}": golomb_chi(times, ids, members, window_ms)
+            for name, members in synchrony_groups(layout).items()}
 
 
 def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,

@@ -62,6 +62,17 @@ def isi_distribution(window, out_path: Path) -> None:
                          xytext=(3, 0), textcoords="offset points",
                          ha="left", va="top", fontsize=7, color="tab:orange")
     ax_hist.set_xlabel("ISI [ms]  (log)")
+    # 上端に 1/ISI = 瞬時発火率。ISI ↔ Hz は自分自身が逆関数 (1000/x)。
+    # 0 は log 軸の外なので、変換が 0 除算しないよう下限で押さえる。
+    to_hz = lambda x: 1000.0 / np.maximum(x, MIN_ISI_MS)  # noqa: E731
+    top = ax_hist.secondary_xaxis("top", functions=(to_hz, to_hz))
+    top.set_xlabel("instantaneous rate 1/ISI [Hz]", fontsize=8)
+    # 目盛りは表示範囲に入る 10 の累乗に明示的に置く。逆向きの変換では自動の
+    # LogLocator が右端にラベルを重ねて出す。
+    lo_ms, hi_ms = ax_hist.get_xlim()
+    decades = np.arange(np.ceil(np.log10(1000.0 / hi_ms)),
+                        np.floor(np.log10(1000.0 / lo_ms)) + 1)
+    top.set_xticks(10.0 ** decades)
     ax_hist.set_ylabel("count")
     ax_hist.set_title(f"ISI distribution  ({positive.size} intervals)")
     ax_hist.grid(True, which="both", ls="--", alpha=0.3)

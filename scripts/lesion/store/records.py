@@ -84,6 +84,8 @@ MANIFEST_NAME = "lesion.json"
 CUT_NAME = "lesion_cut.npz"
 CUT_PROFILE_NAME = "cut_profile.csv"
 METRICS_NAME = "metrics.csv"
+# probe ごとの RTE (実効結合の損傷前比)。全 probe が揃ってから一度に書く表。
+RTE_NAME = "rte.csv"
 
 PHASE_BASELINE = "baseline"
 PHASE_POST = "post"

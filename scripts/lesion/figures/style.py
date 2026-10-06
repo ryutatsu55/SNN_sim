@@ -1,10 +1,11 @@
 """この実験の図の約束。**2 枚以上の図が一致していなければならない値だけ**を置く。
 
-置くのは 2 種類。
+置くのは 3 種類。
 
 - **色** —— どの図でも EE が同じ色であること
 - **並び順** —— ラスターの y 軸と行列の軸が同じ順であること (違うと 2 枚を並べて
   読む意味が消える)
+- **同期を測る群** —— χ の列と、群ごとの同期の図が同じ群で切られていること
 
 1 枚だけが使う値 (その図の軸範囲・点の大きさ・figsize など) は、その図のファイル先頭に
 置くこと —— ここへ集めると 1 枚の図を読むのに常に 2 ファイルを行き来することになる。
@@ -33,6 +34,29 @@ BLOCK_COLORS = {
     "IE": "tab:blue",
     "II": "tab:purple",
 }
+
+# 同期を群ごとに測るときの群。**χ の列 (`metrics.csv`) と参加率のヒートマップと χ の図が
+# 同じ群で切られている**ことが要点なので、ここで 1 つに決める。
+# 全体を指す群の名前。クラスタ名 (`C0` …) と衝突しない。
+ALL_GROUP = "all"
+# 群を取り出す軸。ラベルの `-` より前が 1 段外側の群 (`C0-M1` → `C0`)。`-` を
+# 持たないラベル (`modular_grid` の `M0`) はそれ自体が群。
+GROUP_AXIS = "module"
+
+
+def synchrony_groups(layout) -> dict[str, np.ndarray]:
+    """同期を測る群 → グローバル ID (昇順)。先頭は常に全体 (`ALL_GROUP`)。
+
+    `GROUP_AXIS` を持たない layout では全体だけを返す。
+    """
+    groups = {ALL_GROUP: np.arange(layout.total_neurons, dtype=np.int64)}
+    if not layout.has_axis(GROUP_AXIS):
+        return groups
+    outer = np.array([str(label).split("-")[0] for label in layout.labels(GROUP_AXIS)])
+    for name in np.unique(outer):
+        groups[str(name)] = np.nonzero(outer == name)[0].astype(np.int64)
+    return groups
+
 
 # 並べ替え。module でブロック化し、各モジュール内で興奮性→抑制性。
 # **ラスターと構造図 (粗視化結合図) が同じ並びになる**ようにここで 1 つに決める。
