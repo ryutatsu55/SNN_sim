@@ -168,3 +168,51 @@ def test_chi_ignores_neurons_outside_group():
 
 def test_chi_nan_when_group_silent():
     assert np.isnan(golomb_chi(np.array([5.0]), np.array([9]), [0, 1], DURATION_MS))
+
+
+# --- ネットワークバースト (network_bursts) -----------------------------------------
+
+from src.utils.analysis.synchrony import burst_columns, network_bursts  # noqa: E402
+
+
+def test_consecutive_event_bins_are_one_burst():
+    # 0.3 s 続くバースト (100 ms ビン 3 つ) を 10 s ごとに 6 回。全員が各ビンで撃つ。
+    rng = np.random.default_rng(0)
+    times, ids = [], []
+    for start in np.arange(6) * 10000.0 + 1000.0:
+        for offset in (10.0, 110.0, 210.0):
+            times += list(start + offset + rng.uniform(0, 50, N))
+            ids += list(range(N))
+    b = network_bursts(np.array(times), np.array(ids), N, DURATION_MS, bin_ms=BIN_MS)
+    assert b.num_bursts == 6
+    assert b.burst_rate_hz == pytest.approx(6 / (DURATION_MS / 1000))
+    assert b.width_ms == pytest.approx(300.0)
+    assert b.participation == pytest.approx(1.0)
+    assert b.outside_fraction == pytest.approx(0.0)
+
+
+def test_participation_counts_neurons_over_the_whole_burst():
+    # 1 回のバーストのうち、前半のビンで半分、後半のビンで残り半分が撃つ -> 参加率 1.0
+    half = N // 2
+    times = np.concatenate([np.full(half, 1010.0), np.full(N - half, 1110.0)])
+    ids = np.arange(N)
+    b = network_bursts(times, ids, N, DURATION_MS, bin_ms=BIN_MS)
+    assert b.num_bursts == 1
+    assert b.width_ms == pytest.approx(200.0)
+    assert b.participation == pytest.approx(1.0)
+
+
+def test_spikes_outside_bursts_are_counted():
+    # バースト 1 回 (全員) + 散発 1 発 (別の時刻、閾値に届かない)
+    times = np.concatenate([np.full(N, 1010.0), [5005.0]])
+    ids = np.concatenate([np.arange(N), [0]])
+    b = network_bursts(times, ids, N, DURATION_MS, bin_ms=BIN_MS)
+    assert b.num_bursts == 1
+    assert b.outside_fraction == pytest.approx(1 / (N + 1))
+
+
+def test_no_burst_gives_zero_rate_and_nan_shape():
+    cols = burst_columns(np.array([5.0]), np.array([0]), N, DURATION_MS)
+    assert cols["burst_count"] == 0 and cols["burst_rate_hz"] == 0.0
+    assert np.isnan(cols["burst_width_ms"]) and np.isnan(cols["burst_participation"])
+    assert cols["burst_outside_fraction"] == pytest.approx(1.0)

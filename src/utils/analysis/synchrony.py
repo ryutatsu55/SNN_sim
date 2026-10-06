@@ -108,6 +108,74 @@ def event_columns(times, ids, num_neurons: int, duration_ms: float,
 
 
 # ======================================================================================
+# ネットワークバースト —— 連続するイベントビンを 1 回のバーストにまとめる
+#
+# `population_events()` はイベント**ビン**を数えるので、数百 ms 続くバーストを何回にも
+# 数える。ここは `active_fraction` 以上のビンが**連続する区間**を 1 回とし、回数・幅・
+# 1 回あたりの参加率を出す。疎で深いバースト (論文: 約 0.1 Hz、ほぼ全員参加) を
+# 目標にするときの物差し。
+# ======================================================================================
+
+
+@dataclass(frozen=True)
+class NetworkBursts:
+    """ネットワークバーストの要約。全部 1 記録窓ぶん。"""
+    bin_ms: float
+    num_bursts: int
+    burst_rate_hz: float          # バーストの頻度
+    width_ms: float               # 1 回の幅の平均 (ビン数 × ビン幅)
+    participation: float          # 1 回の間に 1 発以上撃ったニューロンの割合の平均
+    outside_fraction: float       # 全スパイクのうちバーストの外で撃たれた割合
+
+
+def network_bursts(times, ids, num_neurons: int, duration_ms: float,
+                   bin_ms: float = EVENT_BIN_MS,
+                   active_fraction: float = ACTIVE_FRACTION) -> NetworkBursts:
+    """`active_fraction` 以上が撃ったビンの連続区間を 1 回のバーストとして数える。
+
+    `times` は**窓の先頭を 0 とするローカル時刻** [ms]。バーストが無ければ幅と参加率は
+    `nan`、頻度は 0、バーストの外の割合は 1 (スパイクが無ければ `nan`)。
+    """
+    num_neurons = int(num_neurons)
+    counts = firing_rate_series(times, ids, num_neurons, duration_ms, bin_ms) * (bin_ms / 1000.0)
+    fired = counts > 0
+    event = fired.mean(axis=0) >= float(active_fraction)
+
+    # 連続区間の [start, stop) を取り出す
+    edges = np.diff(np.concatenate([[0], event.astype(np.int8), [0]]))
+    starts, stops = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+
+    total_spikes = float(counts.sum())
+    inside_spikes = float(counts[:, event].sum())
+    outside = (1.0 - inside_spikes / total_spikes) if total_spikes > 0 else float("nan")
+    seconds = float(duration_ms) / 1000.0
+    if starts.size == 0:
+        return NetworkBursts(bin_ms=float(bin_ms), num_bursts=0, burst_rate_hz=0.0,
+                             width_ms=float("nan"), participation=float("nan"),
+                             outside_fraction=outside)
+    participation = np.array([fired[:, a:b].any(axis=1).mean() for a, b in zip(starts, stops)])
+    return NetworkBursts(
+        bin_ms=float(bin_ms), num_bursts=int(starts.size),
+        burst_rate_hz=float(starts.size) / seconds,
+        width_ms=float(np.mean(stops - starts)) * float(bin_ms),
+        participation=float(participation.mean()),
+        outside_fraction=outside)
+
+
+def burst_columns(times, ids, num_neurons: int, duration_ms: float,
+                  bin_ms: float = EVENT_BIN_MS) -> dict:
+    """`metrics.csv` に入れる列。`network_bursts()` の結果を `burst_*` の名前で返す。"""
+    bursts = network_bursts(times, ids, num_neurons, duration_ms, bin_ms)
+    return {
+        "burst_count": bursts.num_bursts,
+        "burst_rate_hz": bursts.burst_rate_hz,
+        "burst_width_ms": bursts.width_ms,
+        "burst_participation": bursts.participation,
+        "burst_outside_fraction": bursts.outside_fraction,
+    }
+
+
+# ======================================================================================
 # 群ごとの同期 —— 参加率の時系列と Golomb の χ
 #
 # 上の `population_events()` はネットワーク全体を 1 つの数に畳む。ここは**群

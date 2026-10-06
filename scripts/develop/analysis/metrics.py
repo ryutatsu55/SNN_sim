@@ -18,7 +18,7 @@ from src.utils.analysis.criticality import (bimodality_d, burstiness_index,
                                             criticality_index_delta_cr)
 from src.utils.analysis.avalanche import analyze_avalanches, avalanche_size_columns
 from src.utils.analysis.correlation import mean_neuronal_correlation
-from src.utils.analysis.synchrony import event_columns
+from src.utils.analysis.synchrony import burst_columns, event_columns
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
 from src.utils.analysis.weights import block_values, weight_block_metrics
@@ -84,6 +84,8 @@ def spike_columns(local_times, ids, total_neurons: int, record_window_ms: float,
     }
     row.update(avalanche_size_columns(avalanche.sizes, record_window_ms))
     row.update(event_columns(local_times, ids, total_neurons, record_window_ms))
+    # 連続するイベントビンを 1 回にまとめたバースト。疎で深いバーストの頻度・参加率を読む物差し。
+    row.update(burst_columns(local_times, ids, total_neurons, record_window_ms))
     # ビン連結方式。σ_bp (分岐比) が臨界性の直接の判定量。
     _av, _lags, _corr, suite = analyze_avalanches(
         local_times, ids, record_window_ms, min_bin_ms=dt_ms, size_fit_max=smax)

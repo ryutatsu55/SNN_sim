@@ -66,6 +66,50 @@ class DuplicateKeyTest(unittest.TestCase):
             self.assertEqual(ConfigManager()._load_yaml(Path(tmp) / "absent.yaml"), {})
 
 
+class ProfileOverlayTest(unittest.TestCase):
+    """メイン config に書いた値がプロファイル (components/*.yaml) より優先されること。
+
+    逆だと、条件ごとの config にパラメータを書いても黙ってプロファイルの値で走り、
+    run の config.yaml にもプロファイルの値が記録される (掃引したつもりで全条件が同じになる)。
+    """
+
+    BASE = root_path / "test" / "experiments" / "no_space_100.yaml"
+
+    def _resolve(self, edit):
+        main = load_yaml(self.BASE)
+        edit(main)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "main.yaml"
+            path.write_text(yaml.safe_dump(main), encoding="utf-8")
+            # 実験の task.yaml を借りない (借りると実験の都合でこのテストが動く)
+            task = Path(tmp) / "task.yaml"
+            task.write_text("probe: {}\n", encoding="utf-8")
+            return ConfigManager().resolve(str(path), "probe", task_path=task)
+
+    def test_inline_value_wins_over_profile(self):
+        def edit(main):
+            main["synapses"]["from_Exc"]["plasticity"]["tau_rec"] = 1234.0
+            main["synapses"]["from_Exc"]["synapse"]["tau"] = 7.0
+            main["neurons"]["Layer_Exc"]["f_rest"] = 0.1
+        config = self._resolve(edit)
+        self.assertEqual(config.synapses["from_Exc"].plasticity.tau_rec, 1234.0)
+        self.assertEqual(config.synapses["from_Exc"].synapse.tau, 7.0)
+        self.assertEqual(config.neurons["Layer_Exc"].f_rest, 0.1)
+
+    def test_unwritten_values_come_from_profile(self):
+        profile = load_yaml(root_path / "configs" / "components" / "plasticity.yaml")
+        expected = profile["custom_Akita"]["e-stdp"]
+        config = self._resolve(lambda main: None)
+        plasticity = config.synapses["from_Exc"].plasticity
+        for key in ("tau_rec", "U", "g_max"):
+            self.assertEqual(getattr(plasticity, key), expected[key])
+        # 上書きは書いたグループだけに効く
+        other = self._resolve(
+            lambda main: main["synapses"]["from_Exc"]["plasticity"].update(tau_rec=999.0))
+        self.assertEqual(other.synapses["from_Inh"].plasticity.tau_rec,
+                         profile["custom_Akita"]["i-stdp"]["tau_rec"])
+
+
 class RepositoryYamlTest(unittest.TestCase):
     """実在する YAML が規則を満たすこと。"""
 

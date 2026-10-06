@@ -174,6 +174,21 @@ def expand_hours_spec(spec) -> List[float]:
     return _expand_spec(spec, "task.record_hours")
 
 
+def _overlay_profile(inline: Dict[str, Any], profiles: Dict[str, Any],
+                     kind: str, mode: str) -> Dict[str, Any]:
+    """プロファイル `profiles[kind][mode]` を土台に、`inline` (メイン config の値) を上書きした dict。
+
+    **メイン config に書いた値がプロファイルより優先される。** プロファイルが無ければ
+    `inline` のコピーをそのまま返す。
+    """
+    profile = profiles.get(kind, {}).get(mode) if isinstance(profiles.get(kind), dict) else None
+    merged = dict(inline)
+    if isinstance(profile, dict):
+        for key, value in profile.items():
+            merged.setdefault(key, value)
+    return merged
+
+
 def _to_python_native(obj):
     """numpy スカラ等を Python ネイティブに落とす (yaml.safe_dump 用)。"""
     if isinstance(obj, dict):
@@ -491,12 +506,12 @@ class ConfigManager:
         plasticity_data = self._load_yaml(components_dir / "plasticity.yaml")
 
         # --- 1. ニューロン設定の解決 ---
+        # プロファイル (components/*.yaml の type > mode) を土台に、メイン config に
+        # 書いた値で上書きする。**メイン config の値が勝つ** ので、条件ごとの config に
+        # パラメータを 1 つ書くだけで掃引できる。
         for group_name, n_cfg in main_cfg["neurons"].items():
-            resolved["neurons"][group_name] = n_cfg.copy()
-            n_type, n_mode = n_cfg["type"], n_cfg["mode"]
-            # components/neurons.yaml から特定の type > mode のパラメータをマージ
-            if n_type in neurons_data and n_mode in neurons_data[n_type]:
-                resolved["neurons"][group_name].update(neurons_data[n_type][n_mode])
+            resolved["neurons"][group_name] = _overlay_profile(
+                n_cfg, neurons_data, n_cfg["type"], n_cfg["mode"])
 
         # --- 2. シナプス＆可塑性設定の解決 ---
         for group_name, s_cfg in main_cfg["synapses"].items():
@@ -504,15 +519,13 @@ class ConfigManager:
 
             # plasticity (STDP等)
             plas_info = s_cfg["plasticity"]
-            p_type, p_mode = plas_info["type"], plas_info["mode"]
-            if p_type in plasticity_data and p_mode in plasticity_data[p_type]:
-                resolved["synapses"][group_name]["plasticity"].update(plasticity_data[p_type][p_mode])
-                
+            resolved["synapses"][group_name]["plasticity"] = _overlay_profile(
+                plas_info, plasticity_data, plas_info["type"], plas_info["mode"])
+
             # synapse (コンダクタンスや放出ダイナミクス)
             syn_info = s_cfg["synapse"]
-            s_type, s_mode = syn_info["type"], syn_info["mode"]
-            if s_type in synapses_data and s_mode in synapses_data[s_type]:
-                resolved["synapses"][group_name]["synapse"].update(synapses_data[s_type][s_mode])
+            resolved["synapses"][group_name]["synapse"] = _overlay_profile(
+                syn_info, synapses_data, syn_info["type"], syn_info["mode"])
 
         # メイン設定ファイルの network ブロックを取得
         network = main_cfg["network"]

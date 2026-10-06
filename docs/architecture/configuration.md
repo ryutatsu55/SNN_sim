@@ -46,6 +46,20 @@
 
 各コンポーネントについて「どのプロファイルを使うか」を指定する。
 
+`neurons.*` / `synapses.*.plasticity` / `synapses.*.synapse` は、`type` > `mode` で選んだ
+プロファイルを土台にし、**メイン config に書いた値でその上を上書きする** (メイン config が
+勝つ)。条件ごとにパラメータを 1 つ変えたいときは、プロファイルを増やさずメイン config に
+その 1 行を書けばよい。書かなかったパラメータはプロファイルの値になる。
+
+```yaml
+synapses:
+  from_Exc:
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_physical_fine
+      tau_rec: 1200.0      # プロファイルの 150.0 ではなくこちらが使われる
+```
+
 ```yaml
 simulation:
   dt: 0.001
