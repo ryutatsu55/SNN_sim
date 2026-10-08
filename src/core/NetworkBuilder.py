@@ -317,11 +317,14 @@ class NetworkBuilder:
 
             NeuronClass = NEURON_MODELS.get(params.type)
             neuron_instance = NeuronClass(params, self.config.simulation.dt)
-            
+            neuron_model = neuron_instance.model_class
+            # PyGeNNのC++側が参照するモデルをビルド完了まで保持する。
+            self._component_lifeline.extend((neuron_instance, neuron_model))
+
             self.genn_model.add_neuron_population(
                 pop_name = group_name, 
                 num_neurons = num_neurons,
-                neuron = neuron_instance.model_class, 
+                neuron = neuron_model,
                 params = neuron_instance.params, 
                 vars = neuron_instance.vars
             )
@@ -493,6 +496,9 @@ class NetworkBuilder:
                     vars=syn_instance.vars,
                     var_refs=syn_instance.var_refs
                 )
+
+                # 初期化オブジェクトもネイティブコード生成まで生存させる。
+                self._component_lifeline.extend((weight_init, post_init))
 
                 sg = self.genn_model.add_synapse_population(
                     pop_name=f"{src_name}_to_{tgt_name}", 

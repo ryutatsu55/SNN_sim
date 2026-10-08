@@ -1,0 +1,41 @@
+# PQN基準ネットワーク。物理単位未確認の振幅・電位はモデル単位。
+n: 1000
+n_exc: 800
+connection_rule: constant_probability
+probability: 0.1
+wiring_seeds: [11, 22, 33]
+stimulus_seeds: [101, 202, 303]
+selection_seed: 17
+space:
+  kind: none
+  seed: 71
+  extent: 1.0
+  unit: model_unit
+  boundary: open
+delay_rule: constant_arrival
+arrival_ms: 1.5
+dt_ms: 0.05
+backend: cpu
+exc_model:
+  type: PQN_float
+  mode: RSexci
+inh_model:
+  type: PQN_float
+  mode: RSinhi
+tau_exc_ms: 2.0
+tau_inh_ms: 5.0
+weights:
+  ee: 0.1
+  ei: 0.04
+  ie: -0.4
+  ii: -0.16
+multipliers: [0.0, 0.5, 1.0, 2.0, 4.0, 8.0]
+inhibition_factors: [1.0]
+warmup_ms: 500.0
+pulse_ms: 20.0
+post_ms: 2000.0
+stimulus_fraction: 0.05
+stimulus_amplitude: 0.4
+rate_bin_ms: 5.0
+tail_ms: 100.0
+sample_ms: 1.0

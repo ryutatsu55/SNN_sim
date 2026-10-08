@@ -1,0 +1,19 @@
+baseline_config: baseline_network.yaml
+backend: cpu
+dt_values_ms: [0.05, 0.025, 0.0125, 0.00625]
+warmup_ms: 2000.0
+warmup_check_ms: 4000.0
+amplitudes: [0.0, -0.2, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8]
+pulse_widths_ms: [20.0, 500.0]
+cell_post_ms: 100.0
+network_post_ms: 4000.0
+network_multiplier: 2.0
+network_inhibition_factor: 0.5
+wiring_seed: 11
+stimulus_seed: 101
+criteria:
+  warmup_drift_abs: 0.00001
+  cell_latency_abs_ms: 0.1
+  cell_waveform_nrmse: 0.05
+  network_count_relative: 0.05
+  network_last_spike_abs_ms: 1.0

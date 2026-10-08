@@ -1,0 +1,10 @@
+n: 20
+n_exc: 16
+probability: 0.25
+wiring_seeds: [11]
+stimulus_seeds: [101, 202]
+warmup_ms: 100.0
+pulse_ms: 20.0
+post_ms: 100.0
+tail_ms: 20.0
+stimulus_fraction: 0.25
