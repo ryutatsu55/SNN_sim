@@ -110,6 +110,36 @@ class ProfileOverlayTest(unittest.TestCase):
                          profile["custom_Akita"]["i-stdp"]["tau_rec"])
 
 
+class NetworkOverlayTest(ProfileOverlayTest):
+    """network のコンポーネントも、メイン config の値がプロファイルより優先されること。"""
+
+    def test_inline_value_wins_over_profile(self):
+        profile = load_yaml(root_path / "configs" / "components" / "connections.yaml")
+        main = load_yaml(self.BASE)
+        name = main["network"]["connection"]
+        expected = dict(profile[name])
+        key = next(iter(k for k, v in expected.items() if isinstance(v, (int, float))
+                        and not isinstance(v, bool)))
+
+        def edit(m):
+            m["network"]["connection"] = {"profile_name": name, key: 0.123}
+        config = self._resolve(edit)
+        connection = config.network.connection
+        self.assertEqual(connection.profile_name, name)
+        self.assertEqual(getattr(connection, key), 0.123)
+        for k, v in expected.items():
+            if k != key:
+                self.assertEqual(getattr(connection, k), v)
+
+    def test_unwritten_values_come_from_profile(self):
+        main = load_yaml(self.BASE)
+        name = main["network"]["connection"]
+        as_name = self._resolve(lambda m: None).network.connection
+        as_dict = self._resolve(
+            lambda m: m["network"].update(connection={"profile_name": name})).network.connection
+        self.assertEqual(as_name.model_dump(), as_dict.model_dump())
+
+
 class RepositoryYamlTest(unittest.TestCase):
     """実在する YAML が規則を満たすこと。"""
 

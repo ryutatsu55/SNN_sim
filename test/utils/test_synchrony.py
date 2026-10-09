@@ -216,3 +216,81 @@ def test_no_burst_gives_zero_rate_and_nan_shape():
     assert cols["burst_count"] == 0 and cols["burst_rate_hz"] == 0.0
     assert np.isnan(cols["burst_width_ms"]) and np.isnan(cols["burst_participation"])
     assert cols["burst_outside_fraction"] == pytest.approx(1.0)
+
+
+from src.utils.analysis.synchrony import global_event_columns, global_events  # noqa: E402
+
+
+def _poisson(rng, n, rate_hz, duration_ms):
+    """独立な Poisson 発火 (n 本、ローカル時刻 ms)。"""
+    counts = rng.poisson(rate_hz * duration_ms / 1000.0, n)
+    ids = np.repeat(np.arange(n), counts)
+    times = rng.uniform(0.0, duration_ms, ids.size)
+    return times, ids
+
+
+def test_independent_firing_has_no_global_events():
+    """発火率が高くても、同時性が無ければ全体イベントは出ない (固定閾値の burst との違い)。"""
+    rng = np.random.default_rng(1)
+    times, ids = _poisson(rng, 64, 5.0, 60000.0)
+    ev = global_events(times, ids, 64, 60000.0)
+    assert ev.global_rate_hz < 0.05
+    assert ev.very_deep_rate_hz == 0.0
+
+
+def test_planted_global_events_are_found_deep_and_wide():
+    """全員が揃って撃つイベントを 0.5 Hz で埋めると、その頻度で深く広く見つかる。"""
+    rng = np.random.default_rng(2)
+    n, dur = 64, 60000.0
+    bg_t, bg_i = _poisson(rng, n, 0.5, dur)
+    onsets = np.arange(1000.0, dur, 2000.0)
+    ev_t = np.concatenate([o + rng.uniform(0, 30, n) for o in onsets])
+    ev_i = np.tile(np.arange(n), onsets.size)
+    groups = np.repeat(np.arange(4), n // 4)
+    ev = global_events(np.concatenate([bg_t, ev_t]), np.concatenate([bg_i, ev_i]), n, dur, groups)
+    assert ev.global_rate_hz == pytest.approx(onsets.size / 60.0, rel=0.1)
+    assert ev.global_depth > 0.9
+    assert ev.deep_group_fraction == pytest.approx(1.0)
+
+
+def test_single_module_events_are_local_not_global():
+    """1 モジュールだけが揃って撃つイベントは local に数え、全体には数えない。"""
+    rng = np.random.default_rng(3)
+    n, dur = 64, 60000.0
+    bg_t, bg_i = _poisson(rng, n, 0.5, dur)
+    onsets = np.arange(1000.0, dur, 2000.0)
+    members = np.arange(16)              # モジュール 0 だけ
+    ev_t = np.concatenate([o + rng.uniform(0, 30, members.size) for o in onsets])
+    ev_i = np.tile(members, onsets.size)
+    groups = np.repeat(np.arange(4), n // 4)
+    ev = global_events(np.concatenate([bg_t, ev_t]), np.concatenate([bg_i, ev_i]), n, dur, groups)
+    assert ev.local_rate_hz == pytest.approx(onsets.size / 60.0, rel=0.1)
+    assert ev.global_rate_hz == 0.0
+    # 全体で見れば 1/4 しか参加していないが、そのモジュールの中では全員が撃っている
+    assert ev.local_group_depth > 0.9
+
+
+def test_group_depth_separates_spread_from_depth_within_groups():
+    """3/4 のモジュールが全員で撃つイベント: 全体の深さは約 3/4、加わった群の中では約 1。"""
+    rng = np.random.default_rng(5)
+    n, dur = 64, 60000.0
+    bg_t, bg_i = _poisson(rng, n, 0.5, dur)
+    onsets = np.arange(1000.0, dur, 2000.0)
+    members = np.arange(48)              # モジュール 0-2
+    ev_t = np.concatenate([o + rng.uniform(0, 30, members.size) for o in onsets])
+    ev_i = np.tile(members, onsets.size)
+    groups = np.repeat(np.arange(4), n // 4)
+    ev = global_events(np.concatenate([bg_t, ev_t]), np.concatenate([bg_i, ev_i]), n, dur, groups)
+    assert ev.global_rate_hz == pytest.approx(onsets.size / 60.0, rel=0.1)
+    assert ev.global_depth == pytest.approx(0.75, abs=0.05)
+    assert ev.global_group_depth > 0.9
+
+
+def test_global_events_are_deterministic_and_silent_window_is_zero():
+    rng = np.random.default_rng(4)
+    times, ids = _poisson(rng, 32, 2.0, 30000.0)
+    a = global_event_columns(times, ids, 32, 30000.0)
+    b = global_event_columns(times, ids, 32, 30000.0)
+    np.testing.assert_equal(a, b)       # nan どうしも等しいとみなす
+    empty = global_events(np.array([]), np.array([], dtype=int), 32, 30000.0)
+    assert empty.event_rate_hz == 0.0 and empty.global_rate_hz == 0.0

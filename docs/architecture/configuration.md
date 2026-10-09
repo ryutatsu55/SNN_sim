@@ -60,6 +60,17 @@ synapses:
       tau_rec: 1200.0      # プロファイルの 150.0 ではなくこちらが使われる
 ```
 
+`network.*` も同じで、プロファイル名の代わりに `profile_name` と上書きする値の dict を書ける
+(保存される `config.yaml` の `network` と同じ形なので、そこからコピーしてそのまま使える)。
+
+```yaml
+network:
+  area:
+    profile_name: hierarchical_modular_grid
+    bridge_width: 100.0    # プロファイルの 50 ではなくこちらが使われる
+  connection: axon_growth_fine   # 上書きしないならプロファイル名だけでよい
+```
+
 ```yaml
 simulation:
   dt: 0.001

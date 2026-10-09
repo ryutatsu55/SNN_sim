@@ -25,7 +25,8 @@ from src.utils.analysis.graph import (betweenness_centrality, classify_roles,
 from src.utils.analysis.isi import isi_metrics
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
-from src.utils.analysis.synchrony import burst_columns, event_columns, golomb_chi
+from src.utils.analysis.synchrony import (burst_columns, event_columns, global_event_columns,
+                                          golomb_chi)
 from src.utils.analysis.weights import (block_values, excitatory_flags,
                                         synapse_distances, weight_block_metrics)
 from src.utils.analysis.avalanche import analyze_avalanches
@@ -138,6 +139,11 @@ def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,
     # 「発火率が落ちて参加できなくなった」のかはこの 2 つを並べないと決まらない。
     row.update(event_columns(times, ids, num_neurons, window_ms))
     row.update(burst_columns(times, ids, num_neurons, window_ms))
+    # 偶然の重なりを除いた全体イベントと、1 モジュールだけのイベント。切断で全体イベントが
+    # モジュール内に割れるかを読む。
+    row.update(global_event_columns(
+        times, ids, num_neurons, window_ms,
+        layout.labels("module") if layout.has_axis("module") else None))
     polarity = layout.ids_by("polarity")
     row.update(spike_group_metrics(ids, polarity.get("excitatory"), polarity.get("inhibitory"),
                                    window_ms))

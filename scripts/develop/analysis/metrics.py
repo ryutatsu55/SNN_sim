@@ -18,7 +18,7 @@ from src.utils.analysis.criticality import (bimodality_d, burstiness_index,
                                             criticality_index_delta_cr)
 from src.utils.analysis.avalanche import analyze_avalanches, avalanche_size_columns
 from src.utils.analysis.correlation import mean_neuronal_correlation
-from src.utils.analysis.synchrony import burst_columns, event_columns
+from src.utils.analysis.synchrony import burst_columns, event_columns, global_event_columns
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
 from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
 from src.utils.analysis.weights import block_values, weight_block_metrics
@@ -100,6 +100,17 @@ def group_columns(ids, layout, record_window_ms: float) -> dict:
                                polarity.get("inhibitory"), record_window_ms)
 
 
+def module_event_columns(local_times, ids, layout, total_neurons: int,
+                         record_window_ms: float) -> dict:
+    """全体イベント (偶然の重なりを除いた深さ・モジュールへの広がり) の指標。
+
+    疎で深い全体イベントの物差し。`burst_*` は発火率が高いと偶然の重なりで閾値を越えるので、
+    動作点の判定はこちらを使う。モジュール軸が無ければ全体を 1 群とみなす。
+    """
+    groups = layout.labels("module") if layout.has_axis("module") else None
+    return global_event_columns(local_times, ids, total_neurons, record_window_ms, groups)
+
+
 def weight_columns(weights, row, col, layout, wmax: float) -> dict:
     """重みブロック (EE / EI / IE / II) の指標。
 
@@ -126,6 +137,8 @@ def build_row(window) -> dict:
                              record_window_ms, smax,
                              dt_ms=float(window.config.simulation.dt)))
     out.update(group_columns(spikes.ids, layout, record_window_ms))
+    out.update(module_event_columns(spikes.times, spikes.ids, layout, window.total_neurons,
+                                    record_window_ms))
     out.update(weight_columns(window.weights(), wiring.row, wiring.col, layout,
                               max_plasticity_weight(window.config)))
     out.update(diagnose_activity(

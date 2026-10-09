@@ -541,9 +541,17 @@ class ConfigManager:
             "delays.yaml": ("delay", network["delay"]),
         }
 
-        for yaml_file, (key_name, profile_name) in network_map.items():
+        # 値はプロファイル名か、`profile_name` + 上書きする値の dict (保存される config.yaml と
+        # 同じ形)。neurons / synapses と同じく**メイン config に書いた値が勝つ**。
+        for yaml_file, (key_name, spec) in network_map.items():
+            if isinstance(spec, dict):
+                inline = dict(spec)
+                profile_name = inline.pop("profile_name")
+            else:
+                profile_name, inline = spec, {}
             data = self._load_yaml(components_dir / yaml_file)
             profile_data = data[profile_name].copy()
+            profile_data.update(inline)
             profile_data["profile_name"] = profile_name
             resolved["network"][key_name] = profile_data
 

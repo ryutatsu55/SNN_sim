@@ -230,3 +230,164 @@ def golomb_chi(times, ids, members, duration_ms: float,
 def chi_floor(num_members: int) -> float:
     """独立に撃つ `num_members` 本の群で χ が取る値 (の目安 1/√n)。"""
     return 1.0 / float(np.sqrt(num_members)) if num_members > 0 else float("nan")
+
+
+# ======================================================================================
+# 全体イベント —— 偶然の重なりを除いた深さと、モジュールへの広がり
+#
+# 上の `network_bursts()` は「20% 以上が同じビンで撃つ」を固定閾値で数えるので、
+# 発火率が ≳1 Hz では偶然の重なりだけで閾値を越え、ほぼ連続する活動を「深いバースト」と
+# 読んでしまう。ここは閾値をサロゲート (各ニューロンの発火列を独立に巡回シフトしたもの。
+# 発火率と ISI は保ち、ニューロン間の同時性だけ壊す) から決め、参加率からも偶然の分を除く。
+# イベントを「全体 / 1 モジュールだけ」に分けるので、疎で深い全体イベントの頻度と、
+# それを薄めるモジュール内のイベントを別々に読める。
+# ======================================================================================
+
+# 全体イベントの検出のビン幅 [ms]。相関・χ と同じ 50 ms。
+GLOBAL_EVENT_BIN_MS = 50.0
+# サロゲートの活動割合のこの分位点を越えたビンを「群が活動」とする。
+GLOBAL_EVENT_QUANTILE = 0.999
+GLOBAL_EVENT_SURROGATES = 20
+# 偶然の分を除いた参加率がこれ以上なら「深い」/「とても深い」。
+DEEP_EVENT_DEPTH = 0.5
+VERY_DEEP_EVENT_DEPTH = 0.8
+# 加わった群の割合がこれ以上なら「広い」。深くて広いものが全体イベント。
+GLOBAL_EVENT_GROUP_FRACTION = 0.75
+
+
+@dataclass(frozen=True)
+class GlobalEvents:
+    """全体イベントの要約。全部 1 記録窓ぶん。頻度は Hz。"""
+    bin_ms: float
+    num_groups: int
+    threshold_mean: float          # 群ごとの活動閾値 (サロゲートの分位点) の平均
+    event_rate_hz: float           # どれかの群が活動している区間の頻度 (深さを問わない)
+    local_rate_hz: float           # 1 群だけのイベントの頻度 (群が 1 つなら 0)
+    deep_rate_hz: float            # 深さ ≥ DEEP_EVENT_DEPTH の頻度
+    very_deep_rate_hz: float       # 深さ ≥ VERY_DEEP_EVENT_DEPTH の頻度
+    deep_group_fraction: float     # 深いイベントに加わった群の割合の平均
+    global_rate_hz: float          # 深くて広い (= 全体) イベントの頻度
+    global_depth: float            # 全体イベントの深さ (偶然の分を除いた参加率) の平均
+    global_participation: float    # 全体イベントの生の参加率の平均
+    global_width_ms: float         # 全体イベントの幅の平均
+    global_spike_fraction: float   # 全スパイクのうち全体イベント中に撃たれた割合
+    # 加わった群の中だけで測った深さ。全体の深さ = 広がり × これ、に近い。
+    # 「広がりが足りない」のか「各群が浅い」のかを分ける
+    global_group_depth: float      # 全体イベントの、加わった群の中での深さの平均
+    local_group_depth: float       # 1 群だけのイベントの、その群の中での深さの平均
+
+
+def global_events(times, ids, num_neurons: int, duration_ms: float, groups=None,
+                  bin_ms: float = GLOBAL_EVENT_BIN_MS,
+                  quantile: float = GLOBAL_EVENT_QUANTILE,
+                  num_surrogates: int = GLOBAL_EVENT_SURROGATES,
+                  seed: int = 0) -> GlobalEvents:
+    """イベントを検出し、深さ (偶然の分を除いた参加率) と群への広がりで分ける。
+
+    `times` は**窓の先頭を 0 とするローカル時刻** [ms]。`groups` は長さ `num_neurons` の
+    群ラベル (モジュールなど)。`None` なら全体を 1 群とみなす (広がりは常に 1)。
+
+    - 群 g の活動割合 A_g(t) がサロゲートの `quantile` 分位点を越えたビンを「g が活動」とし、
+      どれかの群が活動しているビンの連続区間を 1 イベントとする
+    - 深さ = (part − chance) / (1 − chance)。part はイベント中に 1 発以上撃ったニューロンの
+      割合、chance は各ニューロンの発火率とイベント幅から Poisson で見積もった偶然の参加率
+    - 群の中での深さ = 同じ式を、そのイベントで活動した群のメンバーだけで計算した値 (群ごとに
+      出して平均)
+
+    サロゲートは `seed` で固定するので、同じスパイク列からは同じ値が出る。
+    スパイクが無い窓では頻度 0、それ以外は `nan`。
+    """
+    num_neurons = int(num_neurons)
+    labels = (np.zeros(num_neurons, dtype=np.int64) if groups is None
+              else np.unique(np.asarray(groups), return_inverse=True)[1].ravel())
+    if labels.size != num_neurons:
+        raise ValueError(f"groups の長さ {labels.size} が num_neurons {num_neurons} と違います。")
+    num_groups = int(labels.max()) + 1
+    fired = firing_rate_series(times, ids, num_neurons, duration_ms, bin_ms) > 0
+    num_bins = fired.shape[1]
+    size = np.bincount(labels, minlength=num_groups).astype(np.float64)
+
+    def group_activity(f):
+        out = np.zeros((num_groups, num_bins))
+        np.add.at(out, labels, f)
+        return out / size[:, None]
+
+    rng = np.random.default_rng(seed)
+    rows = np.arange(num_neurons)[:, None]
+    surrogate = np.concatenate([
+        group_activity(fired[rows, (np.arange(num_bins)[None, :]
+                                    - rng.integers(0, num_bins, num_neurons)[:, None]) % num_bins])
+        for _ in range(int(num_surrogates))], axis=1)
+    threshold = np.quantile(surrogate, quantile, axis=1)
+    active = group_activity(fired) > threshold[:, None]
+
+    edges = np.diff(np.concatenate([[0], active.any(axis=0).astype(np.int8), [0]]))
+    starts, stops = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    seconds = float(duration_ms) / 1000.0
+    nan = float("nan")
+    if starts.size == 0:
+        return GlobalEvents(float(bin_ms), num_groups, float(threshold.mean()),
+                            0.0, 0.0, 0.0, 0.0, nan, 0.0, nan, nan, nan,
+                            0.0 if np.asarray(times).size else nan, nan, nan)
+
+    spread = np.array([active[:, a:b].any(axis=1).sum() for a, b in zip(starts, stops)]) / num_groups
+    part = np.array([fired[:, a:b].any(axis=1).mean() for a, b in zip(starts, stops)])
+    width_ms = (stops - starts) * float(bin_ms)
+    rates_hz = np.bincount(np.asarray(ids, dtype=np.int64), minlength=num_neurons) / seconds
+    chance = 1.0 - np.exp(-np.outer(width_ms / 1000.0, rates_hz)).mean(axis=1)
+    depth = (part - chance) / np.maximum(1.0 - chance, 1e-12)
+
+    group_depth = np.empty(starts.size)
+    for k, (a, b) in enumerate(zip(starts, stops)):
+        on = np.flatnonzero(active[:, a:b].any(axis=1))
+        fired_k = fired[:, a:b].any(axis=1)
+        prob_k = 1.0 - np.exp(-rates_hz * width_ms[k] / 1000.0)
+        part_g = np.bincount(labels, weights=fired_k, minlength=num_groups)[on] / size[on]
+        chance_g = np.bincount(labels, weights=prob_k, minlength=num_groups)[on] / size[on]
+        group_depth[k] = float(np.mean((part_g - chance_g) / np.maximum(1.0 - chance_g, 1e-12)))
+
+    deep = depth >= DEEP_EVENT_DEPTH
+    is_global = deep & (spread >= GLOBAL_EVENT_GROUP_FRACTION)
+    local = (np.rint(spread * num_groups) == 1) & (num_groups > 1)
+    in_global = np.zeros(num_bins, dtype=bool)
+    for a, b in zip(starts[is_global], stops[is_global]):
+        in_global[a:b] = True
+    spike_bins = np.minimum((np.asarray(times, dtype=np.float64) // bin_ms).astype(np.int64),
+                            num_bins - 1)
+    return GlobalEvents(
+        bin_ms=float(bin_ms), num_groups=num_groups, threshold_mean=float(threshold.mean()),
+        event_rate_hz=starts.size / seconds,
+        local_rate_hz=float(local.sum()) / seconds,
+        deep_rate_hz=float(deep.sum()) / seconds,
+        very_deep_rate_hz=float((depth >= VERY_DEEP_EVENT_DEPTH).sum()) / seconds,
+        deep_group_fraction=float(spread[deep].mean()) if deep.any() else nan,
+        global_rate_hz=float(is_global.sum()) / seconds,
+        global_depth=float(depth[is_global].mean()) if is_global.any() else nan,
+        global_participation=float(part[is_global].mean()) if is_global.any() else nan,
+        global_width_ms=float(width_ms[is_global].mean()) if is_global.any() else nan,
+        global_spike_fraction=float(in_global[spike_bins].mean()) if spike_bins.size else nan,
+        global_group_depth=float(group_depth[is_global].mean()) if is_global.any() else nan,
+        local_group_depth=float(group_depth[local].mean()) if local.any() else nan)
+
+
+def global_event_columns(times, ids, num_neurons: int, duration_ms: float,
+                         groups=None) -> dict:
+    """`metrics.csv` に入れる列。`global_events()` の結果を `gevent_*` の名前で返す。"""
+    ev = global_events(times, ids, num_neurons, duration_ms, groups)
+    return {
+        "gevent_bin_ms": ev.bin_ms,
+        "gevent_num_groups": ev.num_groups,
+        "gevent_threshold_mean": ev.threshold_mean,
+        "gevent_event_rate_hz": ev.event_rate_hz,
+        "gevent_local_rate_hz": ev.local_rate_hz,
+        "gevent_deep_rate_hz": ev.deep_rate_hz,
+        "gevent_very_deep_rate_hz": ev.very_deep_rate_hz,
+        "gevent_deep_group_fraction": ev.deep_group_fraction,
+        "gevent_global_rate_hz": ev.global_rate_hz,
+        "gevent_global_depth": ev.global_depth,
+        "gevent_global_participation": ev.global_participation,
+        "gevent_global_width_ms": ev.global_width_ms,
+        "gevent_global_spike_fraction": ev.global_spike_fraction,
+        "gevent_global_group_depth": ev.global_group_depth,
+        "gevent_local_group_depth": ev.local_group_depth,
+    }
