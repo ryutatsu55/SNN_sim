@@ -86,6 +86,9 @@ CUT_PROFILE_NAME = "cut_profile.csv"
 METRICS_NAME = "metrics.csv"
 # probe ごとの RTE (実効結合の損傷前比)。全 probe が揃ってから一度に書く表。
 RTE_NAME = "rte.csv"
+# run の束 (`compare`) の表。置き場所は `paths.compare_dir()`。
+RUNS_TABLE_NAME = "runs.csv"         # 損傷 run 1 本 = 1 行
+CONTROL_TABLE_NAME = "control.csv"   # 対照 run 1 本 = 1 行
 
 PHASE_BASELINE = "baseline"
 PHASE_POST = "post"

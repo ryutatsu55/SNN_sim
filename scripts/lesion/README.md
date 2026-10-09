@@ -550,10 +550,46 @@ npz が持つ。
 
 ---
 
+## run をまたいで比べる (`compare`)
+
+1 つの親条件の損傷 run を全部束ね、1 run = 1 点の表と図を作る (用量反応)。GeNN は使わない。
+
+```bash
+python -m scripts.lesion.compare outputs/develop/<条件> --control outputs/develop/<対照の条件>
+```
+
+| 引数 | 意味 |
+|---|---|
+| 位置引数 | 親 run を並べた条件ディレクトリ。その下の損傷 run (`data/lesion.json` を持つもの) を全部拾う |
+| `--control` | **対照**: 切らずに走り続けた develop 形式の run を並べた条件ディレクトリ。切断時刻 + 20 h 以上の記録が要る (例: 20 h で切った run には 72 h sweep) |
+
+出力は**条件ディレクトリの直下** (run の中ではない):
+
+```
+<条件>/lesion_compare/
+├── runs.csv       損傷 run 1 本 = 1 行 (切断数 % / 切った重み % / 低下 / χ の低下 / 回復 …)
+├── control.csv    対照 run 1 本 = 1 行 (同じ式で測った回復)
+└── figures/       cut_weight / activity_drop / recovery_vs_drop / recovery_vs_cut
+```
+
+- **定義は `analysis/summary.py` のモジュール docstring が正。** 回復 = (18–20 h の平均 − 0 h) ÷ 損傷前。
+  対照は切断時刻を 0 h に読み替えて同じ式で測る
+- **種類は切断 spec から決める** (`summary.KINDS`: bridge / random / random_exc)。表に無い spec の
+  run は「対象外」と出して表に入れない。新しい種類を比べるときはここに 1 行足す
+- `control.csv` の `matches_lesion_baseline` は、対照の切断時刻の発火率が同じ seed の損傷 run の
+  baseline と一致するか (= 対照が切断時刻まで親と同じ run か)。False なら対照として使えない
+- 図の細線は、同じ seed で割合だけ変えた run (入れ子の抽選) を切断数の順に結んだもの
+
+この段階は run 1 本の 3 段階 (structure / panels / overview) の外側にある 4 つ目で、形は
+overview と同じ (表を書いてから、その表を図が読む)。リーダーは `store/collection.py` の `Collection`。
+
+---
+
 ## 結果を読むときの注意
 
-**sham (切らない対照) を作っていない。** ベースラインは親 run の記録 1 点だけなので、
-「回復」と「損傷が無くても進んだ発達の続き」は原理的に分離できない。`lesion.json` の
+**run 1 本の中には sham (切らない対照) が無い。** ベースラインは親 run の記録 1 点だけなので、
+run 1 本では「回復」と「損傷が無くても進んだ発達の続き」を分離できない。対照との比較は
+`compare` の `--control` (切らずに走り続けた run) で行う。`lesion.json` の
 `parent_drift` に親 run の終盤の動きが入っているので、**回復幅がこのドリフト幅と同オーダー
 なら結論を出さないこと。**
 
@@ -566,21 +602,25 @@ scripts/lesion/
 ├── __main__.py     入口: ランチャ (親)。親 run を探して run ディレクトリを作り子を並列起動
 ├── run_one.py      入口: 1 run (下見 → 記録 → 切断して build → probe)
 ├── replot.py       入口: 再解析。記録から指標と図を全部作り直す (--verify で再ビルド照合)
+├── compare.py      入口: 1 つの親条件の損傷 run を束ねて比べる (用量反応の表と図)
 ├── task.yaml       損傷プロトコル
 │
 ├── report/         いつ何を出すか
 │   ├── structure.py   切断直後: 切断後のネットワークの形
 │   ├── panels.py      probe ごと: ラスター / アバランチ / metrics 1 行
-│   └── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 同期 / RTE / 差の表
+│   ├── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 同期 / RTE / 差の表
+│   └── compare.py     run をまたいで: runs.csv / control.csv と用量反応の図
 ├── store/          どこに何があり、どう読み書きするか
 │   ├── paths.py       run 内部のディレクトリ規約
 │   ├── records.py     記録ファイル 1 つの読み書き
 │   ├── build_record.py 切断直後に何を書くかの一覧 (write_build_record)
 │   ├── views.py       Built (切断直後) / Window (probe 1 つ) / Series (run 全体)
+│   ├── collection.py  Collection (1 つの親条件の損傷 run の束 + 対照)
 │   └── parent_run.py  **親 run (develop 形式) を読む唯一の場所**
 ├── analysis/       何を測るか (表)
 │   ├── metrics.py     probe 1 つの指標 + 切断したものの素性
 │   ├── effective.py   probe ごとの RTE (baseline を基準に一括) → rte.csv
+│   ├── summary.py     損傷 run 1 本 = 1 行の要約 (低下・回復・対照の定義) → runs.csv / control.csv
 │   ├── selectors.py   どこを切るか (spec のパースと選択)
 │   ├── restore.py     再ビルドが親と同じネットワークかの検証 (軸索幾何)
 │   └── connectivity.py 群間結合確率

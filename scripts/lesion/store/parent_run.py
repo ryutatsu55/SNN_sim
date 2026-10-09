@@ -19,7 +19,8 @@ develop の `store/records.py` 全体ではない:
     data/trace_{h}h.npz    同じ時点の膜電位トレース。任意 (親が採っていれば引き継ぐ)
     data/layout_axes.npz   外部軸 (module など)。任意
     data/axon_geometry.npz 軸索の折れ線。任意 (axon_growth 系のみ)
-    data/metrics.csv       親 run の終盤ドリフト。任意 (無ければ理由が manifest に入る)
+    data/metrics.csv       親 run の終盤ドリフト。任意 (無ければ理由が manifest に入る)。
+                           `compare` の対照 (切らずに走り続けた run) の発火率もここから読む
 
 **この 8 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
 ここに書いてよい理由。**この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**
@@ -39,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from src.core.config_manager import ConfigManager
 from src.utils.runview import Wiring
@@ -252,3 +254,14 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
         window_ms=float(window_ms),
         trace_path=trace_path if trace_path.exists() else None,
     )
+
+
+def load_parent_metrics(run_dir: Path) -> pd.DataFrame:
+    """develop 形式の run の `metrics.csv` を丸ごと読む (時刻の列は `hour`)。
+
+    損傷 run の対照 (切らずに走り続けた run) を読む口。
+    """
+    path = _parent_data_dir(Path(run_dir)) / METRICS_NAME
+    if not path.exists():
+        raise FileNotFoundError(f"{path} がありません。")
+    return pd.read_csv(path)

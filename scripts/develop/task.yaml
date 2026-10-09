@@ -63,6 +63,13 @@ develop20h:
   trace_neuron: null
   trace_window_s: 10.0
 
+develop40h:
+  record_hours: [0..40]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0
+
 develop72h:
   record_hours: [0..72]
   record_window_ms: 600000.0  # 10 min

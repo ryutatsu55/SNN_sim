@@ -98,3 +98,24 @@ def prepare(run_dir: str | Path, fig_kinds: tuple[str, ...] = DEFAULT_FIG_KINDS)
     for kind in fig_kinds:
         fig_dir(run_dir, kind).mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+# ------------------------------------------------------------------------------------
+# run の束 (`compare`) の出力。**run ディレクトリの中ではなく、親 run を並べた条件
+# ディレクトリの直下**に置く (束ねる単位 = 同じ親条件)。
+#
+#     <条件>/lesion_compare/
+#     ├── runs.csv        損傷 run 1 本 = 1 行
+#     ├── control.csv     対照 run 1 本 = 1 行
+#     └── figures/
+# ------------------------------------------------------------------------------------
+COMPARE_SUBDIR = "lesion_compare"
+
+
+def compare_dir(cond_dir: str | Path) -> Path:
+    """run の束の表の置き場所。**書く側も読む側もここを通る。**"""
+    return Path(cond_dir) / COMPARE_SUBDIR
+
+
+def compare_fig_path(cond_dir: str | Path, name: str) -> Path:
+    return compare_dir(cond_dir) / FIGURES_SUBDIR / name
