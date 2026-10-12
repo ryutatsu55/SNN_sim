@@ -5,7 +5,7 @@ develop の `structure.py` が「build 直後」に出すのに対し、lesion �
 ここで両方は出さない。
 
 受け取るのは `series.built()` (切断直後の記録を読む view)。軸索幾何は切断後に絞った
-ものが記録されている (`store/build_record.py`) ので、切ったはずの結合は描かれない。
+ものが記録されている (`store/built.py`) ので、切ったはずの結合は描かれない。
 
 図が 1 枚描けなくても止めない。`no_space` の config には座標が無く、`constant_prob` は
 軸索の幾何を持たないが、それは異常ではないので `MissingData` として 1 枚ずつ報告される。

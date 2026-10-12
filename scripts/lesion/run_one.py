@@ -10,7 +10,7 @@
 
     下見 (build するが compile しない)
       → 親の重みを (pre, post) で復元し、切断対象を決める
-      → 記録を書く (config / 結合 / lesion.json / 切断プロファイル)
+      → 記録を書く (結合 / lesion.json / 切断プロファイル)
       → **ベースラインは親 run の記録時刻の窓をそのまま置く** (probe 0)
     本番 (compile する 1 回きりの build)
       → 復元した重みを載せ、切断マスクで行を削除
@@ -56,14 +56,14 @@ from scripts.lesion.analysis.selectors import LesionContext, combine, parse_cut_
 from scripts.lesion.store.parent_run import load_parent
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
-from scripts.lesion.store.build_record import write_build_record
-from scripts.lesion.store.records import (METRICS_NAME, MS_PER_HOUR,
+from scripts.lesion.store.built import write_built
+from scripts.lesion.store.formats import (METRICS_NAME, MS_PER_HOUR,
                                           PHASE_BASELINE, PHASE_POST, SPIKES, TRACE,
                                           WEIGHTS, CUT_PROFILE_NAME, MetricsWriter,
                                           probe_filename, save_cut, save_manifest,
                                           save_spikes, save_trace,
                                           save_weight_values, write_table)
-from scripts.lesion.store.records import BASELINE_INDEX
+from scripts.lesion.store.formats import BASELINE_INDEX
 from scripts.lesion.store.views import open_run
 
 import src.models.neurons.akita_escape_lif
@@ -355,13 +355,10 @@ def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
 
-    # 引き継ぎ (`pending_config.yaml`) があればそれ、無ければ記録 (`config.yaml`)。
-    config_path = run_dir / paths.PENDING_CONFIG_NAME
-    if not config_path.exists():
-        config_path = run_dir / CONFIG_NAME
+    config_path = run_dir / CONFIG_NAME
     if not config_path.exists():
         raise SystemExit(
-            f"{run_dir} に {paths.PENDING_CONFIG_NAME} も {CONFIG_NAME} もありません。"
+            f"{run_dir} に {CONFIG_NAME} がありません。"
             " run ディレクトリを作って config を置くのは"
             " ランチャ (python -m scripts.lesion) の仕事です。"
         )
@@ -475,14 +472,10 @@ def main():
     if parent.axes_path is not None:
         layout.load_axes_file(parent.axes_path)
 
-    # **ここが「run の記録」を書く唯一の場所。** build() を通った後なので記録になる。
-    manager.save_config(config, save_dir=run_dir)
-    (run_dir / paths.PENDING_CONFIG_NAME).unlink(missing_ok=True)
-
-    # 切断直後 (= この run の build 直後) の記録。何を書くかは `store/build_record.py` の
+    # 切断直後 (= この run の build 直後) の記録。何を書くかは `store/built.py` の
     # 一覧。**軸索幾何はここで切断後へ絞って書く** (コネクタの幾何は
     # `replace_global_coo()` の影響を受けない)。
-    write_build_record(run_dir, builder, layout, pre_coo=coo, keep=keep, geometry=geometry)
+    write_built(run_dir, builder, layout, pre_coo=coo, keep=keep, geometry=geometry)
     save_manifest(paths.data_dir(run_dir), manifest)
     save_cut(paths.data_dir(run_dir), per_synapse)
     write_table(comparison, paths.data_path(run_dir, CUT_PROFILE_NAME))

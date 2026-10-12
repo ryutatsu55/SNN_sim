@@ -1,6 +1,6 @@
-"""lesion の run を読む。`Built` (切断直後)、`Window` (probe 1 つ)、`Series` (run 全体)。
+"""lesion の run を、切断直後は `Built`、probe 1 つは `Window`、run 全体は `Series` として読む。
 
-`src/utils/runview.py` の契約を、この実験のファイル名規約 (`records.py`) の上に
+`src/utils/runview.py` の契約を、この実験のファイル名規約 (`formats.py`) の上に
 実装したもの。**ここは読み出しだけ。加工はしない。** 「run 全体を通した計算」
 (重み軌跡・発火レートの時系列) は、それを使う図のファイルにある。
 
@@ -51,9 +51,8 @@ from src.utils.analysis.avalanche import mean_iei_ms
 from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
 
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import (BASELINE_INDEX, COORDS_NAME, DELAYS_NAME,
+from scripts.lesion.store.formats import (BASELINE_INDEX, COORDS_NAME, DELAYS_NAME,
                                           INITIAL_WEIGHTS_NAME, METRICS_NAME, RTE_NAME,
-                                          MS_PER_HOUR,
                                           PHASE_BASELINE, SPIKES, TRACE, WEIGHTS,
                                           discover_probes,
                                           load_coords, load_cut, load_connectivity,
@@ -61,7 +60,7 @@ from scripts.lesion.store.records import (BASELINE_INDEX, COORDS_NAME, DELAYS_NA
                                           load_spikes, load_trace,
                                           load_weight_values,
                                           post_connectivity_path, pre_connectivity_path,
-                                          probe_filename, read_window_meta)
+                                          probe_filename, read_window_meta, record_hour)
 
 
 def _not_recorded(what: str, path: Path) -> MissingData:
@@ -148,7 +147,7 @@ class Window(runview.Window):
     def is_baseline(self) -> bool:
         """切断**前**に測った窓か。
 
-        図が `phase` の文字列と `records` の定数を突き合わせずに済むようにここで畳む
+        図が `phase` の文字列と `formats` の定数を突き合わせずに済むようにここで畳む
         (`figures/` が `store/` を import しないで済む)。
         """
         return self.phase == PHASE_BASELINE
@@ -207,14 +206,18 @@ class Window(runview.Window):
 
 
 class Series(runview.Series):
-    """完走した run 1 つ。`open_run()` が作る。"""
+    """損傷 run 1 つの記録全体。切断直後 (`built()`) と各 probe (`windows`) をここから取り出す。
 
-    def __init__(self, run_dir: Path, config, layout, wiring: Wiring, wiring_pre: Wiring,
-                 windows: tuple[Window, ...] = ()):
+    `open_run()` が作る。結合 (切断前・切断後)・座標・領域・軸索のように run を通して変わらない
+    ものはここが持ち、`Built` と `Window` はそれを借りる。走っている途中の run も表す。
+    """
+
+    def __init__(self, run_dir: Path, config, layout, wiring: Wiring, wiring_pre: Wiring):
         super().__init__(run_dir, config, layout)
         self._wiring = wiring
         self._wiring_pre = wiring_pre
-        self._windows = windows
+        # probe は初めて `windows` を参照したときに並べる (`windows` 参照)。
+        self._windows: tuple[Window, ...] | None = None
         # area は config から組み直すので 1 度だけ作って持つ (`area()` 参照)。
         self._area = None
         # 軸索の幾何は大きいので 1 度だけ読んで持つ。
@@ -224,6 +227,12 @@ class Series(runview.Series):
 
     @property
     def windows(self) -> tuple[Window, ...]:
+        """書き終わっている probe (時刻順)。初めて参照したときにディスクから並べ、以後は変わらない。
+
+        それより後に書いた probe は `window(index)` で開く。
+        """
+        if self._windows is None:
+            self._windows = _discover_windows(self, paths.data_dir(self.run_dir))
         return self._windows
 
     def wiring(self) -> Wiring:
@@ -347,12 +356,12 @@ class Series(runview.Series):
         """切断直後の時点から見た view。構造図 (`report/structure.py`) に渡す。"""
         return Built(self)
 
-    # --- 走りながら使う口 ---------------------------------------------------------
-
     def window(self, index: int) -> Window:
-        """**いま書いたばかりの** probe を指す `Window` を作る。
+        """probe 番号 `index` の probe を 1 つ開く (baseline は `BASELINE_INDEX`)。
 
-        `run_one.py` が「書いてから読み直す」ための入口。
+        `windows` と違い、呼んだ時点のファイルを見るので、`open_run()` の後に書いた probe も
+        開ける (`run_one.py` は probe を書くたびにこれで読み直す)。その probe の記録が無ければ
+        `FileNotFoundError`。
         """
         data_dir = paths.data_dir(self.run_dir)
         return _make_window(self, data_dir, index,
@@ -360,23 +369,27 @@ class Series(runview.Series):
 
 
 def open_run(run_dir: str | Path, *, require_windows: bool = True) -> Series:
-    """run ディレクトリを開く。config を読み、layout を復元し、probe を番号順に並べる。
+    """損傷 run のディレクトリを読み、その run 全体を表す `Series` を返す。記録を読む処理の入口。
 
-    結合構造は 2 本 (切断前・切断後) ともここで 1 回だけ読む。
+    返した `Series` から、切断直後の状態は `series.built()`、probe は全部なら
+    `series.windows` (時刻順)、1 つなら `series.window(index)` で取り出す。結合は切断前と切断後の 2 本を持つ。
+
+    以下のときは例外を出して止まる:
+
+    - `config.yaml` が無い (run ディレクトリではない) → `FileNotFoundError`
+    - config から求めたニューロン数と、記録された結合行列の大きさが合わない
+      (config か `data/` が別の run のものに入れ替わっている) → `ValueError`
+    - probe が 1 つも無い (`require_windows=True` のときだけ) → `FileNotFoundError`
 
     Args:
-        require_windows: probe が 1 つも無いときに落とすか。`run_one.py` は**これから
-            記録を書く**ところで開くので `False` を渡す。
-
-    **layout が復元できなければ落とす。** 無いと E/I 列も module 別の指標も作れず、
-    本番より列の少ない `metrics.csv` で上書きしてしまう。
+        require_windows: probe が 1 つも無い run を拒むか。probe の無い run も開きたいとき
+            (記録を書く前の `run_one.py` など) は `False` にする。
     """
     run_dir = Path(run_dir)
     config_path = run_dir / CONFIG_NAME
     if not config_path.exists():
         raise FileNotFoundError(
-            f"{config_path} がありません。"
-            " build を通っていない run か、run ディレクトリではありません。"
+            f"{config_path} がありません (run ディレクトリではありません)。"
         )
     config = ConfigManager().load_resolved(config_path)
 
@@ -398,7 +411,6 @@ def open_run(run_dir: str | Path, *, require_windows: bool = True) -> Series:
             f"connectivity の {wiring.shape[0]} と一致しません: {run_dir}"
         )
     series = Series(run_dir, config, layout, wiring, wiring_pre)
-    series._windows = _discover_windows(series, data_dir)
     if require_windows and not series.windows:
         raise FileNotFoundError(
             f"{probe_filename(SPIKES, 0)} 形式の記録がありません: {data_dir}")
@@ -425,7 +437,7 @@ def _make_window(series: Series, data_dir: Path, index: int, spikes_path: Path) 
         )
     # トレースは任意。**無いのが既定**なので、欠けていても落とさない。
     trace_path = data_dir / probe_filename(TRACE, index)
-    return Window(series, index=index, hour=start_ms / MS_PER_HOUR,
+    return Window(series, index=index, hour=record_hour(start_ms),
                   record_start_ms=start_ms, record_window_ms=window_ms, phase=phase,
                   spikes_path=spikes_path, weights_path=weights_path,
                   trace_path=trace_path if trace_path.exists() else None)

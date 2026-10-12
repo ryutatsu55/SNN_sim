@@ -1,4 +1,4 @@
-"""develop 実験の記録ファイル名の規約。
+"""develop 実験の記録ファイルの形式 (ファイル名と npz の鍵名)。
 
 `weights_{h}h.npz` / `spikes_{h}h.npz` の "h" は 72 時間発達実験の記録時刻であって、
 プロジェクト共通の概念ではない。よって `src/core/` (config.yaml は `config_manager.py`、
@@ -10,12 +10,12 @@ layout_axes.npz は `layout.py` が持つ) には置かず、この実験のモ�
 
 ファイルを**置く場所**は `paths.py` が持ち、**run 1 つを時刻順に読む**のは `views.py`。
 このモジュールはファイル 1 つの読み書きまでを受け持つ。build 直後に何を書くかの一覧は
-`build_record.py`。
+`built.py`。
 
 返す値の形は `src/utils/runview.py` の契約 (`Spikes` / `Trace` / `Wiring`) に従う。
 **この実験に固有なのはファイル名と npz の鍵名だけで、読めた値の形は全実験共通。**
 
-**`scripts/akita_soc/store/records.py` と同じ規約だが、別のファイルとして持つ。**
+**`scripts/akita_soc/store/formats.py` と同じ規約だが、別のファイルとして持つ。**
 実験ごとに記録の中身は変わりうるので、共通化して片方の都合でもう片方が動くことを
 避ける (図と同じ線引き)。共有するのは「読めた値の形」= 契約だけ。
 """
@@ -284,6 +284,15 @@ def read_record_start_ms(path: Path) -> float:
                 f" 記録窓の原点を持たない古い run です (再実行してください)。"
             )
         return float(data[RECORD_START_KEY])
+
+
+def record_hour(record_start_ms: float) -> float:
+    """記録窓の原点 [ms] を記録時刻 [h] に直す。
+
+    記録ファイル名・`Window.hour`・`metrics.csv` の `hour` 列はすべてこれで作るので、
+    同じ窓の時刻はどこでもビット単位で一致する。
+    """
+    return record_start_ms / MS_PER_HOUR
 
 
 def save_trace(path: Path, V, I, *, dt: float, neuron_id: int, window_s: float,

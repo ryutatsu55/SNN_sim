@@ -4,8 +4,7 @@
 読む側も必ずここを通るので、片方だけ場所がずれることがない。
 
     <run>/
-    ├── pending_config.yaml  … ランチャ → run 本体の**引き継ぎ**。まだ記録ではない
-    ├── config.yaml          … run の**記録** (親 run・切断 spec・タイムラインが全部入る)
+    ├── config.yaml          … run の**記録** (親 run・切断 spec・タイムラインが全部入る)。ランチャが置く
     ├── run.log              … ランチャが子プロセスの出力を流し込む先
     ├── data/                … npz と csv と lesion.json (座標は coords.npz)
     └── figures/
@@ -36,14 +35,6 @@ from pathlib import Path
 
 DATA_SUBDIR = "data"
 FIGURES_SUBDIR = "figures"
-
-# ランチャが run 本体へ config を引き継ぐためのファイル。
-#
-# **`config.yaml` と分けてあるのは、役割が違うから。** `config.yaml` は「この run は build を
-# 通ってこうして走った」という記録で、run 本体が build() の後に書く。ランチャが起動前に書く
-# ものは、まだ build を通っていない。
-# それを `config.yaml` の名前で置くと、記録の不変条件が崩れる。
-PENDING_CONFIG_NAME = "pending_config.yaml"
 
 # 図の種類 = `figures/` から見た相対パス。ここに無い種類を fig_path() に渡すと弾かれる
 # (タイポで図が迷子になるのを防ぐ)。

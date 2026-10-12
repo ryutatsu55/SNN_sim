@@ -39,7 +39,7 @@ def emit(window, *, metrics) -> None:
 
     Args:
         window: `store/views.py` の `Window`。**直前に書いた npz を読み直したもの。**
-        metrics: `records.MetricsWriter`。この窓の行を 1 行追記する。
+        metrics: `formats.MetricsWriter`。この窓の行を 1 行追記する。
     """
     # --- 表 ---
     # **`FIGURES` に入れていない。** 図と違って `(view, out_path)` ではなく、

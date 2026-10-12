@@ -115,7 +115,7 @@ def guard(label, fn, *args):
 `Built` と `Window` はそれを借りる。`Built` と `Window` の違いは「どの時点の重みか」だけ
 (`Built` は build 直後 = `weights_initial.npz`、`Window` はその記録窓の直前)。
 
-実験は 3 つとも**記録から読む**。build の直後に記録 (各実験の `store/build_record.py` の
+実験は 3 つとも**記録から読む**。build の直後に記録 (各実験の `store/built.py` の
 一覧) を書き、`series.built()` で読み直して構造図に渡すので、本番と再解析が同じ経路を通る。
 `coords` は `data/coords.npz`、`geometry` は `data/axon_geometry.npz`、`coo().delays` は
 `data/delays.npz`。`area` は記録せず config から組み直す (`BaseArea` は乱数を使わないので

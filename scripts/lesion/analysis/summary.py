@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.lesion.store.records import (CONTROL_TABLE_NAME, PHASE_BASELINE, PHASE_POST,
+from scripts.lesion.store.formats import (CONTROL_TABLE_NAME, PHASE_BASELINE, PHASE_POST,
                                           RUNS_TABLE_NAME, write_table)
 
 # 回復を測る区間 [切断からの h]。両端を含む。

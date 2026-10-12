@@ -9,7 +9,7 @@
 **作り直すのは全部。** 構造図も probe ごとの図も run 全体の図も、指標も、例外なく
 上書きする。一部だけ新しい状態を作らないため。
 
-**構造図も記録から描く。** 切断直後の記録 (`store/build_record.py`: 切断後の結合・遅延・
+**構造図も記録から描く。** 切断直後の記録 (`store/built.py`: 切断後の結合・遅延・
 重み・軸索幾何) を `series.built()` で読むので、本番の run と同じ呼び出しになる。
 ネットワークは組み直さない。
 
@@ -39,7 +39,7 @@ from src.utils.runview import BuiltNetwork, optional
 from scripts.lesion.analysis.restore import verify_axon_geometry
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import METRICS_NAME, MetricsWriter
+from scripts.lesion.store.formats import METRICS_NAME, MetricsWriter
 from scripts.lesion.store.views import open_run
 
 # プロファイル名を Python クラスへ解決するために必要 (@register は import で走る)。

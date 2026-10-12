@@ -22,12 +22,12 @@ if str(root_path) not in sys.path:
 from scripts.akita_soc.analysis import metrics
 from scripts.akita_soc.figures import style
 from scripts.akita_soc.store import paths
-from scripts.akita_soc.store.records import (MS_PER_HOUR, SPIKES, WEIGHTS, discover_records,
+from scripts.akita_soc.store.formats import (MS_PER_HOUR, SPIKES, WEIGHTS, discover_records,
                                              parse_hour, record_filename, save_spikes,
                                              save_weight_values)
 from scripts.akita_soc.store.views import open_run
 from src.core.config_manager import ConfigManager
-from scripts.akita_soc.store.records import CONNECTIVITY_NAME
+from scripts.akita_soc.store.formats import CONNECTIVITY_NAME
 
 TASK_PATH = root_path / "scripts" / "akita_soc" / "task.yaml"
 CONFIG_PATH = root_path / "scripts" / "akita_soc" / "akita_soc.yaml"

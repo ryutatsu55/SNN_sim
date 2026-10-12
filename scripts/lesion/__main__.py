@@ -16,7 +16,7 @@ lesion の**ネットワーク設定は親 run から来る**。同じ seed で�
 2. 各親の `config.yaml` を読む = その run のネットワーク設定 (並列度もここから取る)
 3. `task` をこのディレクトリの `task.yaml` の損傷プロトコルへ**差し替える**
 4. `task.parent_run` に親のパスを焼き込む
-5. **親 run の下に** `<切断条件>/` を作り、引き継ぎ config を置く
+5. **親 run の下に** `<切断条件>/` を作り、`config.yaml` を置く
 6. `run_one` を子プロセスとして並列に起動し、各々の出力を `<run>/run.log` へ流す
 
 **3 と 4 が要点。** おかげで run ディレクトリの `config.yaml` だけで「どのネットワークを、
@@ -50,7 +50,6 @@ from src.core.config_manager import (CONFIG_NAME, ConfigManager, expand_hours_sp
                                      load_yaml)
 
 from scripts.lesion.analysis.selectors import cut_label
-from scripts.lesion.store.paths import PENDING_CONFIG_NAME
 
 _HERE = Path(__file__).resolve().parent
 
@@ -139,12 +138,7 @@ def resolve_parallel(configs: list, requested: int | None) -> int:
 
 def prepare_runs(manager: ConfigManager, parents: list[Path], configs: list, protocol: dict,
                  label: str) -> list[Path]:
-    """**親 run の下に** `<切断条件>/` を作り、引き継ぎ config を置く。
-
-    置くのは `config.yaml` ではなく `pending_config.yaml`。**ここで書けるのは記録ではなく
-    引き継ぎだから** —— まだ build を通っていない。
-    `config.yaml` を書くのは build を通した run 本体の仕事 (`run_one.py`)。
-    """
+    """**親 run の下に** `<切断条件>/` を作り、`config.yaml` を置く。"""
     run_dirs = []
     for parent, config in zip(parents, configs):
         run_dir = parent / label
@@ -161,7 +155,7 @@ def prepare_runs(manager: ConfigManager, parents: list[Path], configs: list, pro
         merged = dict(protocol)
         merged["parent_run"] = str(parent.resolve())
         config.task = type(config.task).model_validate(merged)
-        manager.dump_config(config, run_dir / PENDING_CONFIG_NAME)
+        manager.save_config(config, save_dir=run_dir)
         run_dirs.append(run_dir)
     return run_dirs
 

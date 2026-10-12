@@ -224,7 +224,7 @@ def write_delta_table(series, out_dir) -> None:
     """
     from pathlib import Path
 
-    from scripts.lesion.store.records import PHASE_BASELINE, write_table
+    from scripts.lesion.store.formats import PHASE_BASELINE, write_table
 
     rows = series.metrics().to_dict("records")
     if not rows:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from scripts.lesion.report import guard
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import probe_token
+from scripts.lesion.store.formats import probe_token
 from scripts.lesion.analysis.metrics import build_row
 from scripts.lesion.figures.avalanche import avalanche_distribution
 from scripts.lesion.figures.correlation import correlation_matrix
@@ -57,7 +57,7 @@ def emit(window, *, metrics) -> None:
 
     Args:
         window: `store/views.py` の `Window`。**直前に書いた npz を読み直したもの。**
-        metrics: `records.MetricsWriter`。このprobeの行を 1 行追記する。
+        metrics: `formats.MetricsWriter`。このprobeの行を 1 行追記する。
     """
     # --- 表 ---
     # **`FIGURES` に入れていない。** 図と違って `(view, out_path)` ではなく、

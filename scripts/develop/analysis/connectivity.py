@@ -23,7 +23,7 @@ from src.utils.analysis.connectivity import (
 )
 
 from src.utils.runview import optional
-from scripts.develop.store.records import write_table
+from scripts.develop.store.formats import write_table
 # 群分けの軸は**粗視化図と同じもの**でなければ、絵と数値が別のことを言う。選び方を
 # 2 つ持たないよう `style` から借りる (`style.py` は matplotlib を持たないので、
 # 「analysis は matplotlib を import しない」は保たれる)。

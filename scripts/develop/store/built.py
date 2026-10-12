@@ -1,4 +1,4 @@
-"""build 直後に残す記録。**何を書くかの一覧はここだけ。**
+"""build 直後の時点 (`Built`) の記録を書く。**何を書くかの一覧はここだけ。**
 
     data/layout_axes.npz      外部軸 (layer / module …)。直列化は `NetworkLayout`
     data/coords.npz           soma の座標。`no_space` の run では書かない
@@ -7,9 +7,10 @@
     data/delays.npz           遅延 [ms] (connectivity と index 整合)
     data/weights_initial.npz  build 直後の重み (同上)
 
-`config.yaml` はここに含めない (ランチャからの引き継ぎを片付ける手順と一体なので
-`run_one.py` が書く)。**自前のスキーマを持つオブジェクトは自分で直列化し、ただの配列は
-`records.py` が直列化する** —— ここは「何を・どこへ」を決めるだけ。
+`config.yaml` はここに含めない (build の前にランチャが書く)。
+
+**自前のスキーマを持つオブジェクトは自分で直列化し、ただの配列は `formats.py` が直列化する**
+—— ここは「何を・どこへ」を決めるだけ。
 
 読む側は `views.py` (`Series` と、build 直後の時点を見る `Built`)。
 """
@@ -23,12 +24,12 @@ from src.core.layout import AXES_NAME
 from src.models.network.connectors import AXONS_NAME
 
 from scripts.develop.store import paths
-from scripts.develop.store.records import (CONNECTIVITY_NAME, COORDS_NAME, DELAYS_NAME,
+from scripts.develop.store.formats import (CONNECTIVITY_NAME, COORDS_NAME, DELAYS_NAME,
                                            INITIAL_WEIGHTS_NAME, save_connectivity,
                                            save_coords, save_delays, save_weight_values)
 
 
-def write_build_record(run_dir: Path, builder) -> None:
+def write_built(run_dir: Path, builder) -> None:
     """ビルド済みの `builder` から build 直後の記録を全部書く。
 
     `builder` は `build()` を通した後のもの。GeNN の setup は要らない —— 結合は

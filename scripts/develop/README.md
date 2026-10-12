@@ -136,7 +136,7 @@ run ディレクトリの中身:
 
 ```
 <run>/
-├── config.yaml           **build を通った run の記録**。seed も sparse も実値
+├── config.yaml           **run の記録**。seed は実値。起動前にランチャが置く
 ├── source_config.yaml    入力 YAML の逐語コピー (seed の範囲指定はここに残る)
 ├── run.log               この run の標準出力・標準エラー
 ├── data/
@@ -182,24 +182,17 @@ run ディレクトリの中身:
 `record_start_ms` が持ち、**再解析はそちらを読む**。おかげで本番と再解析の `metrics.csv` は
 バイト単位で一致する。
 
-鍵の名前を知っているのは `records.py` だけで、書く側と読む側が対 (`save_spikes` /
+鍵の名前を知っているのは `formats.py` だけで、書く側と読む側が対 (`save_spikes` /
 `load_spikes`) で持つ。
 
-### `config.yaml` と `pending_config.yaml`
+### `config.yaml` は起動前に置かれる
 
-走っている最中の run には、もう 1 つ `pending_config.yaml` がある。**ランチャから run 本体
-への引き継ぎ**で、run 本体が build を通して `config.yaml` を書いた時点で消える。
+ランチャが run ディレクトリを作るときに `config.yaml` を書き、`run_one` はそれを読むだけ。
+build は config を書き換えないので、起動前に書いたものがそのまま記録になる。
 
-分けてあるのは役割が違うから。`config.yaml` は「この run は build を通ってこうして走った」
-という記録で、ランチャが起動前に書ける config はまだ build を通っていない —— それを
-`config.yaml` の名前で置くと記録の意味が崩れる。
-
-おかげで **`config.yaml` があれば build を通った run**、という読み方ができる。
-
-| run ディレクトリの状態 | 意味 |
-|---|---|
-| `pending_config.yaml` だけ | まだ走っていない / build の前に落ちた |
-| `config.yaml` だけ | build を通った |
+そのため **`config.yaml` があっても完走したとは限らない**。途中で落ちた run は `data/` の
+記録が欠けていて、読む側 (`replot.py` など) が欠けたファイルを開く時点で止まる。
+落ちたかどうかは `run.log` を見る。
 
 ---
 
@@ -212,8 +205,6 @@ python -m scripts.develop.run_one outputs/develop/gmax25_baseline/seed03
 ```
 
 ランチャは失敗した run を一覧で出すので、そのパスをそのまま渡せばよい。
-`pending_config.yaml` が残っていればそれを、完走した run をもう一度走らせるなら
-`config.yaml` を読む。
 
 ---
 
@@ -236,7 +227,7 @@ run 全体の図 (fig2c / fig2d / 重み行列) も、例外なく上書きし�
 
 **構造図も記録から描きます (ネットワークは組み直しません)。** 本番の run は build の直後に
 「build の記録」(結合・遅延・build 直後の重み・座標・軸索幾何・外部軸。一覧は
-`store/build_record.py`) を書き、それを `series.built()` で読み直して構造図を描きます。
+`store/built.py`) を書き、それを `series.built()` で読み直して構造図を描きます。
 replot も同じ `series.built()` を呼ぶだけです。
 
 `--verify` を付けると、`config.yaml` からネットワークを**再ビルド**して、記録と同じ結合が
@@ -351,10 +342,10 @@ def emit(built) -> None:
 
 | ファイル | 役割 |
 |---|---|
-| `paths.py` | run の内部構造。`data/` と `figures/` と引き継ぎファイル名を知るのはここだけ |
-| `records.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ (`metrics.csv` も `MetricsWriter` / `load_metrics`)。結合確率の 2 本 (`write_table`) は人間向けで誰も読み返さない |
-| `build_record.py` | build 直後に何を書くかの一覧 (`write_build_record`)。外部軸・座標・軸索幾何・結合・遅延・初期重み |
-| `views.py` | 記録 (`records.py`) を契約 (`src/utils/runview.py`) の形に組む。`Built` (build 直後)・`Window` (記録窓 1 つ)・`Series` (run 全体)。`open_run()` が入口、`series.built()` が構造図の入口 |
+| `paths.py` | run の内部構造。`data/` と `figures/` を知るのはここだけ |
+| `formats.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ (`metrics.csv` も `MetricsWriter` / `load_metrics`)。結合確率の 2 本 (`write_table`) は人間向けで誰も読み返さない |
+| `built.py` | build 直後に何を書くかの一覧 (`write_built`)。外部軸・座標・軸索幾何・結合・遅延・初期重み |
+| `views.py` | 記録 (`formats.py`) を契約 (`src/utils/runview.py`) の形に組む。`Built` (build 直後)・`Window` (記録窓 1 つ)・`Series` (run 全体)。`open_run()` が入口、`series.built()` が構造図の入口 |
 
 run を通して不変なもの (結合・座標・領域・軸索・遅延) は `Series` が持ち、`Built` と
 `Window` はそれを借ります。両者の違いは「どの時点の重みか」だけです。

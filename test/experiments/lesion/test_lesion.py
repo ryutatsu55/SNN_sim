@@ -350,28 +350,28 @@ class LesionFigureDataTest(unittest.TestCase):
         **窓の素性は npz が持つ。** 以前は `probes.csv` を別に置いて index で引いて
         いたが、窓幅も phase も原点も同じファイルに入れれば読み手は 1 つ開くだけで済む。
         """
-        from scripts.lesion.store import records
+        from scripts.lesion.store import formats
         # 先頭が baseline (番号を持たない)。post は 0 始まりで record_hours の添字に一致。
         for position, window_ms in enumerate(windows):
             baseline = position == 0
-            index = records.BASELINE_INDEX if baseline else position - 1
-            start_ms = -window_ms if baseline else float(index) * records.MS_PER_HOUR
+            index = formats.BASELINE_INDEX if baseline else position - 1
+            start_ms = -window_ms if baseline else float(index) * formats.MS_PER_HOUR
             # 全ニューロンが窓の先頭で 1 発ずつ撃つ = レートは 1000/window_ms [Hz]。
             # 時刻は切断軸なので、窓の原点を足す (save_spikes が窓の外を弾く)。
-            records.save_spikes(
-                run_dir / records.probe_filename(records.SPIKES, index),
+            formats.save_spikes(
+                run_dir / formats.probe_filename(formats.SPIKES, index),
                 np.full(self.total, start_ms), np.arange(self.total),
                 record_start_ms=start_ms,
                 record_window_ms=window_ms,
-                phase=records.PHASE_BASELINE if baseline else records.PHASE_POST)
+                phase=formats.PHASE_BASELINE if baseline else formats.PHASE_POST)
 
     def _windows(self, run_dir: Path):
         """`_write_run` が書いたものを、時刻順に並べた (hour, window_ms) で読み返す。"""
-        from scripts.lesion.store import records
-        found = [(records.read_window_meta(probe.path), probe.index)
-                 for probe in records.discover_probes(run_dir, records.SPIKES)]
+        from scripts.lesion.store import formats
+        found = [(formats.read_window_meta(probe.path), probe.index)
+                 for probe in formats.discover_probes(run_dir, formats.SPIKES)]
         found.sort(key=lambda item: item[0][0])
-        return [(start / records.MS_PER_HOUR, window_ms, phase)
+        return [(start / formats.MS_PER_HOUR, window_ms, phase)
                 for (start, window_ms, phase), _index in found]
 
     def test_firing_rate_uses_each_probes_own_window(self):
@@ -402,9 +402,9 @@ class LesionFigureDataTest(unittest.TestCase):
 
     def test_missing_probes_are_reported_not_guessed(self):
         """probe が 1 つも無い run は `open_run()` が落とす。**推測して続行しない。**"""
-        from scripts.lesion.store import records
+        from scripts.lesion.store import formats
         with tempfile.TemporaryDirectory() as tmp_dir:
-            self.assertEqual(records.discover_probes(Path(tmp_dir), records.SPIKES), [])
+            self.assertEqual(formats.discover_probes(Path(tmp_dir), formats.SPIKES), [])
 
 
 class _StubSeries:
@@ -426,7 +426,7 @@ class BuildRecordTest(unittest.TestCase):
 
     def test_built_reads_the_post_lesion_network(self):
         from scripts.lesion.store import paths
-        from scripts.lesion.store.build_record import write_build_record
+        from scripts.lesion.store.built import write_built
         from scripts.lesion.store.views import open_run
 
         builder = _builder()
@@ -441,7 +441,7 @@ class BuildRecordTest(unittest.TestCase):
             run_dir = Path(tmp_dir)
             paths.prepare(run_dir)
             ConfigManager().save_config(builder.config, save_dir=run_dir)
-            write_build_record(run_dir, builder, builder.layout, pre_coo=pre, keep=keep)
+            write_built(run_dir, builder, builder.layout, pre_coo=pre, keep=keep)
             series = open_run(run_dir, require_windows=False)
             coo = series.built().coo()
             np.testing.assert_array_equal(coo.row, post.row)
@@ -452,7 +452,7 @@ class BuildRecordTest(unittest.TestCase):
 
     def test_initial_weights_are_not_mistaken_for_a_probe(self):
         """`weights_initial.npz` が probe の glob に拾われないこと。"""
-        from scripts.lesion.store.records import (INITIAL_WEIGHTS_NAME, WEIGHTS,
+        from scripts.lesion.store.formats import (INITIAL_WEIGHTS_NAME, WEIGHTS,
                                                   discover_probes)
         with tempfile.TemporaryDirectory() as tmp_dir:
             np.savez_compressed(Path(tmp_dir) / INITIAL_WEIGHTS_NAME, data=np.array([1.0]))
@@ -466,7 +466,7 @@ class ProbeIoTest(unittest.TestCase):
         切断前の結合は以前 `weights_pre.npz` という名前で、`weights_p*.npz` の glob に
         引っかかって `discover_probes` が落ちていた。いまは `connectivity_pre.npz`。
         """
-        from scripts.lesion.store.records import (PRE_CONNECTIVITY_NAME, WEIGHTS,
+        from scripts.lesion.store.formats import (PRE_CONNECTIVITY_NAME, WEIGHTS,
                                                   discover_probes, probe_filename)
         self.assertFalse(PRE_CONNECTIVITY_NAME.startswith("weights_p"))
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -486,25 +486,25 @@ class ProbeIoTest(unittest.TestCase):
         ビンは切断前で固定する。
         """
         from src.utils.analysis.avalanche import mean_iei_ms
-        from scripts.lesion.store import paths, records
+        from scripts.lesion.store import paths, formats
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
             data = paths.data_dir(run_dir)
             data.mkdir(parents=True)
             rng = np.random.default_rng(0)
             # baseline は密、post は疎 -> 窓ごとに合わせるとビンが倍以上変わる
-            for index, rate in ((records.BASELINE_INDEX, 400), (0, 100)):
-                start = -1000.0 if index == records.BASELINE_INDEX else 0.0
+            for index, rate in ((formats.BASELINE_INDEX, 400), (0, 100)):
+                start = -1000.0 if index == formats.BASELINE_INDEX else 0.0
                 times = np.sort(rng.uniform(0.0, 1000.0, rate)) + start
-                records.save_spikes(
-                    data / records.probe_filename(records.SPIKES, index),
+                formats.save_spikes(
+                    data / formats.probe_filename(formats.SPIKES, index),
                     times, rng.integers(0, 10, rate),
                     record_start_ms=start, record_window_ms=1000.0,
-                    phase=(records.PHASE_BASELINE if index == records.BASELINE_INDEX
-                           else records.PHASE_POST))
-            base_times = records.load_spikes(
-                data / records.probe_filename(records.SPIKES,
-                                              records.BASELINE_INDEX)).times
+                    phase=(formats.PHASE_BASELINE if index == formats.BASELINE_INDEX
+                           else formats.PHASE_POST))
+            base_times = formats.load_spikes(
+                data / formats.probe_filename(formats.SPIKES,
+                                              formats.BASELINE_INDEX)).times
             expected = mean_iei_ms(base_times)
 
             series = _StubSeries(run_dir)
@@ -526,7 +526,7 @@ class ProbeIoTest(unittest.TestCase):
         p001..p021 になり「3 番目の記録時刻」と「p003」が食い違っていた。
         ベースラインは番号を持たず `baseline` という名前で区別する。
         """
-        from scripts.lesion.store.records import (BASELINE_INDEX, SPIKES,
+        from scripts.lesion.store.formats import (BASELINE_INDEX, SPIKES,
                                                   parse_probe_name, probe_filename,
                                                   probe_token)
         self.assertEqual(probe_filename(SPIKES, 0), "spikes_p000.npz")
@@ -542,7 +542,7 @@ class ProbeIoTest(unittest.TestCase):
 
     def test_baseline_sorts_before_the_numbered_probes(self):
         """`discover_probes` が baseline を先頭に置くこと (番号が負なので自然に前)。"""
-        from scripts.lesion.store.records import (BASELINE_INDEX, discover_probes,
+        from scripts.lesion.store.formats import (BASELINE_INDEX, discover_probes,
                                                   probe_filename)
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir)
@@ -554,8 +554,8 @@ class ProbeIoTest(unittest.TestCase):
 
     def test_probe_names_do_not_collide_with_akita_records(self):
         """akita_soc の解析 CLI が損傷 run を誤読しないこと。"""
-        from scripts.develop.store.records import RECORD_PATTERN, record_glob
-        from scripts.lesion.store.records import (discover_probes, parse_probe_name,
+        from scripts.develop.store.formats import RECORD_PATTERN, record_glob
+        from scripts.lesion.store.formats import (discover_probes, parse_probe_name,
                                                   probe_filename)
         name = probe_filename("spikes", 3)
         self.assertEqual(name, "spikes_p003.npz")

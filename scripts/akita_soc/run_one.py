@@ -28,9 +28,9 @@ from src.core.simulator import GeNNSimulator
 from scripts.akita_soc.analysis import metrics
 from scripts.akita_soc.report import overview, panels, structure
 from scripts.akita_soc.store import paths
-from scripts.akita_soc.store.build_record import write_build_record
-from scripts.akita_soc.store.records import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
-                                           MetricsWriter, record_filename, save_spikes,
+from scripts.akita_soc.store.built import write_built
+from scripts.akita_soc.store.formats import (METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
+                                           MetricsWriter, record_filename, record_hour, save_spikes,
                                            save_trace, save_weight_values)
 from scripts.akita_soc.store.views import open_run
 
@@ -214,15 +214,10 @@ def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
 
-    # 引き継ぎ (`pending_config.yaml`) があればそれ、無ければ記録 (`config.yaml`)。
-    # 両方が同時に存在することはない —— run 本体が config.yaml を書いた直後に引き継ぎを
-    # 消すため。前者は「これから走る run」、後者は「完走した run をもう一度走らせる」。
-    config_path = run_dir / paths.PENDING_CONFIG_NAME
-    if not config_path.exists():
-        config_path = run_dir / CONFIG_NAME
+    config_path = run_dir / CONFIG_NAME
     if not config_path.exists():
         raise SystemExit(
-            f"{run_dir} に {paths.PENDING_CONFIG_NAME} も {CONFIG_NAME} もありません。"
+            f"{run_dir} に {CONFIG_NAME} がありません。"
             " run ディレクトリを作って config を置くのは"
             " ランチャ (python -m scripts.akita_soc) の仕事です。"
         )
@@ -248,16 +243,10 @@ def main():
     builder = NetworkBuilder(config, model_name=_model_name(run_dir, seed))
     genn_model, layout = builder.build(rec_spike=True)
 
-    # **ここが「run の記録」を書く唯一の場所。** build() を通った後なので記録になる。
-    # 記録を書いたら引き継ぎファイルは役目を終えるので消す。以降この run ディレクトリには
-    # config.yaml しか無く、それは「build を通った run の記録」であることが保証される。
-    manager.save_config(config, save_dir=run_dir)
-    (run_dir / paths.PENDING_CONFIG_NAME).unlink(missing_ok=True)
-
     # build 直後の記録 (結合・遅延・初期重み・座標・軸索・外部軸)。何を書くかは
-    # `store/build_record.py` の一覧。**書いたら読み直す** —— 構造図も窓ごとの図と同じく
+    # `store/built.py` の一覧。**書いたら読み直す** —— 構造図も窓ごとの図と同じく
     # 記録から描くので、`replot.py` とまったく同じ呼び出しになる。
-    write_build_record(run_dir, builder)
+    write_built(run_dir, builder)
     # 記録窓はこれから書くので 0 個。`series.window(hour)` が 1 窓ずつ拾っていく。
     series = open_run(run_dir, require_windows=False)
 
@@ -289,7 +278,7 @@ def main():
             run_steps(sim, int(round(develop_ms / dt)), chunk_steps, keep_spikes=False)
             current_ms += develop_ms
 
-        hour = record_start_ms / MS_PER_HOUR
+        hour = record_hour(record_start_ms)
         record_once(
             sim, series, run_dir, hour,
             record_start_ms=record_start_ms,

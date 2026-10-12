@@ -54,7 +54,7 @@ def rte_rows(series) -> list[dict]:
 
 def write_rte_table(series, out_dir) -> None:
     """`rte_rows()` を `rte.csv` へ書く。"""
-    from scripts.lesion.store.records import RTE_NAME, write_table
+    from scripts.lesion.store.formats import RTE_NAME, write_table
 
     rows = rte_rows(series)
     write_table(rows, Path(out_dir) / RTE_NAME)

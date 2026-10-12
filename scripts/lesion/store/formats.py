@@ -1,4 +1,4 @@
-"""lesion 実験の記録ファイル名の規約。
+"""lesion 実験の記録ファイルの形式 (ファイル名と npz の鍵名)。
 
 **この規約を知っているのはここだけ。** ファイル名だけでなく、**npz の中の鍵の名前**も
 書き出しと読み取りが対で持つ (`save_spikes` / `load_spikes` など)。片方だけ変えて
@@ -318,6 +318,14 @@ def read_window_meta(path: Path) -> tuple[float, float, str]:
             )
         return (float(data[RECORD_START_KEY]), float(data[RECORD_WINDOW_KEY]),
                 str(data[PHASE_KEY]))
+
+
+def record_hour(record_start_ms: float) -> float:
+    """記録窓の原点 [ms] を切断からの経過時間 [h] に直す。
+
+    `Window.hour` はこれで作る。baseline は負になる。
+    """
+    return record_start_ms / MS_PER_HOUR
 
 
 def load_spikes(path: Path) -> Spikes:

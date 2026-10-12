@@ -55,7 +55,7 @@ python -m scripts.lesion.run_one <親>/seed03/bridge-inter_cluster
 python -m scripts.lesion.replot  <親>/seed03/bridge-inter_cluster [--verify] [--no-structure]
 ```
 
-構造図も切断直後の記録 (切断後の結合・遅延・重み・軸索幾何。一覧は `store/build_record.py`)
+構造図も切断直後の記録 (切断後の結合・遅延・重み・軸索幾何。一覧は `store/built.py`)
 から描きます (ネットワークは組み直さない)。`--verify` を付けたときだけ、親と同じ
 ネットワークを再ビルドして記録どおりに切り、記録と同じ結合と軸索幾何が出るかを確かめます。
 切断後の軸索幾何を記録する前に走った run では `axon network` が skip になります。
@@ -140,7 +140,7 @@ cut_combine: or
 
 **書いたら `--dry-run` で数える。** GeNN を触らずに下見だけ走るので、spec を確かめるのは
 これが一番早い。切断本数・属性ごとの「切断群 vs 残存群」・幾何 vs 位相の突き合わせまで
-端末に出る。run ディレクトリに記録は残らない。
+端末に出る。run ディレクトリには `config.yaml` と `run.log` だけが残り、`data/` の記録は書かれない。
 
 ```bash
 python -m scripts.lesion --parent outputs/develop/<条件> --dry-run
@@ -612,8 +612,8 @@ scripts/lesion/
 │   └── compare.py     run をまたいで: runs.csv / control.csv と用量反応の図
 ├── store/          どこに何があり、どう読み書きするか
 │   ├── paths.py       run 内部のディレクトリ規約
-│   ├── records.py     記録ファイル 1 つの読み書き
-│   ├── build_record.py 切断直後に何を書くかの一覧 (write_build_record)
+│   ├── formats.py     記録ファイル 1 つの読み書き
+│   ├── built.py       切断直後に何を書くかの一覧 (write_built)
 │   ├── views.py       Built (切断直後) / Window (probe 1 つ) / Series (run 全体)
 │   ├── collection.py  Collection (1 つの親条件の損傷 run の束 + 対照)
 │   └── parent_run.py  **親 run (develop 形式) を読む唯一の場所**

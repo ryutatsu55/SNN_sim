@@ -1,4 +1,4 @@
-"""切断直後 (= この run の build 直後) に残す記録。**何を書くかの一覧はここだけ。**
+"""切断直後 (= この run の build 直後、`Built`) の記録を書く。**何を書くかの一覧はここだけ。**
 
     data/layout_axes.npz       外部軸 (親 run から読み戻したもの)。直列化は `NetworkLayout`
     data/coords.npz            soma の座標。`no_space` の run では書かない
@@ -9,10 +9,10 @@
     data/axon_geometry.npz     切断後の軸索幾何。axon_growth 系だけ。直列化は `AxonGeometry`
 
 `config.yaml` と切断の記録 (`lesion.json` / `lesion_cut.npz` / `cut_profile.csv`) は
-ここに含めない —— 前者はランチャからの引き継ぎを片付ける手順と一体、後者は「何を切ったか」
-の記録で、ネットワークの形ではない。どちらも `run_one.py` が書く。
+ここに含めない —— 前者は build の前にランチャが書く。後者は「何を切ったか」の記録で、
+ネットワークの形ではないので `run_one.py` が書く。
 
-**自前のスキーマを持つオブジェクトは自分で直列化し、ただの配列は `records.py` が直列化する**
+**自前のスキーマを持つオブジェクトは自分で直列化し、ただの配列は `formats.py` が直列化する**
 —— ここは「何を・どこへ」を決めるだけ。読む側は `views.py` (`Series` と `Built`)。
 """
 from __future__ import annotations
@@ -26,13 +26,13 @@ from src.core.layout import AXES_NAME
 from src.models.network.connectors import AXONS_NAME
 
 from scripts.lesion.store import paths
-from scripts.lesion.store.records import (COORDS_NAME, DELAYS_NAME, INITIAL_WEIGHTS_NAME,
+from scripts.lesion.store.formats import (COORDS_NAME, DELAYS_NAME, INITIAL_WEIGHTS_NAME,
                                           POST_CONNECTIVITY_NAME, PRE_CONNECTIVITY_NAME,
                                           save_connectivity, save_coords, save_delays,
                                           save_weight_values)
 
 
-def write_build_record(run_dir: Path, builder, layout, *, pre_coo, keep,
+def write_built(run_dir: Path, builder, layout, *, pre_coo, keep,
                        geometry=None) -> None:
     """切断後の `builder` から、build 直後の記録を全部書く。
 

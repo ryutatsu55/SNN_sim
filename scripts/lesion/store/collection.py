@@ -25,7 +25,7 @@ from src.utils.runview import MissingData
 
 from scripts.lesion.store import paths
 from scripts.lesion.store.parent_run import load_parent_metrics
-from scripts.lesion.store.records import (CONTROL_TABLE_NAME, MANIFEST_NAME,
+from scripts.lesion.store.formats import (CONTROL_TABLE_NAME, MANIFEST_NAME,
                                           RUNS_TABLE_NAME, load_metrics)
 from scripts.lesion.store.views import Series, open_run
 

@@ -54,7 +54,7 @@ done
 
 N=100・記録窓 73 個の条件で **1 run あたり約 45 秒**でした (CPU。ほぼ全部が作図)。
 
-**引数・出力ディレクトリ・seed の書き方・並列度・`pending_config.yaml` の意味は
+**引数・出力ディレクトリ・seed の書き方・並列度・`config.yaml` を置くタイミングは
 `scripts/develop/README.md` と同じ。** そちらに詳しく書いてある。
 
 ---
@@ -121,7 +121,7 @@ scripts/akita_soc/
 | 走り終えてから `organize_output()` で移す | 最初から `data/` へ書く |
 | 再解析が `metrics_replot.csv` に逃げる (列が本番より少ない) | 本番と同じ関数・同じ列なので `metrics.csv` を上書き |
 | `configs/components/tasks.yaml` の `akita_soc_fig2*` | `scripts/akita_soc/task.yaml` |
-| `src/utils/experiments/akita_soc/` (runio / fig2c / fig2d / weight_track) | `store/records.py` と `figures/` |
+| `src/utils/experiments/akita_soc/` (runio / fig2c / fig2d / weight_track) | `store/formats.py` と `figures/` |
 
 **旧レイアウトの run は読めない。** `data/` に npz が無い run、密形式で重みを保存した run、
 記録窓の原点 (`record_start_ms`) を持たない run はエラーで止まる。読みたければ再実行する。

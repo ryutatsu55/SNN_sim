@@ -3,7 +3,6 @@
 - 論文の「100」は定数ではなく系のサイズ N であること
 - module 軸を持たない run でも記録時刻に到達したときに落ちないこと
 - seed の範囲指定が意図どおり展開されること
-- `config.yaml` が「build を通った run の記録」以外にならないこと
 - 指標の列が 1 通りしかないこと (本番と再解析で食い違わない)
 - 再解析が、figure が読む場所に figure が読む名前で指標を置くこと
 - 記録時刻の正が npz にあり、ファイル名の丸めに影響されないこと
@@ -23,7 +22,7 @@ if str(root_path) not in sys.path:
 from scripts.develop.analysis import metrics
 from scripts.develop.figures import style
 from scripts.develop.store import paths
-from scripts.develop.store.records import METRICS_NAME, MS_PER_HOUR, SPIKES, WEIGHTS, \
+from scripts.develop.store.formats import METRICS_NAME, MS_PER_HOUR, SPIKES, WEIGHTS, \
     record_filename, save_spikes, save_weight_values
 from scripts.develop.replot import replot
 from scripts.develop.store.views import open_run
@@ -32,8 +31,8 @@ from src.core.config_manager import (ConfigManager, expand_hours_spec,
 from src.core.layout import NetworkLayout
 from src.core.config_manager import CONFIG_NAME
 from scripts.develop.store.paths import DATA_SUBDIR
-from scripts.develop.store.records import CONNECTIVITY_NAME
-from scripts.develop.store.build_record import write_build_record
+from scripts.develop.store.formats import CONNECTIVITY_NAME
+from scripts.develop.store.built import write_built
 from scripts.develop.report import structure
 from src.core.NetworkBuilder import NetworkBuilder
 from src.utils.runview import BuiltNetwork, MissingData
@@ -52,7 +51,7 @@ def _fake_coo(num_neurons: int = 100, fan_out: int = 3, seed: int = 1):
     """試験用の COO。**本物の run と同じく行優先ソート済みで、(pre, post) の重複なし。**
 
     重複を作らないために行ごとに非復元抽出する。ここが崩れていると、記録を読む側の
-    行優先チェック (`records._require_row_major`) が正しく弾いてしまい、テストが
+    行優先チェック (`formats._require_row_major`) が正しく弾いてしまい、テストが
     「規約を守っていない入力」を使っていることになる。
     """
     rng = np.random.default_rng(seed)
@@ -341,17 +340,6 @@ class RunPathsTest(unittest.TestCase):
             paths.fig_path("run", "histogram", "x.png")
 
 
-class PendingConfigTest(unittest.TestCase):
-    """`config.yaml` は「build を通った run の記録」以外にならないこと。
-
-    ランチャが起動前に置く引き継ぎは別名 (`pending_config.yaml`) にし、`config.yaml` を
-    書くのは build を通した run 本体だけにしてある。
-    """
-
-    def test_handoff_is_not_named_config_yaml(self):
-        self.assertNotEqual(paths.PENDING_CONFIG_NAME, CONFIG_NAME)
-
-
 class MetricsColumnsTest(unittest.TestCase):
     """`build_row` が **1 通りの列**を作ること。
 
@@ -483,7 +471,7 @@ class BuildRecordTest(unittest.TestCase):
         ConfigManager().save_config(config, save_dir=run_dir)
         builder = NetworkBuilder(config)
         builder._generate_global_matrices()
-        write_build_record(run_dir, builder)
+        write_built(run_dir, builder)
         cls.builder = builder
         cls.direct = BuiltNetwork.from_builder(builder, run_dir)
         cls.recorded = open_run(run_dir, require_windows=False).built()
@@ -522,7 +510,7 @@ class BuildRecordTest(unittest.TestCase):
             self.recorded.coords()
         self.assertIn("空間を持たない", str(caught.exception))
 
-    def test_run_without_the_build_record_says_so(self):
+    def test_run_without_built_records_says_so(self):
         """build の記録を足す前の run では、構造図の重み・遅延が「古い run」として skip されること。"""
         with tempfile.TemporaryDirectory() as tmp_dir:
             built = open_run(_make_run(tmp_dir)).built()

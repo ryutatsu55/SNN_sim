@@ -73,7 +73,7 @@ config 順の連番に変わった（その後 `layout.assignment` として明�
 ## develop: スパイク npz が記録窓の原点を持つようになった
 
 `scripts/develop/` の `spikes_{h}h.npz` に `record_start_ms` を書くようにした
-(`records.save_spikes()` / `load_spikes()`)。
+(`formats.save_spikes()` / `load_spikes()`)。
 
 それまで再解析はファイル名から記録時刻を復元していたが、ファイル名は `f"{hour:g}h"` =
 **有効数字 6 桁**なので、`record_hours` が非整数だと往復で元に戻らない。1/3 h なら
@@ -143,7 +143,7 @@ GeNN はシナプスを SynapseGroup (送信 population × 受信 population) �
 正しく読める。
 
 ただし「記録は行優先」を仮定するコードを書くと静かに壊れるので、
-`scripts/develop/store/records.py::load_connectivity()` が**読んだ時点で行優先かを検査し、
+`scripts/develop/store/formats.py::load_connectivity()` が**読んだ時点で行優先かを検査し、
 破れていたら拒否する**。develop の「旧レイアウトの run は受け付けない」方針と揃えてある。
 古い run を develop で再解析したければ再実行すること。
 
@@ -473,7 +473,7 @@ lesion の図は develop の複製だったが、develop 側の更新が反映�
 - アバランチ分布・発火率・ISI は時刻の**差**しか見ないので変わらない。
 
 **古い run は再実行するしかない。** npz が持つ時刻そのものが間違っているので、再解析
-(`replot.py`) では直らない。`records.save_spikes()` が窓の外のスパイクを弾くようになった
+(`replot.py`) では直らない。`formats.save_spikes()` が窓の外のスパイクを弾くようになった
 ので、同じずれが静かに通ることは無い。
 
 ## develop / lesion: ニューロン間相関の図と指標を追加
@@ -669,7 +669,7 @@ overlap 50) では、ブリッジ矩形 300 um のうち 100 um = 1/3 がモジ�
 
 **何が変わったか:**
 
-- build の直後に記録が増えた (3 実験とも。一覧は各 `scripts/<実験>/store/build_record.py`):
+- build の直後に記録が増えた (3 実験とも。一覧は各 `scripts/<実験>/store/built.py`):
   - `data/delays.npz` —— 遅延 [ms]。`connectivity.npz` と index 整合
   - `data/weights_initial.npz` —— build 直後の重み (lesion は切断直後 = 親から復元した値)。
     `record_hours` が 0 を含むかどうかによらず必ず書く

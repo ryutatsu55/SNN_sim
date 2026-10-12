@@ -24,7 +24,6 @@
 """
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -34,9 +33,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.core.config_manager import ConfigManager, SOURCE_CONFIG_NAME, expand_seed_spec
-
-from scripts.akita_soc.store.paths import PENDING_CONFIG_NAME
+from src.core.config_manager import ConfigManager, expand_seed_spec
 
 _HERE = Path(__file__).resolve().parent
 
@@ -93,14 +90,11 @@ def seed_dir_name(seed: int) -> str:
     return f"seed{seed:02d}"
 
 
-def prepare_runs(manager: ConfigManager, config, config_path: Path, condition: str,
+def prepare_runs(manager: ConfigManager, config, condition: str,
                  seeds: list[int]) -> list[Path]:
-    """`<条件>/` と各 run ディレクトリを作り、seed を実値にした引き継ぎ config を置く。
+    """`<条件>/` と各 run ディレクトリを作り、seed を実値にした `config.yaml` を置く。
 
-    置くのは `config.yaml` ではなく `pending_config.yaml`。**ここで書けるのは記録ではなく
-    引き継ぎだから** —— まだ build を通っていない config を `config.yaml` の名前で置くと
-    「run の記録」の不変条件を破る。
-    `config.yaml` を書くのは build を通した run 本体の仕事 (`run_one.py`)。
+    `source_config.yaml` (入力 YAML の逐語コピー) も一緒に置く。
     """
     condition_dir = OUTPUT_ROOT / EXPERIMENT / condition
     if condition_dir.exists():
@@ -119,9 +113,7 @@ def prepare_runs(manager: ConfigManager, config, config_path: Path, condition: s
         # 残すと「この run の seed はどれか」が決まらなくなる (Hard Rule 7)。
         # 範囲そのものは source_config.yaml (入力の逐語コピー) に残る。
         config.simulation.seed = int(seed)
-        manager.dump_config(config, run_dir / PENDING_CONFIG_NAME)
-        # 入力 YAML の逐語コピー。seed の範囲指定とコメントが残るのはこちら。
-        shutil.copy2(config_path, run_dir / SOURCE_CONFIG_NAME)
+        manager.save_config(config, save_dir=run_dir)
         run_dirs.append(run_dir)
     return run_dirs
 
@@ -170,7 +162,7 @@ def main():
     print(f"seeds     : {seeds}")
     print(f"parallel  : {parallel}  (backend={config.simulation.backend})")
 
-    run_dirs = prepare_runs(manager, config, config_path, args.condition, seeds)
+    run_dirs = prepare_runs(manager, config, args.condition, seeds)
     for run_dir in run_dirs:
         print(f"  -> {run_dir}")
 

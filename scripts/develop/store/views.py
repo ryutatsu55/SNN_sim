@@ -1,7 +1,7 @@
-"""develop の run を読む。`Built` (build 直後)、`Window` (記録窓 1 つ)、`Series` (run 全体)。
+"""develop の run を、build 直後は `Built`、記録窓 1 つは `Window`、run 全体は `Series` として読む。
 
 `src/utils/runview.py` の契約 (全実験共通の形) を、この実験のファイル名規約
-(`records.py`) の上に実装したもの。**ここは読み出しだけ。加工はしない。**
+(`formats.py`) の上に実装したもの。**ここは読み出しだけ。加工はしない。**
 
 run を通して不変なもの (結合・座標・領域・軸索・遅延) は `Series` が持ち、`Built` と
 `Window` はそれを借りる。両者の違いは「どの時点の重みか」だけ。
@@ -31,11 +31,11 @@ from src.utils import runview
 from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
 
 from scripts.develop.store import paths
-from scripts.develop.store.records import (COORDS_NAME, DELAYS_NAME, INITIAL_WEIGHTS_NAME,
-                                           METRICS_NAME, MS_PER_HOUR, SPIKES, TRACE, WEIGHTS,
+from scripts.develop.store.formats import (COORDS_NAME, DELAYS_NAME, INITIAL_WEIGHTS_NAME,
+                                           METRICS_NAME, SPIKES, TRACE, WEIGHTS,
                                            discover_records, load_connectivity, load_coords,
                                            load_delays, load_metrics, load_spikes, load_trace,
-                                           load_weight_values, read_record_start_ms,
+                                           load_weight_values, read_record_start_ms, record_hour,
                                            record_filename)
 
 
@@ -98,8 +98,8 @@ class Built(runview.Built):
 class Window(runview.Window):
     """1 記録時刻ぶんの記録。
 
-    `hour` は npz が持つ原点から作った値なので、`metrics.csv` の `hour` 列と
-    ビット単位で一致する (どちらも同じ `record_start_ms` から割っている)。
+    `hour` は npz が持つ原点を `formats.record_hour()` で直した値なので、`metrics.csv` の
+    `hour` 列とビット単位で一致する。
     """
 
     def __init__(self, series: "Series", *, hour: float, record_start_ms: float,
@@ -149,13 +149,17 @@ class Window(runview.Window):
 
 
 class Series(runview.Series):
-    """完走した run 1 つ。`open_run()` が作る。"""
+    """run 1 つの記録全体。build 直後 (`built()`) と各記録窓 (`windows`) をここから取り出す。
 
-    def __init__(self, run_dir: Path, config, layout, wiring: Wiring,
-                 windows: tuple[Window, ...] = ()):
+    `open_run()` が作る。結合・座標・領域・軸索のように run を通して変わらないものはここが持ち、
+    `Built` と `Window` はそれを借りる。走っている途中の run も表す。
+    """
+
+    def __init__(self, run_dir: Path, config, layout, wiring: Wiring):
         super().__init__(run_dir, config, layout)
         self._wiring = wiring
-        self._windows = windows
+        # 記録窓は初めて `windows` を参照したときに並べる (`windows` 参照)。
+        self._windows: tuple[Window, ...] | None = None
         # area は config から組み直すので 1 度だけ作って持つ (`area()` 参照)。
         self._area = None
         # 軸索の幾何は大きいので 1 度だけ読んで持つ。
@@ -163,6 +167,12 @@ class Series(runview.Series):
 
     @property
     def windows(self) -> tuple[Window, ...]:
+        """書き終わっている記録窓 (時刻順)。初めて参照したときにディスクから並べ、以後は変わらない。
+
+        それより後に書いた窓は `window(hour)` で開く。
+        """
+        if self._windows is None:
+            self._windows = _discover_windows(self, paths.data_dir(self.run_dir))
         return self._windows
 
     def wiring(self) -> Wiring:
@@ -236,12 +246,12 @@ class Series(runview.Series):
         """build 直後の時点から見た view。構造図 (`report/structure.py`) に渡す。"""
         return Built(self)
 
-    # --- 走りながら使う口 ---------------------------------------------------------
-
     def window(self, hour: float) -> Window:
-        """**いま書いたばかりの**記録を指す `Window` を作る。
+        """記録時刻 `hour` [h] の記録窓を 1 つ開く。
 
-        `run_one.py` が「書いてから読み直す」ための入口。
+        `windows` と違い、呼んだ時点のファイルを見るので、`open_run()` の後に書いた窓も
+        開ける (`run_one.py` は記録を書くたびにこれで読み直す)。その時刻の記録が無ければ
+        `FileNotFoundError`。
         """
         data_dir = paths.data_dir(self.run_dir)
         spikes_path = data_dir / record_filename(SPIKES, hour)
@@ -250,22 +260,27 @@ class Series(runview.Series):
 
 
 def open_run(run_dir: str | Path, *, require_windows: bool = True) -> Series:
-    """run ディレクトリを開く。config を読み、layout を復元し、記録を時刻順に並べる。
+    """run ディレクトリを読み、その run 全体を表す `Series` を返す。記録を読む処理の入口。
 
-    結合構造は run を通して不変なのでここで 1 回だけ読む。build の記録
-    (`build_record.write_build_record()`) を書いた直後から開ける。
-    **layout が復元できなければ落とす** (E/I 列の無い `metrics.csv` を作らないため)。
+    返した `Series` から、build 直後の状態は `series.built()`、記録窓は全部なら
+    `series.windows` (時刻順)、1 つなら `series.window(hour)` で取り出す。
+
+    以下のときは例外を出して止まる:
+
+    - `config.yaml` が無い (run ディレクトリではない) → `FileNotFoundError`
+    - config から求めたニューロン数と、記録された結合行列の大きさが合わない
+      (config か `data/` が別の run のものに入れ替わっている) → `ValueError`
+    - 記録窓が 1 つも無い (`require_windows=True` のときだけ) → `FileNotFoundError`
 
     Args:
-        require_windows: 記録が 1 つも無いときに落とすか。`run_one.py` は**これから
-            記録を書く**ところで開くので `False` を渡す。
+        require_windows: 記録窓が 1 つも無い run を拒むか。記録窓の無い run も開きたいとき
+            (記録を書く前の `run_one.py` など) は `False` にする。
     """
     run_dir = Path(run_dir)
     config_path = run_dir / CONFIG_NAME
     if not config_path.exists():
         raise FileNotFoundError(
-            f"{config_path} がありません。"
-            " build を通っていない run か、run ディレクトリではありません。"
+            f"{config_path} がありません (run ディレクトリではありません)。"
         )
     config = ConfigManager().load_resolved(config_path)
 
@@ -286,7 +301,6 @@ def open_run(run_dir: str | Path, *, require_windows: bool = True) -> Series:
             f"connectivity の {wiring.shape[0]} と一致しません: {run_dir}"
         )
     series = Series(run_dir, config, layout, wiring)
-    series._windows = _discover_windows(series, data_dir)
     if require_windows and not series.windows:
         raise FileNotFoundError(f"{record_filename(SPIKES, 0)} 形式の記録がありません: {data_dir}")
     return series
@@ -304,7 +318,7 @@ def _discover_windows(series: Series, data_dir: Path) -> tuple[Window, ...]:
 
 def _make_window(series: Series, data_dir: Path, spikes_path: Path,
                  start_ms: float) -> Window:
-    hour = start_ms / MS_PER_HOUR
+    hour = record_hour(start_ms)
     weights_path = data_dir / record_filename(WEIGHTS, hour)
     if not weights_path.exists():
         raise FileNotFoundError(

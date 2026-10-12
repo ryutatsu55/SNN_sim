@@ -10,7 +10,7 @@
 lesion が壊れる。
 
 代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 8 つだけで、
-develop の `store/records.py` 全体ではない:
+develop の `store/formats.py` 全体ではない:
 
     config.yaml            ネットワーク設定 (同じ seed から同じネットワークが出る)
     data/connectivity.npz  結合構造 (row / col / shape)
@@ -214,7 +214,7 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
     config_path = run_dir / CONFIG_NAME
     if not config_path.exists():
         raise FileNotFoundError(
-            f"{config_path} がありません。build を通った run を指してください。")
+            f"{config_path} がありません。親の run ディレクトリを指してください。")
     config = ConfigManager().load_resolved(config_path)
 
     data_dir = _parent_data_dir(run_dir)

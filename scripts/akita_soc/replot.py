@@ -9,7 +9,7 @@
 **作り直すのは全部。** 構造図も窓ごとの図も run 全体の図も、指標も、例外なく上書きする
 (一部だけ新しい状態を作らないため)。
 
-**構造図も記録から描く。** build 直後の記録 (`store/build_record.py`) を
+**構造図も記録から描く。** build 直後の記録 (`store/built.py`) を
 `series.built()` で読むので、本番の run と同じ呼び出しになる。ネットワークは組み直さない。
 
 `--verify` を付けたときだけ、`config.yaml` からネットワークを**再ビルド**して記録と同じ
@@ -35,7 +35,7 @@ from src.core.NetworkBuilder import NetworkBuilder
 from scripts.akita_soc.report import overview, panels, structure
 from scripts.akita_soc.store import paths
 from src.utils.runview import BuiltNetwork
-from scripts.akita_soc.store.records import METRICS_NAME, MetricsWriter
+from scripts.akita_soc.store.formats import METRICS_NAME, MetricsWriter
 from scripts.akita_soc.store.views import open_run
 
 # プロファイル名を Python クラスへ解決するために必要 (@register は import で走る)。

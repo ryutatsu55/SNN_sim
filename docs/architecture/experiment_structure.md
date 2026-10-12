@@ -69,9 +69,9 @@ scripts/develop/
 │
 ├── store/           読み書きだけ。加工しない
 │   ├── paths.py        run 内部のディレクトリ規約
-│   ├── records.py      1 ファイルの読み書き（名前 ↔ 中身）
-│   ├── build_record.py build 直後に何を書くかの一覧 (write_build_record)
-│   └── views.py        Built / Window / Series (records と契約をつなぐ)。open_run()
+│   ├── formats.py      1 ファイルの読み書き（名前 ↔ 中身）
+│   ├── built.py        build 直後に何を書くかの一覧 (write_built)
+│   └── views.py        Built / Window / Series (formats と契約をつなぐ)。open_run()
 │
 ├── analysis/        表を作る
 │   ├── metrics.py
@@ -210,14 +210,14 @@ def emit(window, *, metrics) -> None:
 同じ「書いてから読み直す」形で、本番と再解析が同じ経路を通る:
 
 ```python
-write_build_record(run_dir, builder)                  # store/build_record.py
+write_built(run_dir, builder)                         # store/built.py
 series = open_run(run_dir, require_windows=False)
 structure.emit(series.built())                        # run_one も replot も同じ 1 行
 ```
 
-書くもの (`store/build_record.py` の一覧): 外部軸・座標・軸索幾何・結合・遅延・build 直後の
+書くもの (`store/built.py` の一覧): 外部軸・座標・軸索幾何・結合・遅延・build 直後の
 重み。自前のスキーマを持つオブジェクト (`NetworkLayout` / `AxonGeometry`) は自分で直列化し、
-ただの配列は `records.py` が直列化する。`area` は記録せず config から組み直す (`BaseArea` は
+ただの配列は `formats.py` が直列化する。`area` は記録せず config から組み直す (`BaseArea` は
 乱数を使わないので config の純関数。中身は SDF の合成 = コードなので npz に落とす意味が無い)。
 
 ### 以前は replot のたびに再ビルドしていた
@@ -252,7 +252,7 @@ structure.emit(series.built())                        # run_one も replot も�
 乗る状態だったので並びを揃えた (`docs/technical/compat_breaks.md`)。いまは COO の並びは
 プロジェクト全体で 1 つで、`connectivity.npz` は builder の `global_coo()` から直接書く。
 
-旧い run の npz は古い並びのままなので、`store/records.py::load_connectivity()` が
+旧い run の npz は古い並びのままなので、`store/formats.py::load_connectivity()` が
 読んだ時点で行優先かを検査して弾く。
 
 ---
@@ -275,7 +275,7 @@ structure.emit(series.built())                        # run_one も replot も�
 ## 8. 新しい実験を足すとき
 
 1. `store/` を書く（契約の実装。ファイル名の規約はその実験のもの）。build 直後の記録は
-   `store/build_record.py`、読み口は `store/views.py` の `Built` / `Window` / `Series`
+   `store/built.py`、読み口は `store/views.py` の `Built` / `Window` / `Series`
 2. 出力を 3 つのタイミングに割り振って `report/` に登録する
 3. 図を `(view, out_path)` で書く（共有層から複製してよい）
 4. `run_one` を「書いてから読み直す」形にする

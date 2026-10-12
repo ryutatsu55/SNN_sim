@@ -343,8 +343,8 @@ class AppConfig(BaseModel):
     neurons: Dict[str, NeuronConfig] = Field(default_factory=dict)
     synapses: Dict[str, SynapseGroupConfig] = Field(default_factory=dict)
     network: NetworkConfig
-    # 任意セクションではない。resolve() / load_resolved() が必ず実値へ確定させてから
-    # 検証するので、AppConfig を名乗る以上 assignment は決まっている。
+    # 必須。resolve() は未指定なら既定値を入れてから検証し、load_resolved() は補わずに
+    # 検証エラーにする。どちらを通っても AppConfig の assignment は決まっている。
     layout: LayoutConfig
     task: ComponentConfig
     meta: MetaConfig
@@ -638,22 +638,13 @@ class ConfigManager:
             )
 
     def load_resolved(self, resolved_config) -> AppConfig:
-        """
-        過去にresolveした.yamlファイルを読み込む
+        """保存済みの `config.yaml` (run の記録) を読み、検証して返す。
 
-        保存済み config は**実験の記録**なので、seed が null でも実値を捏造しない。
-        捏造すると「再現できないもの」が再現できるように見えてしまう。警告だけ出し、
-        実害が出るケース (layout.assignment='random') は NetworkLayout 側が弾く。
-
-        layout.assignment も同じ理由で補完しない。記録に無ければ検証エラーで落ちる。
-
-        simulation.backend も補完しない。ただし assignment と違い**検証は通す** (None 可)。
-        backend はレイアウト復元に不要なので、backend フィールドが無い時代の config.yaml でも
-        解析はできるべきだから。再実行しようとした時点で NetworkBuilder が弾く。
-
-        network.area も補完しない。assignment と同じく必須フィールドなので、記録に無ければ
-        検証エラーで落ちる (領域を暗黙に決めると、記録を読んでもどの領域で走ったか
-        分からなくなる)。
+        `resolve()` が補う 3 つの値を、ここでは補わない。
+        - `layout.assignment` が無い → 検証エラー。
+        - `simulation.seed` が無い → 警告のみ。`assignment: random` なら layout の復元で落ちる。
+        - `simulation.backend` が無い → 警告のみ。解析には要らず、再実行する段で
+          `NetworkBuilder` が落ちる。
         """
         config_path = Path(resolved_config)
         resolved = self._load_yaml(config_path)
@@ -678,11 +669,10 @@ class ConfigManager:
 
     @staticmethod
     def dump_config(resolved_config: AppConfig, path: str | Path) -> Path:
-        """解決済み config を 1 ファイル書き出すだけの素の操作。
+        """解決済み config を指定したパスへ YAML で書き出す。
 
-        `save_config()` との違いは**何も主張しないこと**。あちらは「この run はこうして
-        走った」という記録を残す操作なので、記録として不完全なら警告を出す。こちらは
-        単なる YAML の書き出しで、まだ走っていない config を受け渡すのにも使える。
+        run ディレクトリへの記録には `save_config()` を使う (ファイル名と
+        `source_config.yaml` の複写はそちらが受け持つ)。
 
         safe_load で読み戻せるよう、numpy スカラ等を Python ネイティブへ落としてから書く。
         """
