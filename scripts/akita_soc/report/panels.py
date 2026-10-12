@@ -28,7 +28,7 @@ FIGURES = (
     ("weight matrix", weight_matrix, paths.WEIGHT, "weight_matrix_{tag}.png"),
     ("weight distribution", weight_distribution, paths.WEIGHT_DIST,
      "weight_distribution_{tag}.png"),
-    # トレースを採っていない run では window.trace() が MissingData を投げるので、
+    # 膜電位を採っていない run では window.voltage() が MissingData を投げるので、
     # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
     ("neuron trace", neuron_trace, paths.TRACE, "neuron_trace_{tag}.png"),
 )

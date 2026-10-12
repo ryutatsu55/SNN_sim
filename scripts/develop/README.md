@@ -105,20 +105,23 @@ record_hours: [0, 1..6, 24]   # 混在
 run 長は `record_hours` の最大値 + `record_window_ms` で決まる。**総時間を別に書く
 フィールドは持たない** —— 手計算した値と実際の run 長が食い違う余地を作らないため。
 
-### 膜電位トレース
+### 膜電位・入力電流
 
-1 ニューロンの V と Isyn_rec を記録窓の先頭で採るかどうかも `task.yaml` で決める。
+記録窓の先頭で V と Isyn_rec を採るかどうかも `task.yaml` で決める。
 
 ```yaml
-trace_neuron: null     # null なら採らない (既定)。採るならニューロン ID
+trace_neuron: null     # null なら採らない (既定)。ID を書くとトレース図はそのニューロンを描く
 trace_window_s: 10.0   # 記録窓の先頭から何秒ぶん
 ```
 
-採ると記録窓の先頭を 1 ステップずつ進めて毎ステップ `pull()` するので遅くなる。長い run
-では効く。そのぶん、同じ窓のラスターと時間軸が揃った V / I が残る。
+ID を書くと、記録窓の先頭を 1 ステップずつ進めて**全ニューロン**の V / I を毎ステップ
+`pull()` し、`voltage_{h}h.npz` / `current_{h}h.npz` に残す。同じ窓のスパイクと時間軸が
+揃う。採取部分は遅くなる (GPU で約 7 倍)。**容量に注意:** 1 窓あたり 2 変数 × ステップ数 ×
+ニューロン数 × 8 byte の圧縮前 (N=256, dt=0.1 ms, 10 s で約 410 MB)。npz は圧縮して書くので、
+実際はこれよりかなり小さくなりうる (発火の多さに依る)。
 
 **引数にしていないのは、採ったかどうかがその run の記録の一部だから。** 引数にすると、
-完走した run に `trace_*.npz` が無いときに「採らない設定だった」のか「採ろうとして失敗
+完走した run に `voltage_*.npz` が無いときに「採らない設定だった」のか「採ろうとして失敗
 した」のかが区別できなくなる。範囲外のニューロン ID は起動直後に弾く (長い run を回し
 切ってから `IndexError` で落ちないように)。
 
@@ -149,7 +152,8 @@ run ディレクトリの中身:
 │   ├── coords.npz            soma の座標 (`no_space` の run には無い)
 │   ├── weights_{h}h.npz      重みの値ベクトル (connectivity と index 整合)
 │   ├── spikes_{h}h.npz       スパイク (絶対時刻 ms)
-│   └── trace_{h}h.npz        膜電位トレース (task.trace_neuron を指定した run のみ)
+│   ├── voltage_{h}h.npz      窓の先頭の膜電位 (task.trace_neuron を指定した run のみ)
+│   └── current_{h}h.npz      窓の先頭の入力電流 (同上)
 └── figures/
     ├── structure/        area / connection_mask / network_sample / 各種分布 (build 直後に 1 枚ずつ)
     ├── panels/           **記録窓ごと**の図。窓の数だけ増えるものはここへ
@@ -174,7 +178,7 @@ run ディレクトリの中身:
 | `connectivity.npz` | `row` `col` `shape` |
 | `weights_{h}h.npz` | `data` (値ベクトル。`connectivity` の row/col と index 整合) |
 | `spikes_{h}h.npz` | `times` (絶対時刻 ms) `ids` **`record_start_ms`** |
-| `trace_{h}h.npz` | `V` `I` `dt` `neuron_id` `window_s` `spike_times` `spike_ids` |
+| `voltage_{h}h.npz` / `current_{h}h.npz` | `values` (ニューロン数, ステップ数。行がグローバル ID) `dt` |
 
 **ファイル名の時刻は目印であって、データではない。** `{h}` は `f"{hour:g}"` = 有効数字
 6 桁なので、`record_hours` が非整数だと往復で元の値に戻らない (1/3 h なら約 1.2 ms ずれ、
@@ -416,12 +420,12 @@ analysis/connectivity.py  def write_report(built, out_dir) -> None
 `run_one.py` は記録を書いたあと、**書いたものを読み直してから**図を描きます。
 
 ```python
-save_spikes(...); save_weight_values(...); save_trace(...)
+save_spikes(...); save_weight_values(...); save_neuron_timeseries(...)
 panels.emit(series.window(hour), metrics=metrics_csv)   # ← replot.py と同一の行
 ```
 
 in-memory の値をそのまま渡すと本番と再解析で描画経路が 2 本になり、片方だけ直したときに
-静かにずれます (以前は `Trace` を「再解析が npz から組み立てるのと同じ形」に手で組み直して
+静かにずれます (以前はトレースを「再解析が npz から組み立てるのと同じ形」に手で組み直して
 いました)。直前に書いた npz を読み直すコストは数 ms で、ついでに**書いた npz が読めること**
 をその場で確かめたことになります。
 

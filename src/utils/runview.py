@@ -18,7 +18,8 @@
 - 基底が持つデータは `run_dir` / `config` / `layout` の 3 つだけ。それ以外は
   **「その名前で呼べる」ことだけを決めたアクセサ**で、既定は `MissingData` を投げる。
   実験は持っているものだけを override する。
-- **スパイクもトレースも時刻は窓の先頭を 0 とするローカル [ms]。** 絶対時刻は返さない。
+- **スパイクもニューロン変数の時系列も、時刻は窓の先頭を 0 とするローカル [ms]。**
+  絶対時刻は返さない。
 - `Window.hour` は基準時刻からの経過 [h]。**識別子ではなく数値**で、図の横軸になる。
   基準を何に置くかは実験が決める (develop は run の開始、lesion は切断時刻)。
 - **`src/models` も matplotlib も NetworkBuilder も import しない。** area も軸索
@@ -37,7 +38,7 @@ import numpy as np
 class MissingData(Exception):
     """この run はそのデータを持たない、という正常な状態。**バグではない。**
 
-    `no_space` の config に座標が無い、トレースを採っていない run に V/I が無い、など。
+    `no_space` の config に座標が無い、膜電位を採っていない run に V が無い、など。
     受けるのは `guard()`。
     """
 
@@ -125,15 +126,18 @@ class Spikes(NamedTuple):
     ids: np.ndarray
 
 
-class Trace(NamedTuple):
-    """単一ニューロンの膜電位トレース。`spike_times` も窓の先頭を 0 とするローカル時刻。"""
-    V: np.ndarray
-    I: np.ndarray
-    dt: float
-    neuron_id: int
-    window_s: float
-    spike_times: np.ndarray
-    spike_ids: np.ndarray
+class NeuronTimeseries(NamedTuple):
+    """全ニューロンのある変数 (膜電位や入力電流) を、記録窓の先頭から毎ステップ採った値。
+
+    `values[n, k]` は、ニューロン n (グローバル ID) の、窓のローカル時刻 `k * dt` [ms] での値。
+    """
+    values: np.ndarray       # (ニューロン数, ステップ数)
+    dt: float                # [ms]
+
+    @property
+    def duration_ms(self) -> float:
+        """採った長さ [ms]。窓の先頭からこの時刻までが記録されている。"""
+        return self.values.shape[1] * self.dt
 
 
 # ======================================================================================
@@ -182,9 +186,13 @@ class RunView:
         """スパイク列 (ローカル時刻)。"""
         raise MissingData("spikes")
 
-    def trace(self) -> Trace:
-        """膜電位トレース。採取した run だけが持つ。"""
-        raise MissingData("trace")
+    def voltage(self) -> NeuronTimeseries:
+        """膜電位 V [mV] の時系列 (記録窓の先頭ぶん)。採った run だけが持つ。"""
+        raise MissingData("voltage")
+
+    def current(self) -> NeuronTimeseries:
+        """ニューロンへの入力電流 (`Isyn_rec`) の時系列 (記録窓の先頭ぶん)。採った run だけが持つ。"""
+        raise MissingData("current")
 
     def metrics(self):
         """指標の表 (`pd.DataFrame`)。"""
@@ -356,11 +364,14 @@ class MemoryWindow(Window):
 
     def __init__(self, run_dir: Path, config, layout, *, hour: float = 0.0,
                  record_start_ms: float = 0.0, spikes: Spikes | None = None,
-                 trace: Trace | None = None, coo: Coo | None = None, coords=None):
+                 voltage: NeuronTimeseries | None = None,
+                 current: NeuronTimeseries | None = None,
+                 coo: Coo | None = None, coords=None):
         super().__init__(run_dir, config, layout, hour=hour,
                          record_start_ms=record_start_ms)
         self._spikes = spikes
-        self._trace = trace
+        self._voltage = voltage
+        self._current = current
         self._coo = coo
         self._coords = coords
 
@@ -373,10 +384,15 @@ class MemoryWindow(Window):
             raise MissingData("spikes")
         return self._spikes
 
-    def trace(self) -> Trace:
-        if self._trace is None:
-            raise MissingData("trace")
-        return self._trace
+    def voltage(self) -> NeuronTimeseries:
+        if self._voltage is None:
+            raise MissingData("voltage")
+        return self._voltage
+
+    def current(self) -> NeuronTimeseries:
+        if self._current is None:
+            raise MissingData("current")
+        return self._current
 
     def coo(self) -> Coo:
         if self._coo is None:

@@ -30,7 +30,6 @@ npz が持つので、発火率は正しく出る (`store/views.py`)。
 """
 import argparse
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -58,10 +57,10 @@ from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
 from scripts.lesion.store.built import write_built
 from scripts.lesion.store.formats import (METRICS_NAME, MS_PER_HOUR,
-                                          PHASE_BASELINE, PHASE_POST, SPIKES, TRACE,
-                                          WEIGHTS, CUT_PROFILE_NAME, MetricsWriter,
+                                          PHASE_BASELINE, PHASE_POST, SPIKES, VOLTAGE,
+                                          CURRENT, WEIGHTS, CUT_PROFILE_NAME, MetricsWriter,
                                           probe_filename, save_cut, save_manifest,
-                                          save_spikes, save_trace,
+                                          save_spikes, save_neuron_timeseries,
                                           save_weight_values, write_table)
 from scripts.lesion.store.formats import BASELINE_INDEX
 from scripts.lesion.store.views import open_run
@@ -110,30 +109,53 @@ def run_steps(sim, steps: int, chunk_steps: int, keep_spikes: bool):
     return {"times": times[order], "ids": ids[order]}
 
 
-def capture_membrane_window(sim, window_s: float, neuron_id: int):
-    """1 ステップずつ進めながら対象ニューロンの V と Isyn_rec を採り、窓内スパイクを返す。
+def resolve_trace(config) -> tuple[int | None, float]:
+    """膜電位トレースの設定を `task.trace_neuron` / `task.trace_window_s` から読む。
 
-    保持するのは対象ニューロン 1 本の列だけ。採取ステップ数は GeNN の記録バッファ長の
-    整数倍に丸める (バッファはちょうど溜まった時しか読み出せないため)。
+    ID を指定した run は、記録窓の先頭で全ニューロンの V と Isyn_rec を採り、
+    トレース図はその ID のニューロンを描く。
 
     Returns:
-        `(V, I, spikes, actual_window_s)`。`actual_window_s` は丸めた後の実表示幅 [s]。
+        `(ニューロン ID | None, 窓幅 [s])`。ID が None なら採らない (キーが無い場合も)。
     """
-    dt = sim.dt
-    buf = sim.max_timesteps
-    requested_steps = int(round(window_s * 1000.0 / dt))
-    n_buffers = max(1, round(requested_steps / buf))
-    steps = n_buffers * buf
-    actual_window_s = steps * dt / 1000.0
+    neuron = getattr(config.task, "trace_neuron", None)
+    window_s = float(getattr(config.task, "trace_window_s", 10.0))
+    if neuron is None:
+        return None, window_s
+    neuron = int(neuron)
+    total = int(config.simulation.N)
+    if not 0 <= neuron < total:
+        # 長い run を回し切ってから IndexError で落ちるのを防ぐ。
+        raise SystemExit(
+            f"task.trace_neuron={neuron} はニューロン数 {total} の範囲外です (0..{total - 1})。")
+    if window_s <= 0:
+        raise SystemExit(f"task.trace_window_s は正の値にしてください (got {window_s})。")
+    return neuron, window_s
 
-    V = np.empty(steps, dtype=np.float64)
-    I = np.empty(steps, dtype=np.float64)
+
+def capture_neuron_state(sim, window_s: float):
+    """記録窓の先頭 `window_s` [s] を 1 ステップずつ進め、全ニューロンの膜電位 V と
+    入力電流 Isyn_rec を毎ステップ採る。
+
+    ステップ数は GeNN の記録バッファ長の整数倍に丸める (バッファはちょうど溜まった時しか
+    読み出せないため)。
+
+    Returns:
+        `(V, I, spikes)`。V / I は (ニューロン数, ステップ数) で、行がグローバル ID。
+        spikes はその間の全ニューロンのスパイクで、時刻は GeNN の時計。
+    """
+    buf = sim.max_timesteps
+    requested_steps = int(round(window_s * 1000.0 / sim.dt))
+    steps = max(1, round(requested_steps / buf)) * buf
+
+    V = np.empty((sim.total_neurons, steps), dtype=np.float64)
+    I = np.empty((sim.total_neurons, steps), dtype=np.float64)
     all_times = []
     all_ids = []
     for i in range(steps):
         sim.step()
-        V[i] = sim.pull("V")[neuron_id]
-        I[i] = sim.pull("Isyn_rec")[neuron_id]
+        V[:, i] = sim.pull("V")
+        I[:, i] = sim.pull("Isyn_rec")
         if (i + 1) % buf == 0:
             chunk = sim.get_global_spikes()
             if chunk["times"].size > 0:
@@ -145,7 +167,7 @@ def capture_membrane_window(sim, window_s: float, neuron_id: int):
         spikes = {"times": np.concatenate(all_times), "ids": np.concatenate(all_ids)}
     else:
         spikes = {"times": np.array([], dtype=np.float64), "ids": np.array([], dtype=np.int32)}
-    return V, I, spikes, actual_window_s
+    return V, I, spikes
 
 
 def build_network(config, model_name, restored_weights=None,
@@ -199,8 +221,8 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
 
     切断**後**の窓しか通らない (ベースラインは `write_baseline()`)。
 
-    `trace_neuron` が指定されていれば、**窓の先頭**を 1 ステップ刻みで進めて膜電位を
-    採る。同じ窓のラスターと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
+    `trace_neuron` が指定されていれば、**窓の先頭**を 1 ステップ刻みで進めて全ニューロンの
+    膜電位と入力電流を採る。同じ窓のスパイクと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
     """
     weights = sim.pull_synapse_coo("w")["data"]
     steps = max(1, int(round(window_ms / dt)))
@@ -210,8 +232,8 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
         spikes = run_steps(sim, steps, chunk_steps, keep_spikes=True)
     else:
         effective_trace_s = min(trace_window_s, window_ms / 1000.0)
-        trace_v, trace_i, trace_spikes, actual_window_s = capture_membrane_window(
-            sim, effective_trace_s, trace_neuron)
+        trace_v, trace_i, trace_spikes = capture_neuron_state(
+            sim, effective_trace_s)
         remaining = steps - len(trace_v)
         if remaining < 0:
             # 黙って通すと窓の総ステップ数がトレースの有無で変わり、結果が変わる。
@@ -225,7 +247,7 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
         ids = np.concatenate([trace_spikes["ids"], rest["ids"]])
         order = np.argsort(times)
         spikes = {"times": times[order], "ids": ids[order]}
-        trace = (trace_v, trace_i, trace_spikes, actual_window_s)
+        trace = (trace_v, trace_i)
 
     save_weight_values(paths.data_path(run_dir, probe_filename(WEIGHTS, index)), weights)
     # **窓の素性を npz に埋める。** 原点 (切断からの経過) も窓幅も phase もここが正で、
@@ -238,15 +260,11 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
                 record_start_ms=start_ms, record_window_ms=window_ms, phase=PHASE_POST)
 
     if trace is not None:
-        trace_v, trace_i, trace_spikes, actual_window_s = trace
-        # 図だけでなく生データも残す。1 ニューロン x 数万ステップで数百 KB しかない一方、
-        # 「同じ窓のラスターと時間軸が揃った V/I」は後から作れない。
-        save_trace(paths.data_path(run_dir, probe_filename(TRACE, index)),
-                   trace_v, trace_i, dt=dt, neuron_id=trace_neuron,
-                   window_s=actual_window_s,
-                   spike_times=np.asarray(trace_spikes["times"], dtype=np.float64)
-                   - clock_start_ms,
-                   spike_ids=trace_spikes["ids"])
+        trace_v, trace_i = trace
+        save_neuron_timeseries(paths.data_path(run_dir, probe_filename(VOLTAGE, index)),
+                               trace_v, dt=dt)
+        save_neuron_timeseries(paths.data_path(run_dir, probe_filename(CURRENT, index)),
+                               trace_i, dt=dt)
 
     # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
     panels.emit(series.window(index), metrics=metrics_csv)
@@ -264,8 +282,8 @@ def write_baseline(series, run_dir: Path, parent, weights, metrics_csv) -> None:
 
     `weights` は親の値を**この run の COO の並びへ引き当てた**ベクトル。
 
-    親が膜電位トレースを採っていれば、その npz も**そのまま**引き継ぐ (中の時刻は
-    窓の先頭からの相対なので、窓の原点が変わっても読み替えが要らない)。
+    膜電位・入力電流は持たない (親 run が採っていても引き継がない)。採るかどうかは
+    この run の `task.trace_neuron` だけで決まり、切断後の probe にしか効かない。
     """
     start_ms = -float(parent.window_ms)
     save_weight_values(paths.data_path(run_dir, probe_filename(WEIGHTS, BASELINE_INDEX)),
@@ -277,13 +295,9 @@ def write_baseline(series, run_dir: Path, parent, weights, metrics_csv) -> None:
                 parent.spike_ids,
                 record_start_ms=start_ms, record_window_ms=float(parent.window_ms),
                 phase=PHASE_BASELINE)
-    if parent.trace_path is not None:
-        shutil.copyfile(parent.trace_path,
-                        paths.data_path(run_dir, probe_filename(TRACE, BASELINE_INDEX)))
 
     print(f"  ベースライン: 親 run の {parent.hour} h の窓 "
-          f"({parent.spike_times.size} spikes / {parent.window_ms / 1000:.0f} s"
-          f"{', トレースあり' if parent.trace_path is not None else ''})")
+          f"({parent.spike_times.size} spikes / {parent.window_ms / 1000:.0f} s)")
 
     panels.emit(series.window(BASELINE_INDEX), metrics=metrics_csv)
 
@@ -383,8 +397,7 @@ def main():
     # **基準は切断の瞬間。** ランチャが展開済みの時刻 [h] を並べてある。
     record_starts = sorted(float(hour) * MS_PER_HOUR for hour in protocol.record_hours)
     chunk_steps = max(1, int(float(protocol.record_buffer_ms) / dt))
-    trace_neuron = getattr(protocol, "trace_neuron", None)
-    trace_window_s = float(getattr(protocol, "trace_window_s", 10.0))
+    trace_neuron, trace_window_s = resolve_trace(config)
     smax = lesion_metrics.resolve_avalanche_smax(config)
 
     print(f"run: {run_dir}  seed={seed}  backend={config.simulation.backend}")
@@ -457,7 +470,7 @@ def main():
     # ---------------- ここから先が「走る run」 ----------------
     # **dry-run はここへ来ないので、下見のために data/ や figures/ が作られることはない**
     # (作ると完走した run と見分けが付かない)。
-    # trace は採るときだけディレクトリを作る (空ディレクトリが残ると「採取したのに
+    # 膜電位トレースの図は採るときだけディレクトリを作る (空ディレクトリが残ると「採取したのに
     # 空だった」のか「採取していない」のかが読めなくなる)。
     paths.prepare(run_dir,
                   paths.DEFAULT_FIG_KINDS

@@ -48,16 +48,16 @@ from src.core.layout import AXES_NAME
 
 from src.utils import runview
 from src.utils.analysis.avalanche import mean_iei_ms
-from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
+from src.utils.runview import Coo, MissingData, NeuronTimeseries, Spikes, Wiring
 
 from scripts.lesion.store import paths
 from scripts.lesion.store.formats import (BASELINE_INDEX, COORDS_NAME, DELAYS_NAME,
                                           INITIAL_WEIGHTS_NAME, METRICS_NAME, RTE_NAME,
-                                          PHASE_BASELINE, SPIKES, TRACE, WEIGHTS,
+                                          PHASE_BASELINE, SPIKES, VOLTAGE, CURRENT, WEIGHTS,
                                           discover_probes,
                                           load_coords, load_cut, load_connectivity,
                                           load_delays, load_manifest, load_metrics,
-                                          load_spikes, load_trace,
+                                          load_spikes, load_neuron_timeseries,
                                           load_weight_values,
                                           post_connectivity_path, pre_connectivity_path,
                                           probe_filename, read_window_meta, record_hour)
@@ -127,7 +127,8 @@ class Window(runview.Window):
 
     def __init__(self, series: "Series", *, index: int, hour: float,
                  record_start_ms: float, record_window_ms: float, phase: str,
-                 spikes_path: Path, weights_path: Path, trace_path: Path | None):
+                 spikes_path: Path, weights_path: Path,
+                 voltage_path: Path | None, current_path: Path | None):
         super().__init__(series.run_dir, series.config, series.layout,
                          hour=hour, record_start_ms=record_start_ms)
         self._series = series
@@ -136,7 +137,8 @@ class Window(runview.Window):
         self._record_window_ms = record_window_ms
         self.spikes_path = spikes_path
         self.weights_path = weights_path
-        self.trace_path = trace_path
+        self.voltage_path = voltage_path
+        self.current_path = current_path
 
     @property
     def record_window_ms(self) -> float:
@@ -194,15 +196,20 @@ class Window(runview.Window):
     def spikes(self) -> Spikes:
         return load_spikes(self.spikes_path)
 
-    def trace(self) -> Trace:
-        """膜電位トレース。**採っていない probe では `MissingData`。**
+    def voltage(self) -> NeuronTimeseries:
+        """膜電位の時系列。**採っていない probe では `MissingData`。**
 
-        採るかどうかは `task.trace_neuron`。ベースラインは親 run が採っていれば
-        引き継ぐので、post だけにある / baseline だけにある、のどちらも起こりうる。
+        採るかどうかは `task.trace_neuron` で、切断後の probe だけが持つ
+        (ベースラインは親 run の記録を使うので持たない)。`current()` も同じ。
         """
-        if self.trace_path is None:
-            raise MissingData("trace", "この probe は膜電位トレースを持ちません")
-        return load_trace(self.trace_path)
+        if self.voltage_path is None:
+            raise MissingData("voltage", "この probe は膜電位を持ちません")
+        return load_neuron_timeseries(self.voltage_path)
+
+    def current(self) -> NeuronTimeseries:
+        if self.current_path is None:
+            raise MissingData("current", "この probe は入力電流を持ちません")
+        return load_neuron_timeseries(self.current_path)
 
 
 class Series(runview.Series):
@@ -435,9 +442,11 @@ def _make_window(series: Series, data_dir: Path, index: int, spikes_path: Path) 
         raise FileNotFoundError(
             f"{spikes_path.name} に対応する {weights_path.name} がありません。"
         )
-    # トレースは任意。**無いのが既定**なので、欠けていても落とさない。
-    trace_path = data_dir / probe_filename(TRACE, index)
+    # 膜電位・入力電流は任意 (採らない設定の run も、持たない baseline もある)。
+    voltage_path = data_dir / probe_filename(VOLTAGE, index)
+    current_path = data_dir / probe_filename(CURRENT, index)
     return Window(series, index=index, hour=record_hour(start_ms),
                   record_start_ms=start_ms, record_window_ms=window_ms, phase=phase,
                   spikes_path=spikes_path, weights_path=weights_path,
-                  trace_path=trace_path if trace_path.exists() else None)
+                  voltage_path=voltage_path if voltage_path.exists() else None,
+                  current_path=current_path if current_path.exists() else None)

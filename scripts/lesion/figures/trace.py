@@ -1,7 +1,8 @@
-"""単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描く。
+"""単一ニューロンの膜電位トレースを、同じ時間のラスターと並べて描く。
 
-x 軸の上限を記録窓の幅ではなく引数 `window_s` で固定するため、長時間
-シミュレーション (72h 等) から切り出した短い窓をそのまま表示できる。
+記録窓の先頭で毎ステップ採った全ニューロンの膜電位・入力電流 (`window.voltage()` /
+`window.current()`) から、`task.trace_neuron` の行を取り出して描く。x 軸は採った長さで切るので、長時間
+シミュレーション (72h 等) の記録窓の先頭だけを表示できる。
 """
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,51 +10,37 @@ from scripts.lesion.figures import save
 
 
 def neuron_trace(window, out_path):
-    """単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描画する。
+    """`task.trace_neuron` の膜電位・入力電流を、同じ時間の全体のラスターと並べて描く。
 
-    neuron_test と同じレイアウト (ラスター / V / I) だが、x 軸上限をトレース窓の幅で
-    固定するため、長時間シミュレーション (72h 等) から切り出した短い窓を
-    そのまま表示できる。
-
-    トレースを採っていない run では `window.trace()` が `MissingData` を投げ、
+    膜電位を採っていない run では `window.voltage()` が `MissingData` を投げ、
     登録簿がそれを受けてこの図を飛ばす。**ここに分岐は書かない。**
     """
-    trace = window.trace()
-    V, I_in = trace.V, trace.I
-    spike_times, spike_ids = trace.spike_times, trace.spike_ids
-    dt, neuron_id, window_s = trace.dt, trace.neuron_id, trace.window_s
+    voltage = window.voltage()
+    current = window.current()
+    neuron_id = int(window.config.task.trace_neuron)
+    duration_ms = voltage.duration_ms
+    time_axis = np.arange(voltage.values.shape[1]) * voltage.dt / 1000.0
 
-    V = np.asarray(V)
-    time_axis = np.arange(len(V)) * dt / 1000.0
+    spikes = window.spikes()
+    head = spikes.times < duration_ms
 
-    if I_in is not None:
-        fig, (ax0, ax1, ax2) = plt.subplots(
-            3, 1,
-            gridspec_kw={'height_ratios': [1, 4, 1]},
-            figsize=(9, 4), sharex=True
-        )
-    else:
-        fig, (ax0, ax1) = plt.subplots(
-            2, 1,
-            gridspec_kw={'height_ratios': [1, 4]},
-            figsize=(9, 3.5), sharex=True
-        )
+    fig, (ax0, ax1, ax2) = plt.subplots(
+        3, 1,
+        gridspec_kw={'height_ratios': [1, 4, 1]},
+        figsize=(9, 4), sharex=True
+    )
 
-    spike_times = np.asarray(spike_times) / 1000.0
-    ax0.scatter(spike_times, spike_ids, s=10)
+    ax0.scatter(spikes.times[head] / 1000.0, spikes.ids[head], s=10)
     ax0.set_ylabel("Neuron ID")
+    ax0.set_title(f"neuron {neuron_id}")
 
-    ax1.plot(time_axis, V, color='tab:blue')
+    ax1.plot(time_axis, voltage.values[neuron_id], color='tab:blue')
     ax1.set_ylabel('v [mV]')
-    ax1.set_xlim(0, window_s)
 
-    if I_in is not None:
-        ax2.plot(time_axis, np.asarray(I_in), color='black')
-        ax2.set_ylabel('I [nA]')
-        ax2.set_xlim(0, window_s)
-        ax2.set_xlabel('Time [s]')
-    else:
-        ax1.set_xlabel('Time [s]')
+    ax2.plot(time_axis, current.values[neuron_id], color='black')
+    ax2.set_ylabel('I [nA]')
+    ax2.set_xlim(0, duration_ms / 1000.0)
+    ax2.set_xlabel('Time [s]')
 
     save(fig, out_path)
     plt.close()

@@ -28,14 +28,14 @@ from src.core.layout import NetworkLayout
 from src.core.layout import AXES_NAME
 
 from src.utils import runview
-from src.utils.runview import Coo, MissingData, Spikes, Trace, Wiring
+from src.utils.runview import Coo, MissingData, NeuronTimeseries, Spikes, Wiring
 
 from scripts.develop.store import paths
 from scripts.develop.store.formats import (COORDS_NAME, DELAYS_NAME, INITIAL_WEIGHTS_NAME,
-                                           METRICS_NAME, SPIKES, TRACE, WEIGHTS,
+                                           METRICS_NAME, SPIKES, VOLTAGE, CURRENT, WEIGHTS,
                                            discover_records, load_connectivity, load_coords,
-                                           load_delays, load_metrics, load_spikes, load_trace,
-                                           load_weight_values, read_record_start_ms, record_hour,
+                                           load_delays, load_metrics, load_spikes,
+                                           load_neuron_timeseries, load_weight_values, read_record_start_ms, record_hour,
                                            record_filename)
 
 
@@ -103,13 +103,15 @@ class Window(runview.Window):
     """
 
     def __init__(self, series: "Series", *, hour: float, record_start_ms: float,
-                 spikes_path: Path, weights_path: Path, trace_path: Path | None):
+                 spikes_path: Path, weights_path: Path,
+                 voltage_path: Path | None, current_path: Path | None):
         super().__init__(series.run_dir, series.config, series.layout,
                          hour=hour, record_start_ms=record_start_ms)
         self._series = series
         self.spikes_path = spikes_path
         self.weights_path = weights_path
-        self.trace_path = trace_path
+        self.voltage_path = voltage_path
+        self.current_path = current_path
 
     @property
     def record_window_ms(self) -> float:
@@ -142,10 +144,15 @@ class Window(runview.Window):
     def spikes(self) -> Spikes:
         return load_spikes(self.spikes_path)
 
-    def trace(self) -> Trace:
-        if self.trace_path is None:
-            raise MissingData("trace", "この run は膜電位トレースを採っていません")
-        return load_trace(self.trace_path)
+    def voltage(self) -> NeuronTimeseries:
+        if self.voltage_path is None:
+            raise MissingData("voltage", "この run は膜電位を採っていません")
+        return load_neuron_timeseries(self.voltage_path)
+
+    def current(self) -> NeuronTimeseries:
+        if self.current_path is None:
+            raise MissingData("current", "この run は入力電流を採っていません")
+        return load_neuron_timeseries(self.current_path)
 
 
 class Series(runview.Series):
@@ -307,7 +314,7 @@ def open_run(run_dir: str | Path, *, require_windows: bool = True) -> Series:
 
 
 def _discover_windows(series: Series, data_dir: Path) -> tuple[Window, ...]:
-    """スパイク記録を並べ、各時刻の相方 (重み・トレース) の在処を決める。
+    """スパイク記録を並べ、各時刻の相方 (重み・膜電位・入力電流) の在処を決める。
 
     ファイル名は**並べ替えと人間の目印**にしか使わない。時刻は npz の中の原点から作る。
     """
@@ -324,7 +331,9 @@ def _make_window(series: Series, data_dir: Path, spikes_path: Path,
         raise FileNotFoundError(
             f"{spikes_path.name} に対応する {weights_path.name} がありません。"
         )
-    trace_path = data_dir / record_filename(TRACE, hour)
+    voltage_path = data_dir / record_filename(VOLTAGE, hour)
+    current_path = data_dir / record_filename(CURRENT, hour)
     return Window(series, hour=hour, record_start_ms=start_ms,
                   spikes_path=spikes_path, weights_path=weights_path,
-                  trace_path=trace_path if trace_path.exists() else None)
+                  voltage_path=voltage_path if voltage_path.exists() else None,
+                  current_path=current_path if current_path.exists() else None)

@@ -188,8 +188,8 @@ def emit(window, *, metrics) -> None:
 追記する**ので窓で閉じない（Ctrl-C しても走った分が残る、という性質を保つ）。
 これはこの段階の性質そのものなので隠さない。
 
-トレースを採っていない run では `window.trace()` が `MissingData` を投げ、
-`guard()` が `skip neuron trace: trace がありません` と出して次へ進む。
+膜電位を採っていない run では `window.voltage()` が `MissingData` を投げ、
+`guard()` が `skip neuron trace: voltage がありません` と出して次へ進む。
 **図の側に分岐は書かない。**
 
 ---

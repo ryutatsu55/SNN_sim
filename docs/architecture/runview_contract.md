@@ -62,7 +62,7 @@ class MissingData(Exception):
 | `area()` | `BaseArea` 相当 | ニューロンが置かれる領域 |
 | `geometry()` | 軸索ジオメトリ | 軸索の折れ線 |
 | `spikes()` | `Spikes(times, ids)` | スパイク列 |
-| `trace()` | `Trace(V, I, dt, neuron_id, ...)` | 膜電位トレース |
+| `voltage()` / `current()` | `NeuronTimeseries(values, dt)` | 記録窓の先頭で毎ステップ採った全ニューロンの膜電位 / 入力電流。`values` は (ニューロン数, ステップ数) で、行がグローバル ID |
 | `metrics()` | `pd.DataFrame` | 指標の表 |
 
 `wiring()` と `coo()` を分けてあるのは、**片方が run 不変でもう片方が時点依存**だから。
@@ -108,7 +108,7 @@ def guard(label, fn, *args):
 | view | いつ | 持つもの |
 |---|---|---|
 | `Built` | build 直後。まだ回していない | `wiring` `coo` `weights` `coords` `area` `geometry` |
-| `Window` | 記録窓 1 つ | `hour` `record_start_ms` `wiring` `coo` `weights` `coords` `area` `geometry` `spikes` `trace` |
+| `Window` | 記録窓 1 つ | `hour` `record_start_ms` `wiring` `coo` `weights` `coords` `area` `geometry` `spikes` `voltage` `current` |
 | `Series` | run 全体 | `windows` `wiring` `coords` `area` `geometry` `metrics` |
 
 **run を通して不変なもの** (`wiring` / `coords` / `area` / `geometry`) は `Series` が持ち、
@@ -180,7 +180,7 @@ window.record_start_ms       # 絶対へ戻すための原点
 
 | 層 | 場所 | 分岐 |
 |---|---|---|
-| **契約** (`RunView` / `MissingData` / `guard` / `Wiring` / `Coo` / `Spikes` / `Trace`) | `src/utils/runview.py` | **だめ。** ここが drift したら意味が消える |
+| **契約** (`RunView` / `MissingData` / `guard` / `Wiring` / `Coo` / `Spikes` / `NeuronTimeseries`) | `src/utils/runview.py` | **だめ。** ここが drift したら意味が消える |
 | リーダーの実装 (`Built` / `Window` / `Series`) | 各実験の `store/views.py` | 実験ごと。記録ファイル名の規約が違う |
 | 記録を持たない道具の実装 (`BuiltNetwork` / `MemoryWindow`) | `src/utils/runview.py` | **だめ。** builder やメモリ上の配列をそのまま載せるだけで、分岐する余地が無い |
 | 解析・描画関数 | 契約にしか依存しない → **どちらにも置ける** | 図ごとに判断 |

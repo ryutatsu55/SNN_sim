@@ -81,10 +81,10 @@ def replot(run_dir: Path, *, with_structure: bool = True, verify: bool = False) 
     series = open_run(run_dir)
     print(f"Replot: {run_dir} (N={series.total_neurons})")
 
-    # 図のサブディレクトリを用意する。トレースは採った run にだけ作る
+    # 図のサブディレクトリを用意する。膜電位トレースの図は膜電位を採った run にだけ作る
     # (空ディレクトリが残ると「採ったが空」と「採っていない」が読めなくなる)。
     fig_kinds = paths.DEFAULT_FIG_KINDS
-    if any(window.trace_path is not None for window in series.windows):
+    if any(window.voltage_path is not None for window in series.windows):
         fig_kinds = fig_kinds + (paths.TRACE,)
     paths.prepare(run_dir, fig_kinds)
 

@@ -441,7 +441,8 @@ run ディレクトリは `<親 run>/<切断条件>/`。
 │   ├── connection_probability.csv / bridge_hops.csv   切断**後**の群間結合確率
 │   ├── weights_p{NNN}.npz    その probe の重み (NNN = record_hours の添字)
 │   ├── spikes_p{NNN}.npz     スパイク + 窓の原点 / 窓幅 / phase
-│   ├── trace_p{NNN}.npz      膜電位トレース。**採った probe だけ**
+│   ├── voltage_p{NNN}.npz    窓の先頭の膜電位。**採った probe だけ**
+│   ├── current_p{NNN}.npz    窓の先頭の入力電流。**採った probe だけ**
 │   └── {kind}_baseline.npz   親から引き継いだベースライン (番号を持たない)
 └── figures/
     ├── structure/        切断**後**のネットワークの形

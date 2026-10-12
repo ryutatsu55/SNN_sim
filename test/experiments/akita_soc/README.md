@@ -19,7 +19,7 @@ smoke:
   record_hours: [0, 0.0013888888888888889]   # 0 h と 5 s。**非整数を含めるのが要点**
   record_window_ms: 5000.0
   record_buffer_ms: 1000.0
-  trace_neuron: 0                            # トレース図も出す
+  trace_neuron: 0                            # 膜電位・入力電流を採ってトレース図も出す
   trace_window_s: 1.0
 ```
 

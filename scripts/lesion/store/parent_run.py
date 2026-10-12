@@ -9,20 +9,19 @@
 (ルート `CLAUDE.md`)。develop の内部事情に lesion がぶら下がると、develop を直すたびに
 lesion が壊れる。
 
-代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 8 つだけで、
+代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 7 つだけで、
 develop の `store/formats.py` 全体ではない:
 
     config.yaml            ネットワーク設定 (同じ seed から同じネットワークが出る)
     data/connectivity.npz  結合構造 (row / col / shape)
     data/weights_{h}h.npz  引き継ぐ時点の重み (値ベクトル)
     data/spikes_{h}h.npz   同じ時点のスパイク = **損傷実験のベースライン窓**
-    data/trace_{h}h.npz    同じ時点の膜電位トレース。任意 (親が採っていれば引き継ぐ)
     data/layout_axes.npz   外部軸 (module など)。任意
     data/axon_geometry.npz 軸索の折れ線。任意 (axon_growth 系のみ)
     data/metrics.csv       親 run の終盤ドリフト。任意 (無ければ理由が manifest に入る)。
                            `compare` の対照 (切らずに走り続けた run) の発火率もここから読む
 
-**この 8 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
+**この 7 つは develop と lesion の契約**であって develop の内部事情ではない、というのが
 ここに書いてよい理由。**この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**
 ファイル名の規約が変わったら、ここも直す —— 直す場所が 1 つで、そのことが docstring に
 書いてあれば、横 import より安全に保てる。
@@ -62,7 +61,6 @@ METRICS_NAME = "metrics.csv"
 RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
 WEIGHTS = "weights"
 SPIKES = "spikes"
-TRACE = "trace"
 # 親のスパイク npz が持つ鍵。**窓幅は持たない**ので、幅は親 config から取る。
 RECORD_START_KEY = "record_start_ms"
 # 親 run の終盤ドリフトとして manifest に添える行数。
@@ -84,8 +82,6 @@ class Parent:
     spike_times: np.ndarray   # 窓の先頭を 0 とするローカル時刻 [ms]
     spike_ids: np.ndarray
     window_ms: float          # 親の記録窓の幅。lesion の record_window_ms とは違いうる
-    # 同じ窓の膜電位トレース。親が採っていなければ None (npz をそのまま引き継ぐ)。
-    trace_path: Path | None
 
 
 def _parent_data_dir(run_dir: Path) -> Path:
@@ -237,7 +233,6 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
             f"{config_path} の task に record_window_ms がありません。"
             " ベースライン窓の幅が決まらないので引き継げません。")
     spike_times, spike_ids = _load_spikes(_sibling_record(weights_path, SPIKES), hour)
-    trace_path = _sibling_record(weights_path, TRACE)
 
     axes_path = data_dir / AXES_NAME
     return Parent(
@@ -252,7 +247,6 @@ def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
         spike_times=spike_times,
         spike_ids=spike_ids,
         window_ms=float(window_ms),
-        trace_path=trace_path if trace_path.exists() else None,
     )
 
 

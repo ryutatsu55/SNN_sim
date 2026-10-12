@@ -22,8 +22,8 @@ if str(root_path) not in sys.path:
 from scripts.develop.analysis import metrics
 from scripts.develop.figures import style
 from scripts.develop.store import paths
-from scripts.develop.store.formats import METRICS_NAME, MS_PER_HOUR, SPIKES, WEIGHTS, \
-    record_filename, save_spikes, save_weight_values
+from scripts.develop.store.formats import CURRENT, METRICS_NAME, MS_PER_HOUR, SPIKES, \
+    VOLTAGE, WEIGHTS, record_filename, save_neuron_timeseries, save_spikes, save_weight_values
 from scripts.develop.replot import replot
 from scripts.develop.store.views import open_run
 from src.core.config_manager import (ConfigManager, expand_hours_spec,
@@ -62,7 +62,7 @@ def _fake_coo(num_neurons: int = 100, fan_out: int = 3, seed: int = 1):
     return row, col, weights
 
 
-def _make_run(tmp_dir, hours=(0.0,)) -> Path:
+def _make_run(tmp_dir, hours=(0.0,), trace_neuron=None) -> Path:
     """再解析にかけられる最小の run を作る (GeNN は通さない)。
 
     新しいレイアウトで置く: `config.yaml` は run 直下、npz は `data/`。
@@ -74,6 +74,7 @@ def _make_run(tmp_dir, hours=(0.0,)) -> Path:
     config = manager.resolve(str(FIXTURE_CONFIG), "develop",
                              task_path=TASK_PATH)
     config.task.record_window_ms = 30000.0
+    config.task.trace_neuron = trace_neuron
     manager.save_config(config, save_dir=run_dir)
 
     row, col, weights = _fake_coo()
@@ -175,7 +176,7 @@ class TaskSelectionTest(unittest.TestCase):
 class TraceSettingTest(unittest.TestCase):
     """膜電位トレースを採ったかどうかが、その run の記録に残ること。
 
-    引数で渡せるようにすると、完走した run に `trace_*.npz` が無いときに
+    引数で渡せるようにすると、完走した run に `voltage_*.npz` が無いときに
     「採らない設定だった」のか「採ろうとして失敗した」のかが区別できなくなる。
     """
 
@@ -211,6 +212,42 @@ class TraceSettingTest(unittest.TestCase):
         config = _resolved_config()
         del config.task.trace_neuron        # このキーが無い時代の run
         self.assertIsNone(resolve_trace(config)[0])
+
+
+class NeuronTimeseriesRecordTest(unittest.TestCase):
+    """記録した全ニューロンの膜電位・入力電流を窓から読み直し、トレース図が描けること。"""
+
+    def _write(self, run_dir, num_neurons=100, steps=50):
+        values = np.arange(num_neurons * steps, dtype=np.float64).reshape(num_neurons, steps)
+        for kind in (VOLTAGE, CURRENT):
+            save_neuron_timeseries(paths.data_path(run_dir, record_filename(kind, 0.0)),
+                                   values, dt=0.1)
+        return values
+
+    def test_round_trip_rows_are_neurons(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir)
+            values = self._write(run_dir)
+            voltage = open_run(run_dir).windows[0].voltage()
+            self.assertAlmostEqual(voltage.duration_ms, 5.0)
+            np.testing.assert_array_equal(voltage.values[7], values[7])
+
+    def test_run_without_it_raises_missing_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            window = open_run(_make_run(tmp_dir)).windows[0]
+            with self.assertRaises(MissingData):
+                window.voltage()
+            with self.assertRaises(MissingData):
+                window.current()
+
+    def test_neuron_trace_draws_the_configured_neuron(self):
+        from scripts.develop.figures.trace import neuron_trace
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = _make_run(tmp_dir, trace_neuron=7)
+            self._write(run_dir)
+            out = Path(tmp_dir) / "trace.png"
+            neuron_trace(open_run(run_dir).windows[0], out)
+            self.assertTrue(out.exists())
 
 
 class SeedSpecTest(unittest.TestCase):

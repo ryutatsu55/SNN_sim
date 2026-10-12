@@ -46,7 +46,7 @@ FIGURES = (
     # 座標を持たない run (`no_space`) では window.coords() が MissingData を投げるので、
     # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
     ("weight network", weight_network, paths.WEIGHT_NETWORK, "weight_network_{tag}.png"),
-    # トレースを採っていない probe では window.trace() が MissingData を投げるので、
+    # 膜電位を採っていない probe では window.voltage() が MissingData を投げるので、
     # この行があっても図は出ない (登録簿は「出そうとするもの」の一覧)。
     ("neuron trace", neuron_trace, paths.TRACE, "neuron_trace_{tag}.png"),
 )

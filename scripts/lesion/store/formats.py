@@ -50,7 +50,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.utils.runview import MissingData, Spikes, Trace, Wiring
+from src.utils.runview import MissingData, NeuronTimeseries, Spikes, Wiring
 
 # 記録ファイル名 `<種別>_p<番号>.npz` と `<種別>_baseline.npz`。
 PROBE_PATTERN = re.compile(
@@ -58,8 +58,11 @@ PROBE_PATTERN = re.compile(
 
 SPIKES = "spikes"
 WEIGHTS = "weights"
-# 単一ニューロンの膜電位トレース (task.trace_neuron を指定した run だけが書く)。
-TRACE = "trace"
+# 記録窓の先頭で毎ステップ採った全ニューロンの変数。膜電位 V と入力電流 Isyn_rec を
+# 別ファイルに書く。task.trace_neuron を指定した run だけが書き、長さは trace_window_s。
+# スパイクは同じ窓の spikes の npz にある。
+VOLTAGE = "voltage"
+CURRENT = "current"
 
 # 結合構造。**2 つあるのが lesion の特徴**で、切断の前後で別ファイルに書く。
 POST_CONNECTIVITY_NAME = "connectivity.npz"      # 切断後 (生き残り)
@@ -341,24 +344,14 @@ def load_spikes(path: Path) -> Spikes:
     return Spikes(times=times - start_ms, ids=ids)
 
 
-def save_trace(path: Path, V, I, *, dt: float, neuron_id: int, window_s: float,
-               spike_times, spike_ids) -> None:
-    """膜電位トレースを書く。図だけでなく生データも残す (後から作れないため)。"""
-    np.savez_compressed(path, V=np.asarray(V), I=np.asarray(I), dt=float(dt),
-                        neuron_id=int(neuron_id), window_s=float(window_s),
-                        spike_times=np.asarray(spike_times),
-                        spike_ids=np.asarray(spike_ids))
+def save_neuron_timeseries(path: Path, values, *, dt: float) -> None:
+    """全ニューロンのある変数の時系列 (ニューロン数, ステップ数) を書く。行がグローバル ID。"""
+    np.savez_compressed(path, values=np.asarray(values), dt=float(dt))
 
 
-def load_trace(path: Path) -> Trace:
+def load_neuron_timeseries(path: Path) -> NeuronTimeseries:
     with np.load(path) as data:
-        return Trace(
-            V=np.asarray(data["V"]), I=np.asarray(data["I"]),
-            dt=float(data["dt"]), neuron_id=int(data["neuron_id"]),
-            window_s=float(data["window_s"]),
-            spike_times=np.asarray(data["spike_times"]),
-            spike_ids=np.asarray(data["spike_ids"]),
-        )
+        return NeuronTimeseries(values=np.asarray(data["values"]), dt=float(data["dt"]))
 
 
 # ======================================================================================
