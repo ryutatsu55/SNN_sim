@@ -112,8 +112,8 @@ def run_steps(sim, steps: int, chunk_steps: int, keep_spikes: bool):
 def resolve_trace(config) -> tuple[int | None, float]:
     """膜電位トレースの設定を `task.trace_neuron` / `task.trace_window_s` から読む。
 
-    ID を指定した run は、記録窓の先頭で全ニューロンの V と Isyn_rec を採り、
-    トレース図はその ID のニューロンを描く。
+    ID を指定した run は、記録窓の先頭でそのニューロンの V と Isyn_rec を採り、
+    トレース図はそれを描く。
 
     Returns:
         `(ニューロン ID | None, 窓幅 [s])`。ID が None なら採らない (キーが無い場合も)。
@@ -133,29 +133,29 @@ def resolve_trace(config) -> tuple[int | None, float]:
     return neuron, window_s
 
 
-def capture_neuron_state(sim, window_s: float):
-    """記録窓の先頭 `window_s` [s] を 1 ステップずつ進め、全ニューロンの膜電位 V と
+def capture_neuron_state(sim, window_s: float, neuron_ids: np.ndarray):
+    """記録窓の先頭 `window_s` [s] を 1 ステップずつ進め、`neuron_ids` の膜電位 V と
     入力電流 Isyn_rec を毎ステップ採る。
 
     ステップ数は GeNN の記録バッファ長の整数倍に丸める (バッファはちょうど溜まった時しか
     読み出せないため)。
 
     Returns:
-        `(V, I, spikes)`。V / I は (ニューロン数, ステップ数) で、行がグローバル ID。
+        `(V, I, spikes)`。V / I は (len(neuron_ids), ステップ数) で、行の並びは `neuron_ids`。
         spikes はその間の全ニューロンのスパイクで、時刻は GeNN の時計。
     """
     buf = sim.max_timesteps
     requested_steps = int(round(window_s * 1000.0 / sim.dt))
     steps = max(1, round(requested_steps / buf)) * buf
 
-    V = np.empty((sim.total_neurons, steps), dtype=np.float64)
-    I = np.empty((sim.total_neurons, steps), dtype=np.float64)
+    V = np.empty((len(neuron_ids), steps), dtype=np.float64)
+    I = np.empty((len(neuron_ids), steps), dtype=np.float64)
     all_times = []
     all_ids = []
     for i in range(steps):
         sim.step()
-        V[:, i] = sim.pull("V")
-        I[:, i] = sim.pull("Isyn_rec")
+        V[:, i] = sim.pull("V")[neuron_ids]
+        I[:, i] = sim.pull("Isyn_rec")[neuron_ids]
         if (i + 1) % buf == 0:
             chunk = sim.get_global_spikes()
             if chunk["times"].size > 0:
@@ -221,7 +221,7 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
 
     切断**後**の窓しか通らない (ベースラインは `write_baseline()`)。
 
-    `trace_neuron` が指定されていれば、**窓の先頭**を 1 ステップ刻みで進めて全ニューロンの
+    `trace_neuron` が指定されていれば、**窓の先頭**を 1 ステップ刻みで進めてそのニューロンの
     膜電位と入力電流を採る。同じ窓のスパイクと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
     """
     weights = sim.pull_synapse_coo("w")["data"]
@@ -233,7 +233,7 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
     else:
         effective_trace_s = min(trace_window_s, window_ms / 1000.0)
         trace_v, trace_i, trace_spikes = capture_neuron_state(
-            sim, effective_trace_s)
+            sim, effective_trace_s, np.array([trace_neuron]))
         remaining = steps - len(trace_v)
         if remaining < 0:
             # 黙って通すと窓の総ステップ数がトレースの有無で変わり、結果が変わる。
@@ -262,9 +262,9 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
     if trace is not None:
         trace_v, trace_i = trace
         save_neuron_timeseries(paths.data_path(run_dir, probe_filename(VOLTAGE, index)),
-                               trace_v, dt=dt)
+                               trace_v, neuron_ids=[trace_neuron], dt=dt)
         save_neuron_timeseries(paths.data_path(run_dir, probe_filename(CURRENT, index)),
-                               trace_i, dt=dt)
+                               trace_i, neuron_ids=[trace_neuron], dt=dt)
 
     # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
     panels.emit(series.window(index), metrics=metrics_csv)

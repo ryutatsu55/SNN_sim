@@ -215,22 +215,26 @@ class TraceSettingTest(unittest.TestCase):
 
 
 class NeuronTimeseriesRecordTest(unittest.TestCase):
-    """記録した全ニューロンの膜電位・入力電流を窓から読み直し、トレース図が描けること。"""
+    """記録した膜電位・入力電流を窓から読み直し、トレース図が `trace_neuron` を描くこと。"""
 
-    def _write(self, run_dir, num_neurons=100, steps=50):
-        values = np.arange(num_neurons * steps, dtype=np.float64).reshape(num_neurons, steps)
+    def _write(self, run_dir, neuron_id=7, steps=50):
+        values = np.arange(steps, dtype=np.float64).reshape(1, steps)
         for kind in (VOLTAGE, CURRENT):
             save_neuron_timeseries(paths.data_path(run_dir, record_filename(kind, 0.0)),
-                                   values, dt=0.1)
+                                   values, neuron_ids=[neuron_id], dt=0.1)
         return values
 
-    def test_round_trip_rows_are_neurons(self):
+    def test_round_trip_and_lookup_by_id(self):
+        """行の位置ではなく ID で引けること。採っていない ID は `MissingData`。"""
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = _make_run(tmp_dir)
-            values = self._write(run_dir)
+            values = self._write(run_dir, neuron_id=7)
             voltage = open_run(run_dir).windows[0].voltage()
+            self.assertEqual(voltage.values.shape, (1, 50))
             self.assertAlmostEqual(voltage.duration_ms, 5.0)
-            np.testing.assert_array_equal(voltage.values[7], values[7])
+            np.testing.assert_array_equal(voltage.of(7), values[0])
+            with self.assertRaises(MissingData):
+                voltage.of(0)
 
     def test_run_without_it_raises_missing_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

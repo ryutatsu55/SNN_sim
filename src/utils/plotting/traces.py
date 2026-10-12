@@ -1,6 +1,6 @@
 """単一ニューロンの膜電位トレース。
 
-**run の図。** 記録窓の先頭で毎ステップ採った全ニューロンの膜電位・入力電流
+**run の図。** 記録窓の先頭で毎ステップ採った膜電位・入力電流
 (`window.voltage()` / `window.current()`) から `task.trace_neuron` の行を取り出し、
 同じ時間のラスターと並べて描く。
 x 軸は採った長さで切るので、長時間シミュレーション (72h 等) の記録窓の先頭だけを表示できる。
@@ -40,10 +40,10 @@ def neuron_trace(window, out_path: Path) -> None:
     ax0.set_ylabel("Neuron ID")
     ax0.set_title(f"neuron {neuron_id}")
 
-    ax1.plot(time_axis, voltage.values[neuron_id], color="tab:blue")
+    ax1.plot(time_axis, voltage.of(neuron_id), color="tab:blue")
     ax1.set_ylabel("v [mV]")
 
-    ax2.plot(time_axis, current.values[neuron_id], color="black")
+    ax2.plot(time_axis, current.of(neuron_id), color="black")
     ax2.set_ylabel("I [nA]")
     ax2.set_xlim(0, duration_ms / 1000.0)
     ax2.set_xlabel("Time [s]")

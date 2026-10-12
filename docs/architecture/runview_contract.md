@@ -62,7 +62,7 @@ class MissingData(Exception):
 | `area()` | `BaseArea` 相当 | ニューロンが置かれる領域 |
 | `geometry()` | 軸索ジオメトリ | 軸索の折れ線 |
 | `spikes()` | `Spikes(times, ids)` | スパイク列 |
-| `voltage()` / `current()` | `NeuronTimeseries(values, dt)` | 記録窓の先頭で毎ステップ採った全ニューロンの膜電位 / 入力電流。`values` は (ニューロン数, ステップ数) で、行がグローバル ID |
+| `voltage()` / `current()` | `NeuronTimeseries(values, neuron_ids, dt)` | 記録窓の先頭で毎ステップ採った膜電位 / 入力電流。`values` は (選んだニューロン数, ステップ数)、1 本は `of(neuron_id)` |
 | `metrics()` | `pd.DataFrame` | 指標の表 |
 
 `wiring()` と `coo()` を分けてあるのは、**片方が run 不変でもう片方が時点依存**だから。

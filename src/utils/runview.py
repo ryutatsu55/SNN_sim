@@ -127,17 +127,26 @@ class Spikes(NamedTuple):
 
 
 class NeuronTimeseries(NamedTuple):
-    """全ニューロンのある変数 (膜電位や入力電流) を、記録窓の先頭から毎ステップ採った値。
+    """選んだニューロンのある変数 (膜電位や入力電流) を、記録窓の先頭から毎ステップ採った値。
 
-    `values[n, k]` は、ニューロン n (グローバル ID) の、窓のローカル時刻 `k * dt` [ms] での値。
+    `values[j, k]` は、ニューロン `neuron_ids[j]` の、窓のローカル時刻 `k * dt` [ms] での値。
+    行の位置はグローバル ID ではないので、1 本取り出すときは `of(neuron_id)` を使う。
     """
-    values: np.ndarray       # (ニューロン数, ステップ数)
+    values: np.ndarray       # (選んだニューロン数, ステップ数)
+    neuron_ids: np.ndarray   # 各行のグローバル ID
     dt: float                # [ms]
 
     @property
     def duration_ms(self) -> float:
         """採った長さ [ms]。窓の先頭からこの時刻までが記録されている。"""
         return self.values.shape[1] * self.dt
+
+    def of(self, neuron_id: int) -> np.ndarray:
+        """ニューロン `neuron_id` の時系列 (ステップ数,)。採っていない ID なら `MissingData`。"""
+        rows = np.flatnonzero(self.neuron_ids == neuron_id)
+        if rows.size == 0:
+            raise MissingData(f"neuron {neuron_id} の時系列", "採ったニューロンに含まれていません")
+        return self.values[rows[0]]
 
 
 # ======================================================================================

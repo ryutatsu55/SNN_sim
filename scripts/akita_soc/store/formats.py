@@ -36,8 +36,9 @@ RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
 
 WEIGHTS = "weights"
 SPIKES = "spikes"
-# 記録窓の先頭で毎ステップ採った全ニューロンの変数。膜電位 V と入力電流 Isyn_rec を
-# 別ファイルに書く。task.trace_neuron を指定した run だけが書き、長さは trace_window_s。
+# 記録窓の先頭で毎ステップ採ったニューロンの変数。膜電位 V と入力電流 Isyn_rec を
+# 別ファイルに書く。task.trace_neuron を指定した run だけが書き、採るのはそのニューロン、
+# 長さは trace_window_s。
 # スパイクは同じ窓の spikes の npz にある。
 VOLTAGE = "voltage"
 CURRENT = "current"
@@ -296,14 +297,20 @@ def record_hour(record_start_ms: float) -> float:
     return record_start_ms / MS_PER_HOUR
 
 
-def save_neuron_timeseries(path: Path, values, *, dt: float) -> None:
-    """全ニューロンのある変数の時系列 (ニューロン数, ステップ数) を書く。行がグローバル ID。"""
-    np.savez_compressed(path, values=np.asarray(values), dt=float(dt))
+def save_neuron_timeseries(path: Path, values, *, neuron_ids, dt: float) -> None:
+    """選んだニューロンのある変数の時系列 (選んだニューロン数, ステップ数) を書く。
+
+    `neuron_ids` は `values` の各行のグローバル ID。
+    """
+    np.savez_compressed(path, values=np.asarray(values),
+                        neuron_ids=np.asarray(neuron_ids, dtype=np.int64), dt=float(dt))
 
 
 def load_neuron_timeseries(path: Path) -> NeuronTimeseries:
     with np.load(path) as data:
-        return NeuronTimeseries(values=np.asarray(data["values"]), dt=float(data["dt"]))
+        return NeuronTimeseries(values=np.asarray(data["values"]),
+                                neuron_ids=np.asarray(data["neuron_ids"]),
+                                dt=float(data["dt"]))
 
 
 class MetricsWriter:

@@ -56,8 +56,8 @@ def parse_args():
 def resolve_trace(config) -> tuple[int | None, float]:
     """膜電位トレースの設定を `task.trace_neuron` / `task.trace_window_s` から読む。
 
-    ID を指定した run は、記録窓の先頭で全ニューロンの V と Isyn_rec を採り、
-    トレース図はその ID のニューロンを描く。
+    ID を指定した run は、記録窓の先頭でそのニューロンの V と Isyn_rec を採り、
+    トレース図はそれを描く。
 
     Returns:
         `(ニューロン ID | None, 窓幅 [s])`。ID が None なら採らない (キーが無い場合も)。
@@ -103,29 +103,29 @@ def run_steps(sim: GeNNSimulator, steps: int, chunk_steps: int, keep_spikes: boo
     return {"times": times[order], "ids": ids[order]}
 
 
-def capture_neuron_state(sim, window_s: float):
-    """記録窓の先頭 `window_s` [s] を 1 ステップずつ進め、全ニューロンの膜電位 V と
+def capture_neuron_state(sim, window_s: float, neuron_ids: np.ndarray):
+    """記録窓の先頭 `window_s` [s] を 1 ステップずつ進め、`neuron_ids` の膜電位 V と
     入力電流 Isyn_rec を毎ステップ採る。
 
     ステップ数は GeNN の記録バッファ長の整数倍に丸める (バッファはちょうど溜まった時しか
     読み出せないため)。
 
     Returns:
-        `(V, I, spikes)`。V / I は (ニューロン数, ステップ数) で、行がグローバル ID。
+        `(V, I, spikes)`。V / I は (len(neuron_ids), ステップ数) で、行の並びは `neuron_ids`。
         spikes はその間の全ニューロンのスパイクで、時刻は GeNN の時計。
     """
     buf = sim.max_timesteps
     requested_steps = int(round(window_s * 1000.0 / sim.dt))
     steps = max(1, round(requested_steps / buf)) * buf
 
-    V = np.empty((sim.total_neurons, steps), dtype=np.float64)
-    I = np.empty((sim.total_neurons, steps), dtype=np.float64)
+    V = np.empty((len(neuron_ids), steps), dtype=np.float64)
+    I = np.empty((len(neuron_ids), steps), dtype=np.float64)
     all_times = []
     all_ids = []
     for i in range(steps):
         sim.step()
-        V[:, i] = sim.pull("V")
-        I[:, i] = sim.pull("Isyn_rec")
+        V[:, i] = sim.pull("V")[neuron_ids]
+        I[:, i] = sim.pull("Isyn_rec")[neuron_ids]
         if (i + 1) % buf == 0:
             chunk = sim.get_global_spikes()
             if chunk["times"].size > 0:
@@ -176,7 +176,7 @@ def record_once(sim, series, run_dir: Path, hour: float, *,
         # するので、膜電位とラスターは同じ窓・同じ実現のデータになる。
         effective_trace_s = min(trace_window_s, record_window_ms / 1000.0)
         trace_v, trace_i, trace_spikes = capture_neuron_state(
-            sim, effective_trace_s)
+            sim, effective_trace_s, np.array([trace_neuron]))
         trace_steps = len(trace_v)
         remaining_steps = record_window_steps - trace_steps
         if remaining_steps < 0:
@@ -201,9 +201,9 @@ def record_once(sim, series, run_dir: Path, hour: float, *,
     if trace is not None:
         trace_v, trace_i = trace
         save_neuron_timeseries(paths.data_path(run_dir, record_filename(VOLTAGE, hour)),
-                               trace_v, dt=dt)
+                               trace_v, neuron_ids=[trace_neuron], dt=dt)
         save_neuron_timeseries(paths.data_path(run_dir, record_filename(CURRENT, hour)),
-                               trace_i, dt=dt)
+                               trace_i, neuron_ids=[trace_neuron], dt=dt)
 
     # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
     panels.emit(series.window(hour), metrics=metrics_csv)
@@ -236,7 +236,7 @@ def main():
 
     print(f"run: {run_dir}  seed={seed}  backend={config.simulation.backend}")
     if trace_neuron is not None:
-        print(f"  膜電位トレース: 全ニューロンを採り neuron {trace_neuron} を描く, 窓の先頭 {trace_window_s} s")
+        print(f"  膜電位トレース: neuron {trace_neuron}, 窓の先頭 {trace_window_s} s")
 
     # コード生成先は `src/core/NetworkBuilder.py` の GENN_CODE_DIR (既定)。
     builder = NetworkBuilder(config, model_name=_model_name(run_dir, seed))

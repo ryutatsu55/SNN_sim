@@ -110,15 +110,13 @@ run 長は `record_hours` の最大値 + `record_window_ms` で決まる。**総
 記録窓の先頭で V と Isyn_rec を採るかどうかも `task.yaml` で決める。
 
 ```yaml
-trace_neuron: null     # null なら採らない (既定)。ID を書くとトレース図はそのニューロンを描く
+trace_neuron: null     # null なら採らない (既定)。採るならニューロン ID を 1 つ
 trace_window_s: 10.0   # 記録窓の先頭から何秒ぶん
 ```
 
-ID を書くと、記録窓の先頭を 1 ステップずつ進めて**全ニューロン**の V / I を毎ステップ
+ID を書くと、記録窓の先頭を 1 ステップずつ進めてそのニューロンの V / I を毎ステップ
 `pull()` し、`voltage_{h}h.npz` / `current_{h}h.npz` に残す。同じ窓のスパイクと時間軸が
-揃う。採取部分は遅くなる (GPU で約 7 倍)。**容量に注意:** 1 窓あたり 2 変数 × ステップ数 ×
-ニューロン数 × 8 byte の圧縮前 (N=256, dt=0.1 ms, 10 s で約 410 MB)。npz は圧縮して書くので、
-実際はこれよりかなり小さくなりうる (発火の多さに依る)。
+揃う。採取部分は遅くなる (GPU で約 7 倍)。トレース図 (`neuron_trace`) はそのニューロンを描く。
 
 **引数にしていないのは、採ったかどうかがその run の記録の一部だから。** 引数にすると、
 完走した run に `voltage_*.npz` が無いときに「採らない設定だった」のか「採ろうとして失敗
@@ -178,7 +176,7 @@ run ディレクトリの中身:
 | `connectivity.npz` | `row` `col` `shape` |
 | `weights_{h}h.npz` | `data` (値ベクトル。`connectivity` の row/col と index 整合) |
 | `spikes_{h}h.npz` | `times` (絶対時刻 ms) `ids` **`record_start_ms`** |
-| `voltage_{h}h.npz` / `current_{h}h.npz` | `values` (ニューロン数, ステップ数。行がグローバル ID) `dt` |
+| `voltage_{h}h.npz` / `current_{h}h.npz` | `values` (選んだニューロン数, ステップ数) `neuron_ids` (各行の ID) `dt` |
 
 **ファイル名の時刻は目印であって、データではない。** `{h}` は `f"{hour:g}"` = 有効数字
 6 桁なので、`record_hours` が非整数だと往復で元の値に戻らない (1/3 h なら約 1.2 ms ずれ、
