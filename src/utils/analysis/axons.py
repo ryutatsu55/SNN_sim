@@ -16,7 +16,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from src.utils.analysis.connectivity import bridge_part_indices
+from src.utils.analysis.connectivity import (bridge_part_indices,
+                                             module_part_indices)
 
 # 1 セグメントを何点でサンプルして part との交差を見るか。
 # 実測 (axon_growth: seg 100 um / bridge 50 um、axon_growth_fine: seg 10 um / bridge 20 um)
@@ -53,6 +54,7 @@ def synapse_crossed_parts(
     area,
     part_indices=None,
     *,
+    exclude_part_indices=None,
     samples: int = DEFAULT_SEGMENT_SAMPLES,
 ) -> np.ndarray:
     """各シナプスが各 part を通ったかの (M, P) bool 行列。
@@ -66,6 +68,8 @@ def synapse_crossed_parts(
         area: composite area。`parts` を読む。
         part_indices: 調べる part の index。None ならブリッジ part すべて
             (`connectivity.bridge_part_indices`)。
+        exclude_part_indices: 指定すると、**ここに挙げた part の内側にある点は数えない**。
+            part が重なっている領域を判定から外すためのもの (ブリッジの食い込み)。
         samples: 1 セグメントあたりのサンプル点数。
 
     Returns:
@@ -74,6 +78,8 @@ def synapse_crossed_parts(
     if part_indices is None:
         part_indices = bridge_part_indices(area)
     part_indices = np.asarray(part_indices, dtype=np.int64)
+    excluded = (np.empty(0, dtype=np.int64) if exclude_part_indices is None
+                else np.asarray(exclude_part_indices, dtype=np.int64))
     parts = list(area.parts)
 
     num_synapses = int(np.asarray(geometry.pre).size)
@@ -88,9 +94,47 @@ def synapse_crossed_parts(
             continue
         # (samples, k, 2) -> (samples*k, 2)。1 シナプスぶんをまとめて 1 回で問い合わせる。
         points = (starts[None, :, :] + weights * (ends - starts)[None, :, :]).reshape(-1, 2)
-        for j, part_index in enumerate(part_indices):
-            crossed[m, j] = bool(np.any(parts[int(part_index)].contains(points)))
+        hits = [parts[int(p)].contains(points) for p in part_indices]
+        if not any(h.any() for h in hits):
+            continue
+        # 除外判定は 1 つでも当たった場合だけ。全 part ぶん回すので素通りを先に弾く。
+        keep = np.ones(points.shape[0], dtype=bool)
+        for p in excluded:
+            keep &= ~parts[int(p)].contains(points)
+            if not keep.any():
+                break
+        for j, hit in enumerate(hits):
+            crossed[m, j] = bool(np.any(hit & keep))
     return crossed
+
+
+def synapse_crossed_bridges(
+    geometry,
+    area,
+    part_indices=None,
+    *,
+    samples: int = DEFAULT_SEGMENT_SAMPLES,
+) -> np.ndarray:
+    """各シナプスが各ブリッジの**露出部**を通ったかの (M, P) bool 行列。
+
+    ブリッジ part は union を連結にするため両端を `bridge_overlap` だけモジュールへ
+    食い込ませてある (`_bridge_spec`)。その食い込みはモジュールの内側なので、**そこを
+    かすめただけの軸索はブリッジを渡っていない**。切断の対象はモジュールの外に露出した
+    通路の部分だけで、これを「ブリッジ part の内側かつ全モジュール part の外側」として
+    判定する。
+
+    Args:
+        part_indices: 調べるブリッジの index。None ならブリッジ part すべて。
+            ここにモジュール part を渡してはいけない (常に全列 False になる)。
+
+    Returns:
+        (M, P) bool。列の並びは `part_indices` の並び。
+    """
+    if part_indices is None:
+        part_indices = bridge_part_indices(area)
+    return synapse_crossed_parts(geometry, area, part_indices,
+                                 exclude_part_indices=module_part_indices(area),
+                                 samples=samples)
 
 
 def crossing_summary(crossed: np.ndarray, part_indices, part_names) -> dict[str, int]:

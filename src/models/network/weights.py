@@ -3,20 +3,15 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from numbers import Real
 from pathlib import Path
-from scipy.spatial.distance import pdist, squareform
 from src.core.registry import WEIGHT_MODELS
 
 class BaseWeight(ABC):
     """シナプスの重みを生成する基底クラス"""
 
-    # 密な (N,N) を作らずに COO 上の 1D 重みを直接生成できるか。
-    supports_sparse: bool = False
-
-    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], mask: Optional[np.ndarray] = None, rng: np.random.RandomState = None, layout=None):
+    def __init__(self, config: Dict[str, Any], num_neurons: int, coords: Optional[np.ndarray], rng: np.random.RandomState = None, layout=None):
         self.config = config
         self.num_neurons = num_neurons
         self.coords = coords
-        self.mask = mask
         self.rng = rng
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
         # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
@@ -25,9 +20,9 @@ class BaseWeight(ABC):
     def describe_axes(self) -> Dict[str, Any]:
         """任意フック: このコンポーネントが定義するカテゴリ/ソート軸を宣言する。
 
-        NetworkBuilder が `generate()` / `generate_sparse()` の**直後**に呼び、戻り値を
+        NetworkBuilder が `generate()` の**直後**に呼び、戻り値を
         `NetworkLayout.add_axis()` へ注入する。生成後に呼ばれるので、自身が計算した
-        座標・マスク・重み等から軸を導出してよい(例: 重み強度でのランク付け)。
+        座標・結合・重み等から軸を導出してよい(例: 重み強度でのランク付け)。
 
         Returns:
             {軸名: 長さ num_neurons の配列}。カテゴリ名(文字列)でもソート用の数値でも
@@ -36,27 +31,17 @@ class BaseWeight(ABC):
         return {}
 
     @abstractmethod
-    def generate(self) -> np.ndarray:
-        """
-        Returns:
-            np.ndarray: 形状 (num_neurons, num_neurons) の重み行列 (np.float32)
-        """
-        pass
+    def generate(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """結合 COO (rows, cols) の各要素に対応する 1D 重み配列 (np.float32) を返す。
 
-    def generate_sparse(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
-        """COO (rows, cols) に対応する 1D 重み配列 (np.float32) を返す。"""
-        raise NotImplementedError(
-            f"{type(self).__name__} は疎生成に対応していません (supports_sparse=False)。"
-        )
+        乱数を使うモデルは rows, cols の並び (行優先) の順に 1 結合 1 値で引く。
+        """
 
 @WEIGHT_MODELS.register("constant")
 class ConstantWeight(BaseWeight):
-    def generate(self):
-        """結合がある箇所すべてに同じ重みを割り当てる"""
-        val = self.config.base_weight
-        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        weights[self.mask != 0] = val
-        return weights
+    def generate(self, rows, cols):
+        """全結合に同じ重み `base_weight` を割り当てる。"""
+        return np.full(np.asarray(rows).size, self.config.base_weight, dtype=np.float32)
 
 @WEIGHT_MODELS.register("constant_zero")
 class ConstantZeroWeight(ConstantWeight):
@@ -65,17 +50,10 @@ class ConstantZeroWeight(ConstantWeight):
 
 @WEIGHT_MODELS.register("normal_broad")
 class NormalRandomWeight(BaseWeight):
-    def generate(self):
-        """結合がある箇所に、正規分布に従うランダムな重みを割り当てる"""
-        mean = self.config.mean
-        std = self.config.std
-        
-        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        idx = (self.mask != 0)
-        num_conns = np.sum(idx)
-        
-        weights[idx] = self.rng.normal(mean, std, size=num_conns)
-        return weights
+    def generate(self, rows, cols):
+        """各結合に N(mean, std²) の重みを割り当てる。"""
+        num_conns = int(np.asarray(rows).size)
+        return self.rng.normal(self.config.mean, self.config.std, size=num_conns).astype(np.float32)
 
 @WEIGHT_MODELS.register("lognormal_broad")
 class LogNormalRandomWeight(BaseWeight):
@@ -100,8 +78,6 @@ class LogNormalRandomWeight(BaseWeight):
         境界にピークは立たない。ただし裾を範囲内に押し戻す分、実現される平均は目標 mean から
         少しずれる(切断分布のため)。
     """
-
-    supports_sparse = True
 
     def _params(self):
         mean = self.config.mean
@@ -151,20 +127,7 @@ class LogNormalRandomWeight(BaseWeight):
                 )
         return sampled.astype(np.float32)
 
-    def generate(self):
-        self._params()  # 疎版と同じ検証を先に通す
-        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        idx = (self.mask != 0)
-        num_conns = int(np.count_nonzero(idx))
-        if num_conns == 0:
-            return weights
-
-        # NumPy のブール代入は idx の C 順(= np.nonzero(mask) の順)で埋めるため、
-        # 行優先ソート済み COO に対する generate_sparse と同一の割り当てになる。
-        weights[idx] = self._sample(num_conns)
-        return weights
-
-    def generate_sparse(self, rows, cols):
+    def generate(self, rows, cols):
         num_conns = int(np.asarray(rows).size)
         if num_conns == 0:
             self._params()
@@ -173,8 +136,7 @@ class LogNormalRandomWeight(BaseWeight):
 
 @WEIGHT_MODELS.register("offset_scaled_normal")
 class OffsetScaledNormalWeight(BaseWeight):
-    def generate(self):
-        """有効な結合に対して、offset + g_scale * N(0, 1) の重みを割り当てる。"""
+    def _params(self):
         offset = self.config.offset
         g_scale = self.config.g_scale
 
@@ -184,16 +146,15 @@ class OffsetScaledNormalWeight(BaseWeight):
             raise ValueError("g_scale must be a real number.")
         if g_scale < 0.0:
             raise ValueError("g_scale must be greater than or equal to 0.0.")
+        return offset, g_scale
 
-        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        idx = self.mask != 0
-        num_conns = np.sum(idx)
-
+    def generate(self, rows, cols):
+        """各結合に offset + g_scale * N(0, 1) の重みを割り当てる。"""
+        offset, g_scale = self._params()
+        num_conns = int(np.asarray(rows).size)
         if num_conns == 0:
-            return weights
-
-        weights[idx] = offset + (g_scale * self.rng.randn(num_conns))
-        return weights
+            return np.zeros(0, dtype=np.float32)
+        return (offset + (g_scale * self.rng.randn(num_conns))).astype(np.float32)
 
 @WEIGHT_MODELS.register("C.elegans")
 class C_elegansWeight(BaseWeight):
@@ -211,8 +172,8 @@ class C_elegansWeight(BaseWeight):
                         割って正規化(クリップ上限が 1.0 に写像される)。``False`` なら
                         クリップ後の生値([min_weight, max_weight])のまま。
 
-    生成された重みは接続がある箇所(``self.mask != 0`` かつ選択ソースに接続がある要素)に
-    限定される。両 CSV は 81×81 で ``ordered_coords.csv`` と同じ NodeID(正準グローバルID)
+    結合 (rows, cols) のうち選択ソースに接続が無い要素の重みは 0 (結合としては残る)。
+    両 CSV は 81×81 で ``ordered_coords.csv`` と同じ NodeID(正準グローバルID)
     順に整列している前提。重みは大きさ(正値)で、興奮性/抑制性の符号は発信 population の
     シナプスモデル側で扱う。
     """
@@ -236,7 +197,12 @@ class C_elegansWeight(BaseWeight):
             )
         return m
 
-    def generate(self):
+    def generate(self, rows, cols):
+        """コネクトームの重みを結合 (rows, cols) の位置から引く。"""
+        return self._processed_matrix()[np.asarray(rows), np.asarray(cols)].astype(np.float32)
+
+    def _processed_matrix(self) -> np.ndarray:
+        """ソース選択・クリップ・正規化を済ませた (N, N) 行列。非接続は 0。"""
         min_weight = self.config.min_weight
         max_weight = self.config.max_weight
         sources = getattr(self.config, "sources", "both")
@@ -277,38 +243,26 @@ class C_elegansWeight(BaseWeight):
                 weights = elec.copy()
                 weights[chem != 0] = chem[chem != 0]
 
-        # --- マスク外を 0 に。選択ソースに接続がある要素(=非ゼロ)のみクリップ/正規化。 ---
+        # --- 選択ソースに接続がある要素(=非ゼロ)のみクリップ/正規化。 ---
         #     元データは接続=synapse数>=1 / 非接続=0 なので、非ゼロ判定で「接続あり」を識別できる。
         #     (min_weight>0 でも非接続 0 を持ち上げてしまわないよう conn は非ゼロで取る。)
-        weights[self.mask == 0] = 0.0
         conn = weights != 0
         weights[conn] = np.clip(weights[conn], min_weight, max_weight)
         if normalize:
             weights[conn] = weights[conn] / max_weight
 
-        return weights.astype(np.float32)
+        return weights
 
 @WEIGHT_MODELS.register("distance_dependent")
 class DistanceDependentWeight(BaseWeight):
-    def generate(self):
-        """
-        結合がある箇所に、距離に応じた重みを割り当てる。
-        近いほど重みが大きく（最大 amplitude）、遠いほど指数関数的に小さくなる。
-        """
-        # パラメータの取得（設定がない場合の安全なフォールバック値を設定）
+    def generate(self, rows, cols):
+        """距離 d の結合に A·exp(-d/λ) の重みを割り当てる。"""
+        coords = np.asarray(self.coords, dtype=np.float64)
+        rows = np.asarray(rows)
+        cols = np.asarray(cols)
+        if rows.size == 0:
+            return np.zeros(0, dtype=np.float32)
+        distance = np.linalg.norm(coords[rows] - coords[cols], axis=1)
         amplitude = self.config.max_weight
         decay_length = self.config.decay_length
-        
-        # N x N の距離行列を一括計算
-        dist_matrix = squareform(pdist(self.coords))
-
-        weights = np.zeros((self.num_neurons, self.num_neurons), dtype=np.float32)
-        idx = (self.mask != 0)
-        
-        # 結合が存在する箇所（マスクが有効な箇所）の距離データを取得
-        active_distances = dist_matrix[idx]
-        
-        # 距離に応じた指数減衰の計算： w = A * exp(-d / λ)
-        weights[idx] = amplitude * np.exp(-active_distances / decay_length)
-        
-        return weights
+        return (amplitude * np.exp(-distance / decay_length)).astype(np.float32)

@@ -22,15 +22,9 @@ class ConfigDict(dict[str, Any]):
             raise AttributeError(key) from exc
 
 
-def make_mask() -> np.ndarray:
-    return np.array(
-        [
-            [0, 1, 0],
-            [1, 0, 1],
-            [0, 1, 0],
-        ],
-        dtype=np.int8,
-    )
+def make_coo() -> tuple[np.ndarray, np.ndarray]:
+    """3 ニューロンで 0-1, 1-0, 1-2, 2-1 を結ぶ COO (行優先)。"""
+    return np.array([0, 1, 1, 2], dtype=np.int32), np.array([1, 0, 2, 1], dtype=np.int32)
 
 
 def test_random_delay_raises_when_std_is_not_number():
@@ -38,12 +32,11 @@ def test_random_delay_raises_when_std_is_not_number():
         config=ConfigDict(mean=7.0, std="1.0", min=4.0, max=10.0),  # type: ignore
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
     with pytest.raises(ValueError, match="std must be a real number"):
-        delay.generate()
+        delay.generate(*make_coo())
 
 
 def test_random_delay_raises_when_std_is_negative():
@@ -51,12 +44,11 @@ def test_random_delay_raises_when_std_is_negative():
         config=ConfigDict(mean=7.0, std=-1.0, min=4.0, max=10.0),
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
     with pytest.raises(ValueError, match="std must be greater than or equal to 0.0"):
-        delay.generate()
+        delay.generate(*make_coo())
 
 
 def test_random_delay_raises_when_min_exceeds_max():
@@ -64,12 +56,11 @@ def test_random_delay_raises_when_min_exceeds_max():
         config=ConfigDict(mean=7.0, std=1.0, min=11.0, max=10.0),
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
     with pytest.raises(ValueError, match="min must be less than or equal to max"):
-        delay.generate()
+        delay.generate(*make_coo())
 
 
 def test_random_delay_accepts_zero_std_and_applies_clipping_bounds():
@@ -77,18 +68,10 @@ def test_random_delay_accepts_zero_std_and_applies_clipping_bounds():
         config=ConfigDict(mean=7.0, std=0.0, min=4.0, max=10.0),
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
-    delays = delay.generate()
+    delays = delay.generate(*make_coo())
 
-    expected = np.array(
-        [
-            [0.0, 7.0, 0.0],
-            [7.0, 0.0, 7.0],
-            [0.0, 7.0, 0.0],
-        ],
-        dtype=np.float32,
-    )
+    expected = np.full(4, 7.0, dtype=np.float32)
     np.testing.assert_array_equal(delays, expected)

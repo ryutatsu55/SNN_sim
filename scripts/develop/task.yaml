@@ -1,0 +1,79 @@
+# develop 実験の記録プロトコル。
+#
+# **この実験の持ち物なのでここに置いてある。** `configs/components/tasks.yaml` は
+# 「いつ記録するか」(記録プロトコル) と「どんなタスクか」(spatial_recognition などの
+# 入出力定義) という別物が同じ棚に載っている状態だった。develop が選ぶプロファイルは
+# スクリプト側が名前をハードコードして決めていたので、実態としての持ち主はこちら。
+#
+# **どのプロファイルで走るかはメイン config の `task:` が決める。**
+#
+#     # scripts/develop/axon_growth_grid.yaml
+#     task: develop
+#
+# 記録条件は結果を変えるので、選択も config 側にある (CLI の引数にはしない)。
+#
+# 基本は 1 つ (`develop`) を手で書き換えて使う。config を複製しないのと同じ考え方で、
+# 何で走ったかは run ディレクトリの config.yaml に残るから、条件ごとにプロファイルを
+# 溜める必要はない。**記録プロトコルとして本質的に別物**のとき (例: 発達の追跡ではなく
+# 短時間のスモーク) だけプロファイルを足し、config 側で選ぶ。
+
+
+develop:
+  # 記録する時刻 [h]。ここに並べた各時刻で record_window_ms ぶんの窓を採る。
+  # **run 長はこの最大値 + record_window_ms で決まる。**
+  #
+  # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲。混ぜて書ける。
+  #
+  #     [0, 6, 72]      0 / 6 / 72 h の 3 点
+  #     [0..12]         0 h から 12 h まで 1 時間ごと (13 点)
+  #     [0..3:0.5]      0 h から 3 h まで 30 分ごと
+  #     [0, 1..6, 24]   混在
+  #
+  # **リストは範囲にならない** (`[0, 12]` は 0 h と 12 h の 2 点)。記録時刻は
+  # 不等間隔の並びが本来の書き方なので、リストは書いたとおりに読む。展開は
+  # `config_manager.expand_hours_spec()` が唯一の入口で、run の config.yaml には
+  # 展開後の時刻が並ぶ。
+  record_hours: [0..12]
+
+  # 1 記録窓の長さ [ms]
+  record_window_ms: 600000.0  # 10 min
+
+  # GeNN のスパイク記録バッファ [ms]。窓をこの単位で刻んで回収する。
+  # **record_window_ms より小さくすること** (超えると窓の切り出しが成立しない)。
+  record_buffer_ms: 10000.0
+
+  # --- 膜電位・入力電流 -----------------------------------------------------
+  # ニューロン ID を 1 つ書くと、記録窓の先頭でそのニューロンの V と Isyn_rec を 1 ステップ
+  # 刻みで採り (voltage / current の npz)、トレース図はそれを描く。
+  # 同じ窓のスパイクと時間軸が揃うので、ラスターの先頭部分と直接見比べられる。
+  #
+  # **null なら採らない (既定)。** 1 ステップずつ進めて毎ステップ pull するので、採取部分が
+  # 遅くなる (GPU で約 7 倍)。
+  #
+  # ここに置いてあるのは、**採ったかどうかがその run の記録の一部**だから。
+  # 引数で渡せるようにすると、完走した run を見て voltage の npz が無いときに
+  # 「採らない設定だった」のか「採ろうとして失敗した」のかが区別できなくなる。
+  trace_neuron: null
+  # 記録窓の先頭から何秒ぶん採るか [s]。窓より長くは採れない (窓幅で頭打ち)。
+  trace_window_s: 10.0
+
+develop20h:
+  record_hours: [0..20]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0
+
+develop40h:
+  record_hours: [0..40]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0
+
+develop72h:
+  record_hours: [0..72]
+  record_window_ms: 600000.0  # 10 min
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0

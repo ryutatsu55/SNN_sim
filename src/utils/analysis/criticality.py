@@ -1,59 +1,124 @@
 """臨界性の指標。
 
 アバランシェサイズ分布や発火列から、系が臨界・劣臨界・超臨界のどこにいるかを
-測る量を計算する。論文ごとの合否判定 (許容幅つきのチェック) はここには置かず、
-`src/utils/experiments/` 側が持つ。
+測る量を計算する。
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 from scipy import signal
 
-from src.utils.analysis.powerlaw import _fit_power_loglog, discrete_distribution
+
+@dataclass(frozen=True)
+class DeltaCrFit:
+    """ΔCr の中身。図が回帰直線を重ね描きするためにここから取る。
+
+    `prob` / `fit` は `grid` (= 1..smax) 上で揃っている。観測されなかったサイズの
+    `prob` は 0 (回帰には使っていない)。
+    """
+    grid: np.ndarray        # 1..smax
+    prob: np.ndarray        # pemp(s)。観測が無ければ 0
+    fit: np.ndarray         # pfit(s) = 10^intercept · s^slope (再正規化しない)
+    slope: float            # log-log 平面での傾き (負値)
+    intercept: float
+    smin: int
+    upper: float            # Aupper (S22)
+    lower: float            # Alower (S23)
+    delta_cr: float         # ΔCr (S24)
+
+
+def delta_cr_fit(
+    sizes: np.ndarray, smax: int = 100, smin: int = 1, min_points: int = 10
+) -> DeltaCrFit | None:
+    """ΔCr とその回帰直線を返す。フィットできなければ `None`。
+
+    **`criticality_index_delta_cr()` の実体。** 図が同じ直線を描けるように、
+    スカラーだけでなく直線そのものを返す口を分けてある (2 通りに実装しない)。
+    定義と引数は `criticality_index_delta_cr()` の docstring を読むこと。
+    """
+    data = np.asarray(sizes, dtype=np.int64)
+    data = data[(data >= 1) & (data <= smax)]
+    if data.size == 0:
+        return None
+
+    grid = np.arange(1, smax + 1)
+    counts = np.bincount(data, minlength=smax + 1)[1:smax + 1]
+    prob = counts / data.size
+    # 回帰は観測点だけで引く (log10(0) が引けないため)。和は S21 どおり smin..smax の
+    # 全整数サイズで取るので、観測されなかったサイズは pemp=0 として −pfit を寄与する。
+    fitted_on = (counts > 0) & (grid >= smin)
+    if np.count_nonzero(fitted_on) < min_points:
+        return None
+
+    log_grid = np.log10(grid)
+    # **観測個数で重み付ける。** polyfit の w は二乗前の残差に掛かるので、
+    # w=sqrt(count) が「重み = count」の加重最小二乗になる。
+    slope, intercept = np.polyfit(log_grid[fitted_on], np.log10(prob[fitted_on]), 1,
+                                  w=np.sqrt(counts[fitted_on]))
+    fit = np.power(10.0, intercept + slope * log_grid)
+
+    evaluated_on = grid >= smin
+    deviation = prob[evaluated_on] - fit[evaluated_on]
+    upper = float(np.sum(np.maximum(deviation, 0.0)))
+    lower = float(np.sum(np.minimum(deviation, 0.0)))
+    return DeltaCrFit(
+        grid=grid, prob=prob, fit=fit, slope=float(slope), intercept=float(intercept),
+        smin=int(smin), upper=upper, lower=lower,
+        delta_cr=upper if abs(upper) >= abs(lower) else lower,
+    )
 
 
 def criticality_index_delta_cr(
-    sizes: np.ndarray, smax: int = 100, smin_max: int = 10, min_points: int = 10
+    sizes: np.ndarray, smax: int = 100, smin: int = 1, min_points: int = 10
 ) -> float:
-    """臨界性指標 ΔCr(Ikeda-Akita-Takahashi 2023 supplementary 式 S21-S24)。
+    """臨界性指標 ΔCr (Ikeda-Akita-Takahashi 2023 supplementary 式 S21-S24)。
 
-    pemp(s)=経験PMF, pfit(s)=log-log 線形回帰の**生の回帰線**(exp(b)·s^slope)。
-    smin を [1, smin_max] で走査して線形回帰の平均二乗誤差を最小化(論文: 小サイズは
-    べき乗からずれるため除外)。smax=100。
-        Aupper = Σ max(pemp−pfit, 0),  Alower = Σ min(pemp−pfit, 0)   [smin..smax]
-        ΔCr    = |大きい方の符号付き値|。 正=超臨界, ≈0=臨界, 負=劣臨界。
+    経験分布 pemp(s) と、その log-log プロットへの線形回帰が与えるべき乗 pfit(s) の差を
+    上振れ/下振れに分けて足し、絶対値の大きい方を符号付きで返す:
 
-    重要: pfit は**再正規化しない**(旧実装は合計1へ正規化していたため Σ(pemp−pfit)=0 と
-    なり、かつ smin>1 選択時に −(小サイズ質量) の系統誤差が入って偽の強い劣臨界値を出していた)。
-    smin は小範囲に制限(旧実装は上限なしで tail へ退化)。
+        Aupper = Σ_{s=smin..smax} max(pemp(s) − pfit(s), 0)    … S22
+        Alower = Σ_{s=smin..smax} min(pemp(s) − pfit(s), 0)    … S23
+        ΔCr    = |Aupper| ≥ |Alower| なら Aupper, そうでなければ Alower   … S24
+
+    **正 = 超臨界、≈0 = 臨界、負 = 劣臨界。**
+
+    差を取るのは**確率そのもの** (S21 の pemp(s) − pfit(s)) であって log ではない。
+    log-log なのは回帰を引く平面だけで、pfit はその直線を確率へ戻したもの
+    (pfit(s) = 10^intercept · s^slope, 再正規化しない)。
+    **回帰と残差を同じ log 空間で取ると最小二乗の性質から Σ残差 = 0 になり、
+    Aupper = |Alower| で符号が消える。** 確率空間の差にはこの縮退が無いので、
+    smin による範囲の切り分けは符号のために必要ではない。
+
+    Args:
+        sizes: アバランシェサイズの標本 (1 以上の整数)。
+        smax: 考えるサイズの上限。**アバランシェでは系のニューロン数 N。**
+            これを超えるサイズは pemp を作る前に捨てる (論文 II.B と同じ)。
+        smin: 考えるサイズの下限。回帰も和もここから始める。既定の 1 は
+            **下限を切らない**の意 (サイズは 1 以上なので smin=0 と同義)。
+        min_points: 回帰に使える観測点 (pemp > 0 のサイズ) がこれを下回ったら
+            `nan` を返す。**点が少ないと直線の傾きが 1〜2 個の裾で決まり、
+            ΔCr が指標ではなく乱数になる**ための足切り。
+
+    論文は smin を「線形フィットの二乗誤差和が最小になるよう決めた」と書くが、
+    その規準は点を減らすほど誤差が減るため走査範囲の上限に張り付く (再現しない)。
+    平均二乗誤差や Clauset の KS 規準に替えても、0h(純ポアソン)では裾へ逃げて
+    ΔCr ≈ 0 になり、論文の −0.23 を出さない。**恣意的な較正を避けるため既定では
+    切らない。** 別の値を使うときは明示的に渡すこと。
+
+    **回帰は各サイズの観測個数で重み付ける (加重最小二乗)。** 経験 PMF の点は精度が
+    そろっていない —— log10(pemp(s)) の分散は 1/count(s) に比例するので、数個しか
+    観測が無い裾と数千個ある s=1 を等価に扱うと、直線が裾に引きずられて小サイズ側の
+    切片が跳ね上がる (素の最小二乗では pfit(1) が確率 1 を超えることがある)。
+    逆分散重み = count がこの分布に対する正しい回帰で、副作用として値の尺度が
+    標本数によらず安定し、Tetzlaff et al. 2010 の判定幅 ±0.195 と同じ世界に収まる。
+
+    **符号と時間発展で読むこと。** 論文の絶対値とは一致しない
+    (実測と経緯は `docs/technical/akita_soc_reproduction_memo.md` §12)。
     """
-    support, prob = discrete_distribution(sizes, xmax=smax)
-    if support.size < min_points:
-        return np.nan
-
-    best_error = np.inf
-    best_prob = None
-    best_fit = None
-    for smin in support:
-        if smin > smin_max:
-            break
-        mask = support >= smin
-        if np.count_nonzero(mask) < min_points:
-            break
-        _, _, fit = _fit_power_loglog(support[mask], prob[mask])
-        error = float(np.mean((np.log(prob[mask]) - np.log(fit)) ** 2))
-        if error < best_error:
-            best_error = error
-            best_prob = prob[mask]
-            best_fit = fit
-
-    if best_prob is None:
-        return np.nan
-
-    diff = best_prob - best_fit
-    upper = float(np.sum(np.maximum(diff, 0.0)))
-    lower = float(np.sum(np.minimum(diff, 0.0)))
-    return upper if abs(upper) >= abs(lower) else lower
+    fit = delta_cr_fit(sizes, smax=smax, smin=smin, min_points=min_points)
+    return np.nan if fit is None else fit.delta_cr
 
 
 def burstiness_index(spike_times: np.ndarray, duration_ms: float, bin_ms: float = 1000.0) -> float:

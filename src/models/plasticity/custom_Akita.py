@@ -4,7 +4,7 @@
 
     - 極性  : mode = e-stdp / i-stdp   ... 興奮性 / 抑制性 STDP (mode.startswith で判定)
     - pairing: nearest / trace          ... 最近接ペア / trace 型 all-to-all (明示フィールド)
-    - axonal : delay_by_target 指定時のみ ... NetworkBuilder が axonal_delay_steps を渡す
+    - axonal : 遅延モデルが axonal のときのみ ... NetworkBuilder が axonal_delay_steps を渡す
 
     → 実装は pairing × axonal の 4 経路:
         nearest × 非axonal → _nearest_dc_syn (到着イベント駆動 per-syn)
@@ -18,7 +18,9 @@
 GeNN が生成する C++ と独立に同じ数式を計算する。`CustomAkitaModel` 本体はそのうち
 `calculate_gmax_scale` のみ利用し、残りは検証テスト
 (test/test_akita_soc.py, test/core/STDPtest/test_multi_spike.py) が import して
-C++ 側の挙動と突き合わせるために使う。
+C++ 側の挙動と突き合わせるために使う。`replay_released_resource` は記録済みの
+スパイク列から STP の放出量を再現するためのもので、解析 (`scripts/lesion/analysis/drive.py`)
+が使う。
 """
 
 import pygenn
@@ -41,6 +43,32 @@ def consume_synaptic_resource(x: float, utilization: float) -> tuple[float, floa
     """Supplementary Eq. S12 に従い資源を消費する。"""
     released = utilization * x
     return x - released, released
+
+
+def replay_released_resource(times: np.ndarray, ids: np.ndarray, num_neurons: int,
+                             utilization, tau_rec: float) -> np.ndarray:
+    """スパイク列から、各スパイクが放出した資源 `x_release = U·x` を再現する。
+
+    `pre_spike_code` と同じ漸化式 (Eq. S11 → S12) をニューロンごとに時刻順に回す。
+    返り値は `times` と同じ並び。`utilization` はスカラか、ニューロンごとの長さ
+    `num_neurons` の配列。
+
+    **各ニューロンの最初のスパイクは x = 1 (満タン) から始まる。** 記録窓の直前の
+    発火履歴は分からないので、窓の先頭 τ_rec 程度は放出量をわずかに過大に見積もる。
+    """
+    times = np.asarray(times, dtype=np.float64)
+    ids = np.asarray(ids, dtype=np.int64)
+    u = np.broadcast_to(np.asarray(utilization, dtype=np.float64), (int(num_neurons),))
+    order = np.lexsort((times, ids))
+    released = np.empty(times.size, dtype=np.float64)
+    x = np.ones(int(num_neurons), dtype=np.float64)
+    last = np.full(int(num_neurons), -np.inf)
+    for k in order:
+        j = ids[k]
+        x_now = recover_synaptic_resource(x[j], times[k] - last[j], tau_rec)
+        x[j], released[k] = consume_synaptic_resource(x_now, u[j])
+        last[j] = times[k]
+    return released
 
 
 def calculate_gmax_scale(num_synapses: int, num_post: int, normalize_by_fan_in: bool) -> float:
@@ -129,7 +157,7 @@ class CustomAkitaModel(BasePlasticityModel):
                 f"CustomAkitaModel requires pairing='nearest' or 'trace' (got {self.pairing!r})."
             )
         self.trace_mode = self.pairing == "trace"
-        # 軸索遅延経路: NetworkBuilder が delay_by_target(=集団内均一遅延)を検出したとき有効化される。
+        # 軸索遅延経路: 遅延モデルが axonal (=集団内均一遅延) のとき有効化される。
         # GeNN が axonal_delay_steps 分だけ遅延スロットからスパイクを読み、pre_spike_syn_code を
         # 到着時刻にイベント駆動で実行し、st_pre も到着時刻へ補正する。よって毎ステップの
         # syn_dynamics_code は不要になり、STDP は到着時刻基準(=遅延補正済み)の数式で

@@ -35,7 +35,10 @@
 積分式: `V += ((V_rest - V) + R_m·(Isyn + Iext)) · dt/tau_m`
 
 無次元版との対応: **`g_max_無次元 = g_max_物理[µS] × R_m[MΩ]`**
-(GeNN 実機でビット一致することを `test/core/test_genn_reproducibility.py` で検証済み ✅)
+(無次元版 `akita_escape_lif` と物理版 `akita_escape_lif_physical` の対応。
+**自動テストは無い** —— かつてここが指していた `test/core/test_genn_reproducibility.py` は
+リポジトリに存在せず、git 履歴にも無い。ビット一致は当時手で確認しただけなので、
+依存するなら検証を書き直すこと)
 
 ---
 

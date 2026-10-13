@@ -144,7 +144,7 @@ modular_grid:
 # (soma_in_bridge: true だと BC*/BX* が C* より前に来て粗視化図の先頭に固まる)。
 hierarchical_modular_grid:
   side: 200.0            # 正方形モジュールの一辺 [um]
-  bridge_width: 20     # ブリッジの線幅 [um]
+  bridge_width: 50     # ブリッジの線幅 [um]
   spacing: 400.0         # **クラスタ内**モジュールの中心間距離 [um]
   block_spacing: 800.0   # 省略可。**クラスタ中心間**距離 [um]。既定 2*spacing
   #                      # 既定 (= 2*spacing) は「均一な 4x4 格子」で、クラスタ間の隙間が
@@ -158,7 +158,7 @@ hierarchical_modular_grid:
 
 hierarchical_modular_grid2:
   side: 100.0            # 正方形モジュールの一辺 [um]
-  bridge_width: 4.5     # ブリッジの線幅 [um]
+  bridge_width: 20     # ブリッジの線幅 [um]
   spacing: 200.0         # **クラスタ内**モジュールの中心間距離 [um]
   block_spacing: 400.0   # 省略可。**クラスタ中心間**距離 [um]。既定 2*spacing
   chamfer: 10.0          # 省略可。角を 45 度に落とす長さ [um]。既定 side/4

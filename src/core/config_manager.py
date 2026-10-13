@@ -1,3 +1,5 @@
+import math
+import re
 import shutil
 import yaml
 import numpy as np
@@ -7,8 +9,14 @@ import warnings
 from typing import Dict, Any, Literal, Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
-# run ディレクトリのファイル名規約は output_manager が唯一の定義元。
-from src.core.output_manager import CONFIG_NAME, SOURCE_CONFIG_NAME
+# `save_config()` が run ディレクトリへ書き出す 2 ファイルの名前。
+#
+#   config.yaml        … 解決後 config (seed/backend/assignment は実値)。再実行用の記録
+#   source_config.yaml … resolve() に渡した入力 YAML の逐語コピー
+#
+# **書くのは `save_config()` だけ。** 読む側 (実験の store/ とテスト) はここを import する。
+CONFIG_NAME = "config.yaml"
+SOURCE_CONFIG_NAME = "source_config.yaml"
 
 
 # メイン config が layout.assignment を書かなかったときに適用する値。
@@ -30,6 +38,155 @@ DEFAULT_BACKEND = "cpu"
 # しきい値がここにあるのは、"auto" を**記録に残る実値へ焼き込むのが resolve() の役目**だから
 # (NetworkBuilder に置くと解決が実行時になり、config.yaml に "auto" のまま残ってしまう)。
 AUTO_BACKEND_NEURON_THRESHOLD = 400
+
+
+class _NoDuplicateKeyLoader(yaml.SafeLoader):
+    """同じマッピングに同じキーが 2 度出たらエラーにする SafeLoader。
+
+    PyYAML の既定は後勝ちで、先に書いたほうを黙って捨てる。プロファイルを 1 つ足した
+    つもりが既存の定義を消していても、落ちずに**別のプロトコルで走る**ので気づけない。
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen: Dict[Any, int] = {}
+        for key_node, _ in node.value:
+            try:
+                key = self.construct_object(key_node, deep=deep)
+                first_line = seen.get(key)
+            except TypeError:       # ハッシュ不能なキーは SafeLoader 側が報告する
+                continue
+            if first_line is not None:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping", node.start_mark,
+                    f"キー {key!r} が重複しています "
+                    f"({first_line} 行目と {key_node.start_mark.line + 1} 行目)。"
+                    " YAML は後勝ちで片方を黙って捨てるので、どちらを残すか決めてください。",
+                    key_node.start_mark)
+            seen[key] = key_node.start_mark.line + 1
+        return super().construct_mapping(node, deep=deep)
+
+
+def load_yaml(path: str | Path) -> Dict[str, Any]:
+    """YAML を 1 つ読んでマッピングを返す。**重複キーはエラー。**
+
+    config / コンポーネント / task プロファイルを読むのは全部ここを通る。
+    """
+    with open(path, "r", encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=_NoDuplicateKeyLoader) or {}
+
+
+# 範囲記法 START..STOP[:STEP]。`simulation.seed` と `task.record_hours` が共有する。
+#
+# YAML の裸のスカラー (`[1..8]`, `[0..3:0.5]`) として書けるよう、数値として読めない綴りに
+# してある。**リストの要素は数値ならその 1 点**なので、`[1, 5, 42]` は書いたとおり 3 本。
+_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+_RANGE = re.compile(rf"^\s*({_NUMBER})\.\.({_NUMBER})(?::({_NUMBER}))?\s*$")
+
+# 範囲を刻み幅の足し算で作ると 3.0000000000000004 のような値が出るので、生成した値だけ
+# ここで丸める。**YAML に直接書かれた値は丸めない。**
+_RANGE_DECIMALS = 9
+
+
+def _expand_range(text: str, field: str) -> List[float]:
+    """`"1..8"` / `"0..3:0.5"` を両端を含む並びへ展開する。"""
+    matched = _RANGE.match(text)
+    if matched is None:
+        raise ValueError(
+            f"{field} の範囲指定は START..STOP か START..STOP:STEP です (got {text!r})。"
+            " 個別の値は数値のまま並べてください。"
+        )
+    start, stop = float(matched.group(1)), float(matched.group(2))
+    step = float(matched.group(3)) if matched.group(3) else 1.0
+    if step <= 0:
+        raise ValueError(f"{field} の STEP は正の数にしてください (got {text!r})。")
+    if stop < start:
+        raise ValueError(f"{field} の範囲が逆向きです: {text!r}。")
+    count = int(math.floor((stop - start) / step + 1e-9))
+    return [round(start + i * step, _RANGE_DECIMALS) for i in range(count + 1)]
+
+
+def _expand_spec(spec, field: str) -> List[float]:
+    """数値と範囲記法の混在を 1 本の並びへ均す。昇順・重複なし。"""
+    items = list(spec) if isinstance(spec, (list, tuple)) else [spec]
+    values: List[float] = []
+    for item in items:
+        if isinstance(item, str):
+            values.extend(_expand_range(item, field))
+        else:
+            values.append(float(item))
+
+    unique: Dict[float, float] = {}
+    for value in values:
+        unique.setdefault(round(value, _RANGE_DECIMALS), value)
+    return sorted(unique.values())
+
+
+def expand_seed_spec(spec: int | str | List[int | str] | None) -> List[int]:
+    """`simulation.seed` の指定を、実際に走らせる seed のリストへ展開する。
+
+    要素が数値ならその 1 本、文字列なら範囲。混ぜて書ける。結果は昇順・重複なし。
+
+        5             -> [5]
+        [1, 5, 42]    -> [1, 5, 42]           並べた分だけ
+        1..8          -> [1, 2, ..., 8]       両端を含む範囲
+        [1..8]        -> [1, 2, ..., 8]       同じ (リストに入れても入れなくてもよい)
+        [1..10:2]     -> [1, 3, 5, 7, 9]      START..STOP:STEP
+        [1, 5..7, 42] -> [1, 5, 6, 7, 42]     混在
+        None          -> ValueError           resolve() が実値化済みのはずなので来ない
+
+    **この規約を知っているのはここだけ。** 書く側 (config のコメント) と読む側 (実験の
+    ランチャ) が同じ 1 つの関数を通るので、片方だけ解釈がずれることがない。
+
+    **範囲を書いてよいのは入力 YAML だけ。** 実験ランチャがこれを展開し、run ごとの
+    config.yaml には必ずスカラーを書き込む (Hard Rule 7)。
+
+    書き方は `task.record_hours` (`expand_hours_spec()`) と同じ。
+    """
+    if spec is None:
+        raise ValueError(
+            "simulation.seed が未確定です。ConfigManager.resolve() を通せば実値が入ります。"
+        )
+    seeds: List[int] = []
+    for value in _expand_spec(spec, "simulation.seed"):
+        if value != int(value):
+            raise ValueError(f"simulation.seed は整数で書いてください (got {value})。")
+        seeds.append(int(value))
+    return seeds
+
+
+def expand_hours_spec(spec) -> List[float]:
+    """`task.record_hours` の指定を、実際に記録する時刻 [h] のリストへ展開する。
+
+    要素が数値ならその 1 点、文字列なら範囲。混ぜて書ける。結果は昇順・重複なし。
+
+        [0, 6, 72]     -> [0.0, 6.0, 72.0]              並べた分だけ
+        [0..12]        -> [0.0, 1.0, ..., 12.0]         両端を含む範囲。刻みの既定は 1
+        [0..3:0.5]     -> [0.0, 0.5, ..., 3.0]          START..STOP:STEP
+        [0, 1..6, 24]  -> [0.0, 1.0, ..., 6.0, 24.0]    混在
+
+    **範囲を書いてよいのは入力 YAML だけ。** `resolve()` がここで展開するので、run の
+    config.yaml には展開後の時刻が並ぶ (記録を読むだけの経路は範囲記法を知らなくてよい)。
+
+    書き方は `simulation.seed` (`expand_seed_spec()`) と同じ。
+    """
+    if spec is None:
+        raise ValueError("task.record_hours がありません。")
+    return _expand_spec(spec, "task.record_hours")
+
+
+def _overlay_profile(inline: Dict[str, Any], profiles: Dict[str, Any],
+                     kind: str, mode: str) -> Dict[str, Any]:
+    """プロファイル `profiles[kind][mode]` を土台に、`inline` (メイン config の値) を上書きした dict。
+
+    **メイン config に書いた値がプロファイルより優先される。** プロファイルが無ければ
+    `inline` のコピーをそのまま返す。
+    """
+    profile = profiles.get(kind, {}).get(mode) if isinstance(profiles.get(kind), dict) else None
+    merged = dict(inline)
+    if isinstance(profile, dict):
+        for key, value in profile.items():
+            merged.setdefault(key, value)
+    return merged
 
 
 def _to_python_native(obj):
@@ -54,7 +211,20 @@ class SimulationConfig(BaseModel):
     # 通った AppConfig の seed は必ず int になる。ここで既定値を乱数にしてはいけない
     # (Field の default は import 時に 1 回しか評価されず、プロセス内で共有される定数に
     #  なってしまう)。
-    seed: Optional[int] = Field(default=None, description="乱数シード (未指定なら resolve() 時にランダム生成)")
+    # **スカラー・並べ書き・範囲のどれでも受ける。**
+    #   seed: 5            -> seed 5 の run を 1 本
+    #   seed: [1, 5, 42]   -> 並べた 3 本
+    #   seed: [1..8]       -> seed 1..8 の run を 8 本 (両端を含む)
+    #   seed: [1..10:2]    -> STEP 付き = 1, 3, 5, 7, 9
+    #   seed: [1, 5..7]    -> 混在
+    # 複数を書いてよいのは**入力 YAML だけ**。実験ランチャがこれを展開し、run ごとの
+    # config.yaml には必ずスカラーを書き込む (Hard Rule 7: run を特定するのは (seed, backend)
+    # の組なので、記録にリストが残ると「この run の seed」が決まらなくなる)。
+    # 展開は expand_seed_spec() が唯一の入口で、書き方は task.record_hours と同じ。
+    seed: Optional[int | str | List[int | str]] = Field(
+        default=None,
+        description="乱数シード。スカラー、並べ書き、または START..STOP[:STEP] の範囲",
+    )
     # GeNN の計算バックエンド。seed と同じく「実行の再現に必要な情報」なので config に持たせ、
     # `resolve()` が実値 ("cuda" | "cpu") へ確定させて記録に焼き込む。入力 YAML には "auto"
     # (ニューロン数で自動選択) も書けるが、"auto" が検証済み AppConfig に残ることはない。
@@ -66,6 +236,10 @@ class SimulationConfig(BaseModel):
     backend: Optional[Literal["cuda", "cpu"]] = Field(
         default=None, description='GeNN バックエンド。入力では "auto" も可 (resolve() が実値化)'
     )
+    # seed を複数走らせるとき、同時に動かす run の数。
+    # 適正値を決めるのはコア数ではなく GeNN のコンパイルが食うメモリ。backend: cuda では
+    # 1 GPU に複数コンテキストを載せても時分割されるだけなので 1 にすること。
+    parallel: int = Field(default=1, ge=1, description="同時に走らせる run の数")
     # duration: Optional[float] = Field(default=None, description="合計シミュレーション時間(ms)")
     # backend: str = Field(default="CUDA", description="GeNNのバックエンド")
     # model_config = ConfigDict(extra='allow')
@@ -130,24 +304,6 @@ class NetworkConfig(BaseModel):
     connection: ComponentConfig
     weight: ComponentConfig
     delay: ComponentConfig
-    # **ホスト側の生成経路**であって、GeNN のデバイス側格納形式ではない。
-    # GeNN へは常に (pre, post) のペア列を渡す (`matrix_type="SPARSE"` 固定) ので、
-    # この設定を変えても GeNN に渡るものも計算されるネットワークも同一になる。
-    # 変わるのは「numpy で N×N 行列を作るか、COO のリストを作るか」だけ。
-    #
-    # 入力値と記録値で意味が違う。seed / backend / layout.assignment と同じく、
-    # **実際にどちらで走ったか**を記録へ焼き込むため、NetworkBuilder が生成時に
-    # 実値 ("on" | "off") で上書きする。入力の "auto" / "force" が保存済み config.yaml に
-    # 残ることはない (元の指示は source_config.yaml に逐語で残る)。
-    sparse: Literal["auto", "force", "off", "on"] = Field(
-        default="auto",
-        description=(
-            "結合行列の**生成経路** (GeNN の格納形式ではない)。"
-            '入力値: "auto"=結合/重み/遅延の3段すべてが疎対応なら疎生成、'
-            '"force"=疎生成を必須(非対応ならエラー)、"off"=常に密生成。'
-            '記録値: "on"=疎生成で走った / "off"=密生成で走った'
-        ),
-    )
 
 class LayoutConfig(BaseModel):
     """NetworkLayout の構成: population のグローバルID割当方式。
@@ -187,8 +343,8 @@ class AppConfig(BaseModel):
     neurons: Dict[str, NeuronConfig] = Field(default_factory=dict)
     synapses: Dict[str, SynapseGroupConfig] = Field(default_factory=dict)
     network: NetworkConfig
-    # 任意セクションではない。resolve() / load_resolved() が必ず実値へ確定させてから
-    # 検証するので、AppConfig を名乗る以上 assignment は決まっている。
+    # 必須。resolve() は未指定なら既定値を入れてから検証し、load_resolved() は補わずに
+    # 検証エラーにする。どちらを通っても AppConfig の assignment は決まっている。
     layout: LayoutConfig
     task: ComponentConfig
     meta: MetaConfig
@@ -215,11 +371,20 @@ class ConfigManager:
         ことで、resolve() の戻り値と保存される config.yaml が必ず実 seed を持つ。
 
         グローバル np.random の状態を読みも汚しもしないよう、OS エントロピーを直接引く。
+
+        **複数指定 (`seed: [1, 5, 42]` / `seed: [1..8]`) はここでは展開しない。** 展開して
+        1 つに絞るのは「どの run を走らせるか」を決める実験ランチャの仕事で、resolve() の
+        仕事ではない。ここは「リストや範囲が来ても壊れない」ことと「null なら 1 つ引く」
+        ことだけを保証する。
         """
         sim_cfg = dict(sim_cfg)
-        if sim_cfg.get("seed") is None:
+        seed = sim_cfg.get("seed")
+        if seed is None:
             sim_cfg["seed"] = int(np.random.SeedSequence().entropy % (2 ** 32))
             print(f"[ConfigManager] simulation.seed が未指定のため自動生成しました: {sim_cfg['seed']}")
+        elif not isinstance(seed, int):
+            # 書き間違いをここで弾く (走り出してから気づくと数時間を捨てることになる)。
+            expand_seed_spec(seed)
         return sim_cfg
 
     @staticmethod
@@ -282,12 +447,25 @@ class ConfigManager:
         if not filepath.exists():
             print(f"Warning: Missing config file: {filepath}. Returning empty dict.")
             return {}
-        with open(filepath, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        return load_yaml(filepath)
 
-    def resolve(self, main_path: str, active_task: str ) -> AppConfig:
+    def resolve(self, main_path: str, active_task: str | None = None,
+                task_path: str | Path | None = None) -> AppConfig:
         """
         全YAMLファイルを統合し、Pydanticで型検証された AppConfig を生成する。
+
+        Args:
+            active_task: 使う task プロファイル名。**省略するとメイン config の `task:` から
+                読む。** どちらも無ければエラー。どのプロトコルで記録するかは結果を変えるので、
+                本来 config 側が持つべき情報 (呼び出し側が決めると、config.yaml を見ても
+                何で走ったか分からなくなる)。引数を残してあるのは、1 つの config を複数の
+                task で使い回すスクリプト (`scripts/tools/pipeline_check.py` など) のため。
+            task_path: task プロファイルを読む YAML。省略すると従来どおり
+                `configs/components/tasks.yaml`。**実験固有の記録プロトコルは、その実験の
+                ディレクトリに置く** (例: `scripts/develop/task.yaml`)。tasks.yaml は
+                「いつ記録するか」と「どんなタスクか」という別物が同居している棚なので、
+                実験が自分の記録プロトコルを持ち込めるようにここを開けてある。
+                neurons / synapses / areas … は本当の共有部品なので components から動かさない。
         """
         config_dir = Path("configs")
         # サブファイルをまとめるディレクトリ
@@ -296,6 +474,15 @@ class ConfigManager:
         main_cfg = self._load_yaml(main_config_path)
         # save_config() が source_config.yaml を書き出せるように入力元を覚えておく。
         self._source_path = main_config_path
+
+        # task プロファイル名は、指定が無ければメイン config の `task:` から。
+        if active_task is None:
+            active_task = main_cfg.get("task")
+            if not isinstance(active_task, str):
+                raise ValueError(
+                    f"{main_config_path} に `task:` がありません。使う task プロファイル名を"
+                    " config に書くか、resolve(..., active_task=...) で渡してください。"
+                )
 
         # 統合用の辞書を構築
         resolved = {
@@ -319,12 +506,12 @@ class ConfigManager:
         plasticity_data = self._load_yaml(components_dir / "plasticity.yaml")
 
         # --- 1. ニューロン設定の解決 ---
+        # プロファイル (components/*.yaml の type > mode) を土台に、メイン config に
+        # 書いた値で上書きする。**メイン config の値が勝つ** ので、条件ごとの config に
+        # パラメータを 1 つ書くだけで掃引できる。
         for group_name, n_cfg in main_cfg["neurons"].items():
-            resolved["neurons"][group_name] = n_cfg.copy()
-            n_type, n_mode = n_cfg["type"], n_cfg["mode"]
-            # components/neurons.yaml から特定の type > mode のパラメータをマージ
-            if n_type in neurons_data and n_mode in neurons_data[n_type]:
-                resolved["neurons"][group_name].update(neurons_data[n_type][n_mode])
+            resolved["neurons"][group_name] = _overlay_profile(
+                n_cfg, neurons_data, n_cfg["type"], n_cfg["mode"])
 
         # --- 2. シナプス＆可塑性設定の解決 ---
         for group_name, s_cfg in main_cfg["synapses"].items():
@@ -332,15 +519,13 @@ class ConfigManager:
 
             # plasticity (STDP等)
             plas_info = s_cfg["plasticity"]
-            p_type, p_mode = plas_info["type"], plas_info["mode"]
-            if p_type in plasticity_data and p_mode in plasticity_data[p_type]:
-                resolved["synapses"][group_name]["plasticity"].update(plasticity_data[p_type][p_mode])
-                
+            resolved["synapses"][group_name]["plasticity"] = _overlay_profile(
+                plas_info, plasticity_data, plas_info["type"], plas_info["mode"])
+
             # synapse (コンダクタンスや放出ダイナミクス)
             syn_info = s_cfg["synapse"]
-            s_type, s_mode = syn_info["type"], syn_info["mode"]
-            if s_type in synapses_data and s_mode in synapses_data[s_type]:
-                resolved["synapses"][group_name]["synapse"].update(synapses_data[s_type][s_mode])
+            resolved["synapses"][group_name]["synapse"] = _overlay_profile(
+                syn_info, synapses_data, syn_info["type"], syn_info["mode"])
 
         # メイン設定ファイルの network ブロックを取得
         network = main_cfg["network"]
@@ -356,19 +541,34 @@ class ConfigManager:
             "delays.yaml": ("delay", network["delay"]),
         }
 
-        for yaml_file, (key_name, profile_name) in network_map.items():
+        # 値はプロファイル名か、`profile_name` + 上書きする値の dict (保存される config.yaml と
+        # 同じ形)。neurons / synapses と同じく**メイン config に書いた値が勝つ**。
+        for yaml_file, (key_name, spec) in network_map.items():
+            if isinstance(spec, dict):
+                inline = dict(spec)
+                profile_name = inline.pop("profile_name")
+            else:
+                profile_name, inline = spec, {}
             data = self._load_yaml(components_dir / yaml_file)
             profile_data = data[profile_name].copy()
+            profile_data.update(inline)
             profile_data["profile_name"] = profile_name
             resolved["network"][key_name] = profile_data
 
-        # 疎/密の生成経路の選択 (未指定なら "auto")
-        resolved["network"]["sparse"] = network.get("sparse", "auto")
-
-        # タスク設定の読み込み
-        tasks_data = self._load_yaml(components_dir / "tasks.yaml")
+        # タスク設定の読み込み (task_path が渡されればそちらを見る)
+        tasks_path = Path(task_path) if task_path else components_dir / "tasks.yaml"
+        tasks_data = self._load_yaml(tasks_path)
+        if active_task not in tasks_data:
+            raise KeyError(
+                f"task プロファイル {active_task!r} が {tasks_path} にありません "
+                f"(あるもの: {sorted(tasks_data)})"
+            )
         profile_data = tasks_data[active_task].copy()
         profile_data["profile_name"] = active_task
+        # 記録時刻の範囲記法 (`[0..12]`) はここで展開する。seed と同じく、記録に残るのは
+        # 常に実値 (展開後の時刻の並び)。
+        if "record_hours" in profile_data:
+            profile_data["record_hours"] = expand_hours_spec(profile_data["record_hours"])
         resolved["task"] = profile_data
         # ★ 最後にPydanticモデルに流し込んで検証（Validation）を行う
         try:
@@ -438,22 +638,13 @@ class ConfigManager:
             )
 
     def load_resolved(self, resolved_config) -> AppConfig:
-        """
-        過去にresolveした.yamlファイルを読み込む
+        """保存済みの `config.yaml` (run の記録) を読み、検証して返す。
 
-        保存済み config は**実験の記録**なので、seed が null でも実値を捏造しない。
-        捏造すると「再現できないもの」が再現できるように見えてしまう。警告だけ出し、
-        実害が出るケース (layout.assignment='random') は NetworkLayout 側が弾く。
-
-        layout.assignment も同じ理由で補完しない。記録に無ければ検証エラーで落ちる。
-
-        simulation.backend も補完しない。ただし assignment と違い**検証は通す** (None 可)。
-        backend はレイアウト復元に不要なので、backend フィールドが無い時代の config.yaml でも
-        解析はできるべきだから。再実行しようとした時点で NetworkBuilder が弾く。
-
-        network.area も補完しない。assignment と同じく必須フィールドなので、記録に無ければ
-        検証エラーで落ちる (領域を暗黙に決めると、記録を読んでもどの領域で走ったか
-        分からなくなる)。
+        `resolve()` が補う 3 つの値を、ここでは補わない。
+        - `layout.assignment` が無い → 検証エラー。
+        - `simulation.seed` が無い → 警告のみ。`assignment: random` なら layout の復元で落ちる。
+        - `simulation.backend` が無い → 警告のみ。解析には要らず、再実行する段で
+          `NetworkBuilder` が落ちる。
         """
         config_path = Path(resolved_config)
         resolved = self._load_yaml(config_path)
@@ -476,7 +667,25 @@ class ConfigManager:
             raise ValueError(f"Config validation failed: {e}")
 
 
-    def save_config(self, resolved_config: AppConfig, save_dir: str | Path = "results") -> Path:
+    @staticmethod
+    def dump_config(resolved_config: AppConfig, path: str | Path) -> Path:
+        """解決済み config を指定したパスへ YAML で書き出す。
+
+        run ディレクトリへの記録には `save_config()` を使う (ファイル名と
+        `source_config.yaml` の複写はそちらが受け持つ)。
+
+        safe_load で読み戻せるよう、numpy スカラ等を Python ネイティブへ落としてから書く。
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                _to_python_native(resolved_config.model_dump()),
+                f, default_flow_style=False, sort_keys=False, allow_unicode=True,
+            )
+        return path
+
+    def save_config(self, resolved_config: AppConfig, save_dir: str | Path) -> Path:
         """実験の証拠としてコンフィグを保存する。
 
         2 ファイルを書き出す:
@@ -490,35 +699,16 @@ class ConfigManager:
 
         `load_resolved()` 経由で入力元が無い場合は config.yaml のみ書き出す。
 
+        `save_dir` は**必須**。既定値を持たせると、書き出す気の無い呼び出しがリポジトリの
+        どこかに config.yaml を落としていく (実際 `results/config.yaml` がそうして生まれた)。
+        記録を残す場所は、その記録の持ち主が決めること。
+
         Returns:
             書き出した config.yaml のパス。
         """
-        # network.sparse は NetworkBuilder が生成時に実値 ("on"/"off") へ焼き込む。
-        # 未解決のまま保存されるのは save_config() を build() より **前** に呼んだとき
-        # (判定と保存の順序が反転している)。この記録からは「どちらの経路で走ったか」が
-        # 復元できず、そのまま再実行しても同じ経路になる保証がない。
-        if resolved_config.network.sparse not in ("on", "off"):
-            warnings.warn(
-                f"network.sparse が未解決のまま保存されます"
-                f" ({resolved_config.network.sparse!r})。"
-                " 疎/密の決定は NetworkBuilder の生成時に行われるので、save_config() は"
-                " build() の **後** に呼んでください。このままでは、どちらの経路で走ったかが"
-                " config.yaml に残りません。",
-                stacklevel=2,
-            )
-
         out_dir = Path(save_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-
-        out_path = out_dir / CONFIG_NAME
-
-        # Pydanticモデルを辞書に変換して保存。safe_load で読み戻せるよう、
-        # numpy スカラ等を Python ネイティブに落としてから safe_dump する。
-        with open(out_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(
-                _to_python_native(resolved_config.model_dump()),
-                f, default_flow_style=False, sort_keys=False, allow_unicode=True,
-            )
+        out_path = self.dump_config(resolved_config, out_dir / CONFIG_NAME)
 
         if self._source_path is not None and self._source_path.exists():
             shutil.copy2(self._source_path, out_dir / SOURCE_CONFIG_NAME)
@@ -549,11 +739,11 @@ if __name__ == "__main__":
     
     # 5. タスク設定が正しく読み込まれているか
     if config.task:
-        print(f"Active Task Duration: {config.task.duration} ms")
+        print(f"Active Task Profile: {config.task.profile_name}")
 
-    # 6. 保存機能のテスト
-    save_path = manager.save_config(config, save_dir="results")
-    print(f"--- Config saved to: {save_path} ---")
+    # `python -m src.core.config_manager` は **解決済み config を表示するだけ**。
+    # ここで save_config() を呼ばないのは、デバッグ実行がリポジトリのどこかに
+    # config.yaml を落としていくのを避けるため (results/config.yaml はそうして生まれた)。
 
     # デバッグ用：全データの構造を表示（辞書形式）
     # print(json.dumps(config.model_dump(), indent=2, ensure_ascii=False))

@@ -8,7 +8,7 @@
     contourf(..., levels=[d_min, 0])   # 領域の塗り
     contour (..., levels=[0])          # 境界線
 
-`distributions.py` と同じく「ax を取るプリミティブ + out_path を取る図ラッパ」に分けてある。
+「ax を取るプリミティブ (`draw_area`) + 契約を取る図 (`area_figure`)」に分けてある。
 プリミティブがあることで `network()` が自分の Axes に境界線を重ねられる。
 
 エリアは**ダックタイピングで受ける** (型注釈を付けない)。必要なのは `sdf` / `bounds` /
@@ -51,11 +51,9 @@ def _padded_bounds(area, pad: float) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _place_part_labels(ax, labels, span: float, zorder: float) -> None:
-    """part 名を重心へ置く。重心が重なるものは縦にずらす。
+    """part 名を重心へ置く。重心が近すぎるものは順に下へずらす。
 
-    交差するブリッジのように**重心が一致する part は普通に存在する** (modular_4 の
-    十字は縦棒と横棒の重心がどちらも原点)。素直に重心へ置くと文字が完全に重なって
-    片方が読めなくなるので、近すぎるラベルは順に下へ逃がす。
+    交差するブリッジのように重心が一致する part は普通に存在する。
     """
     min_sep = 0.05 * span
     placed: list[tuple[float, float]] = []
@@ -171,23 +169,13 @@ def draw_area(
     return True
 
 
-def plot_area(area, out_path: Path, *, title: str = "Area", **kwargs) -> bool:
-    """エリア**単体**の図を 1 枚保存する。
+def area_figure(view, out_path: Path, **kwargs) -> None:
+    """エリア**単体**の図を 1 枚保存する。副題に面積と実効密度が入る。
 
-    ここに描くのは領域だけ。細胞体と結合は `network(..., area=area)` が境界線の上へ
-    重ねる担当なので、この図には出さない (「領域そのものの確認」と「ネットワークが
-    領域の中でどうなっているかの確認」を別の図に分ける)。
-
-    Args:
-        area: 描くエリア。
-        out_path: 保存先の png。
-        title: 図のタイトル。面積と、`area.num_neurons` が分かれば密度を副題に添える。
-
-    Returns:
-        保存したら True。無界のエリアは描けないので何もせず False。
+    描くのは領域だけ。細胞体と結合を重ねた図は `network()`。
     """
-    if area is None or not area.is_bounded:
-        return False
+    area = view.area()
+    profile_name = view.config.network.area.profile_name
 
     fig, ax = plt.subplots(figsize=(8, 8))
     draw_area(ax, area, **kwargs)
@@ -205,9 +193,8 @@ def plot_area(area, out_path: Path, *, title: str = "Area", **kwargs) -> bool:
         subtitle += f"  (soma {soma_um2 * 1e-6:.3f} mm$^2$)"
     if soma_um2 and num_neurons:
         subtitle += f",  {num_neurons / soma_um2 * 1e6:.0f} neurons/mm$^2$"
-    ax.set_title(f"{title}\n{subtitle}")
+    ax.set_title(f"Area: {profile_name}\n{subtitle}")
     ax.set_xlabel("X Coordinate [um]")
     ax.set_ylabel("Y Coordinate [um]")
 
     save_figure(fig, Path(out_path))
-    return True

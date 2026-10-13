@@ -4,7 +4,7 @@
 
 - マシン: RTX 5070 Ti (Blackwell/sm_120), WSL2, CUDA 13.2
 - ネットワーク: 100 ニューロン全結合（80 exci / 20 inhi, 9,900 シナプス）= 実 akita 構成
-- 実行: 実運用スクリプト `scripts/akita_soc_fig2.py` の `run_steps` をそのまま使用（`scripts/bench_akita.py`）。計測バイアスを避けるため `timing_enabled` は OFF、素の wall-clock。
+- 実行: 実運用スクリプトの `run_steps` をそのまま使用（当時は `scripts/akita_soc_fig2.py`、現 `scripts/akita_soc/run_one.py`）。計測バイアスを避けるため `timing_enabled` は OFF、素の wall-clock。**ベンチ本体だった `scripts/bench_akita.py` は現存しない** —— 再計測するならこの表と同じ条件でスクリプトを書き直すこと。
 - CPU = single_threaded_cpu バックエンド、GPU = CUDA バックエンド。
 
 > **補足（CUDA バックエンド復旧）**: CUDA バックエンドは当初 `genn_model.build()` で segfault していた。原因は apt パッケージ `libnvidia-compute-580-server`（Linux 用ドライバ）の混入で、その `libnvidia-ptxjitcompiler.so.580` がホスト WSL ドライバ(596.36)と不整合で JIT クラッシュ。実行前に以下を設定すれば非破壊で回避できる:
@@ -73,8 +73,10 @@
 毎ステップ全シナプス走査の `syn_dynamics` を廃し、各シナプスの到着時刻にのみ重み更新が発火する。
 custom_Akita の delay_corrected / nearest_dc を event-driven 化し、実測した。
 
-- 計測: `bench_akita.py` develop レート、config = `bench_dc_arrival.yaml`（`akita_soc.yaml` から
-  `delay_by_target` を外し per-synapse 遅延=dc にした版, nearest モード）、CUDA 13.2、同一マシン。
+- 計測: `bench_akita.py`（現存しない）の develop レート、config = `configs/bench_dc_arrival.yaml`
+  （当時の `configs/akita_soc.yaml` から `delay_by_target` を外し per-synapse 遅延=dc に
+  した版, nearest モード。派生元の `akita_soc.yaml` は
+  `scripts/akita_soc/akita_soc.yaml` へ移った）、CUDA 13.2、同一マシン。
 - 実装方式は D-2（既存スパイクキュー再利用＋行を遅延ソート）。**予測が想定した GPU の atomic scatter は不要**
   だが、到着カーネルの並列度は「発火ソースニューロン数」（C-a 方式）で、シナプス数ではない。
 

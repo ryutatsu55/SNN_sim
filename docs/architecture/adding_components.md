@@ -34,7 +34,7 @@ class MyNeuron(BaseNeuronModel):
 |---|---|
 | `BaseNeuronModel` | `model_class`, `params`（定数）, `initial_vars` |
 | `BaseSynapse`, `BasePlasticity` | 同様。GeNN 固有のパラメータ期待値を持つ |
-| `BaseConnection`, `BaseWeight`, `BaseDelay` | ネットワークトポロジのヘルパ |
+| `BaseConnection`, `BaseWeight`, `BaseDelay` | `generate()` が COO を返す。結合は row-major ソート済み・重複なしの `(rows, cols)`、重み・遅延は `generate(rows, cols)` で結合 1 本に 1 値の float32。密な (N, N) は作らない（全ペアに乱数を引くなら `connectors._row_block_coo()`） |
 | `BaseDataLoader` | trial データ（入力 + メタデータ）を yield する |
 | `BaseSpace` | ニューロン座標を生成する |
 | `BaseArea` | ニューロンが住み、軸索が閉じ込められる 2-D 領域。`sdf(points)` のみ抽象 |
@@ -65,7 +65,7 @@ neurons:
 ### 1-4. メインスクリプトで登録をトリガする
 
 ```python
-# scripts/test.py
+# scripts/tools/pipeline_check.py
 import src.models.neurons.my_neuron  # @register デコレータを走らせる
 ```
 
@@ -108,10 +108,10 @@ build 後に永続化する。**配置場所は呼び出し側の決定**なの�
 渡すこと:
 
 ```python
-layout.save_axes(out_dir / AXES_NAME)   # AXES_NAME は src/core/output_manager.py
+layout.save_axes(out_dir / AXES_NAME)   # AXES_NAME は src/core/layout.py
 ```
 
-`scripts/akita_soc_fig2.py` が実際の呼び出し例。`NetworkLayout` はシリアライズを所有するが、
+`scripts/develop/run_one.py` が実際の呼び出し例。`NetworkLayout` はシリアライズを所有するが、
 `outputs/` のレイアウトは所有しない。
 
 ### `module` 軸は大抵コードを書かなくてよい

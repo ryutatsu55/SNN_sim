@@ -42,35 +42,6 @@ def spike_group_metrics(
     }
 
 
-def diagnose_activity(
-    mean_rate_hz: float,
-    weight_at_max_fraction: float,
-    overactive_rate_hz: float = 20.0,
-    weight_saturation_fraction: float = 0.5,
-) -> dict[str, bool | str]:
-    """平均発火率と重み飽和率から実験状態を簡易診断する。"""
-    is_overactive = bool(np.isfinite(mean_rate_hz) and mean_rate_hz >= overactive_rate_hz)
-    is_weight_saturated = bool(
-        np.isfinite(weight_at_max_fraction)
-        and weight_at_max_fraction >= weight_saturation_fraction
-    )
-
-    if is_overactive and is_weight_saturated:
-        diagnosis = "overactive_and_weight_saturated"
-    elif is_overactive:
-        diagnosis = "overactive"
-    elif is_weight_saturated:
-        diagnosis = "weight_saturated"
-    else:
-        diagnosis = "ok"
-
-    return {
-        "is_overactive": is_overactive,
-        "is_weight_saturated": is_weight_saturated,
-        "diagnosis": diagnosis,
-    }
-
-
 def export_spike_csv(spike_time: np.ndarray, neuron_id: np.ndarray, output_path="spikes.csv"):
     """発火時刻とニューロンIDをCSVとして保存する関数"""
 

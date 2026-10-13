@@ -33,7 +33,7 @@ run を一意に決めるものは何か、どこで乱数が消費されるか�
 
 手書きで config を組むなら `ConfigManager` を通すか、自分でシードを設定すること。
 
-`save_resolved(config, save_dir)` は2ファイルを書く:
+`save_config(config, save_dir)` は2ファイルを書く:
 
 | ファイル | 内容 |
 |---|---|

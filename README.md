@@ -19,11 +19,14 @@ GeNNについては最新版の5.4を使用している。環境構築のマニ�
 
 ```text
 SNN_sim/
-├── configs/            # YAML設定ファイル群
-│   ├── components/     # コンポーネント別の設定（neurons, connections, tasks など）
-│   └── test.yaml       # メイン設定ファイル
-├── scripts/            # 実験・シミュレーション実行スクリプト
-│   └── test.py         # メインシミュレーション実行パイプライン
+├── configs/            # 実験に属さない YAML 設定（実験のものは scripts/<実験>/ にある）
+│   ├── components/     # コンポーネント別の設定（neurons, connections, tasks など）。全体で共有
+│   └── *.yaml          # 道具が使うメイン設定 (test.yaml) と構造確認・ベンチ用プロファイル
+├── scripts/            # 実験 (1 実験 = 1 ディレクトリ) と道具
+│   ├── develop/        # 空間構造の上での発達実験
+│   ├── akita_soc/      # Akita SoC Fig.2 の再現
+│   ├── lesion/         # 育った run を切って回復を追う
+│   └── tools/          # 実験に依存しない道具 (構造図・C. elegans・疎通確認)
 ├── src/                # ソースコード
 │   ├── core/           # ビルダー、シミュレータ、設定マネージャ、レジストリ
 │   ├── data/           # データローダー (空間認識、テストデータ等)
@@ -32,16 +35,16 @@ SNN_sim/
 │   │   ├── neurons/    # PQNモデル、LIFモデルなど
 │   │   ├── readouts/   # リードアウト層 (Ridge回帰など)
 │   │   └── synapses/   # シナプス力学 (Tsodyks-Markram等)
-│   └── utils/          # 評価、可視化ツール
+│   └── utils/          # 読み出し契約 (runview.py)、解析 (analysis/)、汎用の描画 (plotting/)
 └── test/               # 単体テスト、アルゴリズム検証スクリプト（詳細は test/README.md）
 
 ```
 <!-- ## 基本的な使い方
 
 **testシミュレーションの実行**
-`scripts/test.py` を使用して、設定読み込みからネットワーク構築、シミュレーション実行、可視化までのパイプラインを実行します。
+`scripts/tools/pipeline_check.py` を使用して、設定読み込みからネットワーク構築、シミュレーション実行、可視化までのパイプラインを実行します。
 ```bash
-python scripts/test.py
+python -m scripts.tools.pipeline_check
 ``` -->
 
 ---
@@ -50,7 +53,7 @@ python scripts/test.py
 
 本プロジェクトでは、「設定ファイル (YAML)」「型バリデーション (Pydantic)」「動的クラス生成 (Registry)」の3者が協調して動作することで、モデルやその条件を独立に管理しています。既存のコアコード（`NetworkBuilder`等）を書き換えることなく、新しいモデルや実験を追加できる設計です。
 
-1. **`configs/` (YAML)**: 実験パラメータや、使用するクラスの「名前（文字列）」を階層的に定義します。実行ファイル`scripts/*.py`から指定されるメイン設定(例:`test.yaml`)とモジュール別設定(`components/*.yaml`)に分割して記述します。
+1. **`configs/` (YAML)**: 実験パラメータや、使用するクラスの「名前（文字列）」を階層的に定義します。メイン設定 (実験のものは `scripts/<実験>/<名前>.yaml`、道具が使うものは `configs/*.yaml`) とモジュール別設定 (`components/*.yaml`) に分割して記述します。どの config がどこにあるかの一覧は `docs/architecture/configuration.md`。
 2. **`src/core/config_manager.py`(`pydantic`)**: 読み込まれたYAMLデータを結合し、型チェックと値のバリデーションを行ってオブジェクト化します。
 3. **`src/core/registry.py`**: YAMLで指定された「文字列」を、実際の「Pythonクラス」に紐付けます。
 

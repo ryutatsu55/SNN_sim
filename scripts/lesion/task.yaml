@@ -1,0 +1,77 @@
+# lesion 実験のプロトコル。
+#
+# **記録プロトコルと損傷プロトコルの両方**がここに入る。develop / akita_soc の task.yaml は
+# 「いつ記録するか」だけだが、損傷実験は「どこを切るか」「いつ切るか」も結果を決めるので、
+# 同じ場所に置く —— どちらも **run ディレクトリの config.yaml に焼き込まれる**ので、
+# 完走した run を見れば何をしたかが全部分かる。
+#
+# **どのプロファイルで走るかはランチャの `--task` が決める** (既定 `lesion`)。
+# develop のようにメイン config の `task:` から取れないのは、lesion のネットワーク設定が
+# 親 run の `config.yaml` から来るため。ランチャがそれと、ここで選んだプロファイルを
+# 合成して run の config.yaml を作る。
+
+lesion:
+  # --- 親 run からの引き継ぎ -------------------------------------------------
+  # 親 run のどの記録時刻を引き継ぐか [h]。null なら**最後の記録**。
+  # **重みとベースラインの両方**がこの時刻から来る (重みは weights_{h}h.npz、
+  # ベースライン窓は spikes_{h}h.npz)。
+  from_hour: null
+
+  # --- 切断 -----------------------------------------------------------------
+  # 切断 spec。**リストで複数書ける。** 組み合わせ方は cut_combine。
+  #   bridge:kind=inter_cluster                       ブリッジを跨いだ結合
+  #   hub:metric=participation,top=3,direction=out    ハブの出力
+  #   between:axis=module                             群をまたぐ結合
+  #   random:pre=exc,post=exc,fraction=0.1,seed=0    極性で絞って無作為に
+  #   synapses:pairs=3-7+12-40                        名指し
+  #
+  # **ここが run ディレクトリの名前になる** (`<親 run>/bridge-inter_cluster/`)。
+  cut:
+    - "bridge:parts=BC0-2-3"
+  cut_combine: or            # "or" | "and"
+
+  # --- タイムライン ----------------------------------------------------------
+  # 切断直後に落ち着かせる時間 [ms]。
+  settle_ms: 60000.0
+
+  # 記録する時刻 [h]。**基準は切断の瞬間**で、ここに並べた各時刻で record_window_ms
+  # ぶんの窓を採る。ベースラインは親 run から引き継ぐので、ここには書かない。
+  #
+  # 数値は 1 点、`START..STOP[:STEP]` は両端を含む範囲。混ぜて書ける
+  # (書き方は develop の record_hours と同じ。`config_manager.expand_hours_spec()`)。
+  record_hours: [0..20]
+
+  # 1 記録窓の長さ [ms]。**ベースラインの窓幅は親 run のもの**なので、ここと違いうる
+  # (窓幅は窓ごとに npz が持つので、発火率は正しく出る)。
+  record_window_ms: 600000.0
+  # GeNN のスパイク記録バッファ [ms]。**record_window_ms より小さくすること。**
+  record_buffer_ms: 10000.0
+
+  # --- 膜電位・入力電流 -----------------------------------------------------
+  # ニューロン ID を 1 つ書くと、記録窓の先頭でそのニューロンの V と Isyn_rec を 1 ステップ
+  # 刻みで採り、トレース図はそれを描く (develop と同じ)。
+  #
+  # **null なら採らない (既定)。** 採取部分は 1 ステップずつ進めるので遅くなる。
+  # 採ったかどうかがその run の記録の一部なので、引数ではなくここにある。
+  #
+  # 効くのは切断後の probe だけ。ベースラインの probe は親 run の記録を使うので持たない
+  # (親 run が採っていたかどうかは問わない)。
+  trace_neuron: null
+  # 記録窓の先頭から何秒ぶん採るか [s]。窓より長くは採れない (窓幅で頭打ち)。
+  trace_window_s: 10.0
+
+  # **解析のパラメータはここに無い。** ハブ判定の閾値も重い指標の on/off も、
+  # それを使う解析関数 (`src/utils/analysis/graph.py`) が既定値として持っている。
+
+lesion_dense_probe:
+  # 回復の初期を細かく見るプロファイル。最初の 6 h を 15 分刻みにする。
+  from_hour: null
+  cut:
+    - "bridge:kind=inter_cluster"
+  cut_combine: or
+  settle_ms: 60000.0
+  record_hours: [0..6:0.25]
+  record_window_ms: 300000.0
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0

@@ -44,6 +44,28 @@ def split_avalanches(spike_times: np.ndarray) -> AvalancheResult:
     return AvalancheResult(sizes=sizes, starts=starts, threshold_ms=threshold)
 
 
+def avalanche_size_columns(sizes, duration_ms: float) -> dict:
+    """アバランチサイズの要約。**平均サイズが臨界性の読み方を決める。**
+
+    べき乗分布 p(s) ∝ s^-α の平均は α と系のサイズで決まるので、平均サイズを見れば
+    「観測された α がどのくらい深いイベントを意味するか」が分かる
+    (N=256 なら α=1.5 で平均 12.3、α=2.0 で 3.7)。
+
+    `duration_ms` は記録窓の長さ。アバランチの**頻度**を出すために要る —— 同じ
+    総スパイク数でも、平均サイズが大きいほど頻度は下がる。
+    """
+    sizes = np.asarray(sizes, dtype=np.float64)
+    if sizes.size == 0 or duration_ms <= 0:
+        return {"avalanche_rate_hz": 0.0, "avalanche_size_mean": float("nan"),
+                "avalanche_size_median": float("nan"), "avalanche_size_max": float("nan")}
+    return {
+        "avalanche_rate_hz": float(sizes.size / (duration_ms / 1000.0)),
+        "avalanche_size_mean": float(sizes.mean()),
+        "avalanche_size_median": float(np.median(sizes)),
+        "avalanche_size_max": float(sizes.max()),
+    }
+
+
 # ======================================================================================
 # 時間ビン連結 (Beggs & Plenz 2003)
 # ======================================================================================
@@ -194,3 +216,68 @@ def branching_parameter(avalanches: BinnedAvalanches) -> dict[str, float]:
             result["sigma_bins"] = float(np.mean(nxt[nonzero] / current[nonzero]))
 
     return result
+
+
+# ======================================================================================
+# 一括計算
+# ======================================================================================
+
+def analyze_avalanches(
+    spike_times: np.ndarray,
+    spike_ids: np.ndarray,
+    duration_ms: float,
+    bin_ms: float | None = None,
+    min_bin_ms: float | None = None,
+    size_fit_max: int = 100,
+    lifetime_fit_max: int = 50,
+    num_pairs: int = 200,
+    corr_bin_ms: float = 5.0,
+    corr_max_lag_ms: float = 500.0,
+    rng: np.random.Generator | None = None,
+) -> tuple[BinnedAvalanches, np.ndarray, np.ndarray, dict[str, float]]:
+    """ビン分割によるアバランシェ検出・分布フィット・分岐パラメータ・相互相関を一括で計算する。
+
+    Beggs & Plenz (2003) の 4 指標を 1 回の呼び出しで揃える。個々の計算はこのパッケージの
+    他のモジュールが持っていて、ここはその**組み立てと列名**だけを受け持つ。
+
+    `min_bin_ms` にはシミュレーションの dt を渡すこと (理由は `detect_avalanches_binned`
+    の docstring を参照)。
+
+    Returns:
+        (avalanches, lags_ms, mean_corr, metrics)
+    """
+    # 循環 import を避けるため関数内で読む —— criticality.py はアバランシェの切り出しには
+    # 関与しないが、逆向き (criticality -> avalanche) の import が将来生えたときに
+    # ここが先に壊れる方が分かりやすい。
+    from src.utils.analysis.criticality import correlation_decay_ms, pair_cross_correlogram
+    from src.utils.analysis.powerlaw import fit_exponent
+
+    avalanches = detect_avalanches_binned(spike_times, duration_ms,
+                                          bin_ms=bin_ms, min_bin_ms=min_bin_ms)
+    size_fit = fit_exponent(avalanches.sizes, xmin=1, xmax=size_fit_max)
+    lifetime_fit = fit_exponent(avalanches.lifetimes_bins, xmin=1, xmax=lifetime_fit_max)
+    branching = branching_parameter(avalanches)
+    lags, corr, pairs_used = pair_cross_correlogram(
+        spike_times, spike_ids, duration_ms,
+        num_pairs=num_pairs, bin_ms=corr_bin_ms, max_lag_ms=corr_max_lag_ms, rng=rng,
+    )
+
+    metrics: dict[str, float] = {
+        "bin_ms": avalanches.bin_ms,
+        "num_avalanches": float(avalanches.num_avalanches),
+        "alpha_size": size_fit["alpha_mle"],
+        "slope_size": size_fit["slope_loglog"],
+        "llr_size": size_fit["llr"],
+        "alpha_lifetime": lifetime_fit["alpha_mle"],
+        "slope_lifetime": lifetime_fit["slope_loglog"],
+        "llr_lifetime": lifetime_fit["llr"],
+        "sigma_bp": branching["sigma_bp"],
+        "sigma_bins": branching["sigma_bins"],
+        "corr_decay_ms": correlation_decay_ms(lags, corr),
+        "corr_num_pairs": float(pairs_used),
+        "max_avalanche_size": (float(avalanches.sizes.max())
+                               if avalanches.num_avalanches else float("nan")),
+        "max_lifetime_ms": (float(avalanches.lifetimes_ms.max())
+                            if avalanches.num_avalanches else float("nan")),
+    }
+    return avalanches, lags, corr, metrics

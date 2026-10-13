@@ -26,15 +26,9 @@ def make_config(offset=1.0, g_scale=0.5) -> ConfigDict:
     return ConfigDict(offset=offset, g_scale=g_scale)
 
 
-def make_mask() -> np.ndarray:
-    return np.array(
-        [
-            [0, 1, 0],
-            [1, 0, 1],
-            [0, 1, 0],
-        ],
-        dtype=np.int8,
-    )
+def make_coo() -> tuple[np.ndarray, np.ndarray]:
+    """3 ニューロンで 0-1, 1-0, 1-2, 2-1 を結ぶ COO (行優先)。"""
+    return np.array([0, 1, 1, 2], dtype=np.int32), np.array([1, 0, 2, 1], dtype=np.int32)
 
 
 def test_generate_raises_when_offset_is_not_number():
@@ -42,12 +36,11 @@ def test_generate_raises_when_offset_is_not_number():
         config=make_config(offset="1.0"),  # type: ignore
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
     with pytest.raises(ValueError, match="offset must be a real number"):
-        weight.generate()
+        weight.generate(*make_coo())
 
 
 def test_generate_raises_when_g_scale_is_not_number():
@@ -55,12 +48,11 @@ def test_generate_raises_when_g_scale_is_not_number():
         config=make_config(g_scale="0.5"),  # type: ignore
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
     with pytest.raises(ValueError, match="g_scale must be a real number"):
-        weight.generate()
+        weight.generate(*make_coo())
 
 
 def test_generate_raises_when_g_scale_is_negative():
@@ -68,12 +60,11 @@ def test_generate_raises_when_g_scale_is_negative():
         config=make_config(g_scale=-0.1),
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
     with pytest.raises(ValueError, match="g_scale must be greater than or equal to 0.0"):
-        weight.generate()
+        weight.generate(*make_coo())
 
 
 def test_generate_accepts_zero_g_scale():
@@ -81,18 +72,10 @@ def test_generate_accepts_zero_g_scale():
         config=make_config(offset=1.2, g_scale=0.0),
         num_neurons=3,
         coords=None,
-        mask=make_mask(),
         rng=np.random.RandomState(0),
     )
 
-    weights = weight.generate()
+    weights = weight.generate(*make_coo())
 
-    expected = np.array(
-        [
-            [0.0, 1.2, 0.0],
-            [1.2, 0.0, 1.2],
-            [0.0, 1.2, 0.0],
-        ],
-        dtype=np.float32,
-    )
+    expected = np.full(4, 1.2, dtype=np.float32)
     np.testing.assert_array_equal(weights, expected)
