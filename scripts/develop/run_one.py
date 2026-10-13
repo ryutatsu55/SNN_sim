@@ -8,6 +8,21 @@ seed も記録条件もすべてそこから読む。run ディレクトリを�
 
 失敗した seed はこれを直接叩けばやり直せる。run ディレクトリごとコピーして叩けば
 同じ run になる。
+
+## 流れ
+
+    build (結合を生成し、GeNN モデルを作る)
+      → build 直後の記録を書く (`store/built.py`) → 構造図 (`report/structure.py`)
+      → setup (GeNN のコンパイル)
+      → record_hours の各時刻について:
+           その時刻まで発達させる (スパイクは捨てる)
+           → 記録窓を走らせて記録する (`record_once`) → 窓ごとの図と指標 (`report/panels.py`)
+      → run 全体の図 (`report/overview.py`)
+
+記録は `<run>/data/`、図と表は `<run>/report/` に出る。
+
+**図はすべて、いったん書いた記録を読み直して描く。** だから描画部分は `replot.py` と
+まったく同じ呼び出しになり、走らせた直後の図と再解析の図が食い違わない。
 """
 import argparse
 import os
@@ -77,12 +92,18 @@ def resolve_trace(config) -> tuple[int | None, float]:
     return neuron, window_s
 
 
-def run_steps(sim: GeNNSimulator, steps: int, chunk_steps: int, keep_spikes: bool):
+def run_steps(sim: GeNNSimulator, steps: int, keep_spikes: bool):
+    """`steps` ステップ進め、その間のスパイクを `{"times", "ids"}` (時刻順) で返す。
+
+    時刻は GeNN の時計 [ms]。`keep_spikes=False` ならスパイクは読まずに捨て、空を返す
+    (記録しない発達区間を速く進めるため)。GeNN の記録バッファがあふれないよう、
+    バッファ長 (`sim.max_timesteps`) ずつ区切って進める。
+    """
     all_times = []
     all_ids = []
     remaining = int(steps)
     while remaining > 0:
-        n_steps = min(remaining, chunk_steps)
+        n_steps = min(remaining, sim.max_timesteps)
         sim.step(n_steps)
         if keep_spikes:
             spikes = sim.get_global_spikes()
@@ -144,7 +165,7 @@ def _model_name(run_dir: Path, seed: int) -> str:
     """GeNN のモデル名。**並列実行する run どうしで必ず違う名前になること。**
 
     同じ名前だと `<model名>_CODE` を共有し、同時にコード生成した 2 プロセスが互いの
-    生成物を壊す。
+    生成物を壊す。run ディレクトリ名は名前を重複させないためだけに使い、意味は読み取らない。
     """
     stem = run_dir.parent.name if run_dir.name.startswith("seed") else run_dir.name
     safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in stem)
@@ -152,12 +173,14 @@ def _model_name(run_dir: Path, seed: int) -> str:
 
 
 def record_once(sim, series, run_dir: Path, hour: float, *,
-                record_start_ms: float, record_window_steps: int, chunk_steps: int,
+                record_start_ms: float, record_window_steps: int,
                 trace_neuron: int | None, trace_window_s: float,
                 metrics_csv) -> None:
-    """記録時刻 1 点ぶん: 窓を走らせ、npz を書き、**書いたものを読み直して**出力する。
+    """記録時刻 1 点ぶん: 窓を走らせ、npz を書き、それを読み直して図と指標を出す。
 
-    最後の一手で `replot.py` とまったく同じ呼び出しになる。
+    `trace_neuron` を指定すると、**窓の先頭** `trace_window_s` [s] を 1 ステップ刻みで
+    進めてそのニューロンの膜電位と入力電流を採り、残りは通常どおり進める。スパイクは
+    両方をつないで窓全体の 1 本にするので、トレースとラスターは同じ窓・同じ実現になる。
     """
     config = series.config
     dt = float(config.simulation.dt)
@@ -169,11 +192,8 @@ def record_once(sim, series, run_dir: Path, hour: float, *,
 
     trace = None
     if trace_neuron is None:
-        spikes = run_steps(sim, record_window_steps, chunk_steps, keep_spikes=True)
+        spikes = run_steps(sim, record_window_steps, keep_spikes=True)
     else:
-        # 記録窓の先頭を 1 ステップ刻みで進めて膜電位・入力電流を採り、残りの窓は
-        # 高速なチャンク実行で進める。両パートのスパイクをつないで窓全体のスパイク列に
-        # するので、膜電位とラスターは同じ窓・同じ実現のデータになる。
         effective_trace_s = min(trace_window_s, record_window_ms / 1000.0)
         trace_v, trace_i, trace_spikes = capture_neuron_state(
             sim, effective_trace_s, np.array([trace_neuron]))
@@ -185,7 +205,7 @@ def record_once(sim, series, run_dir: Path, hour: float, *,
                 f"トレース採取が記録窓を超えました ({trace_steps} > {record_window_steps} steps)。"
                 " record_buffer_ms を record_window_ms より小さくしてください。"
             )
-        rest = run_steps(sim, remaining_steps, chunk_steps, keep_spikes=True) if remaining_steps \
+        rest = run_steps(sim, remaining_steps, keep_spikes=True) if remaining_steps \
             else {"times": np.array([], dtype=np.float64), "ids": np.array([], dtype=np.int32)}
         times = np.concatenate([trace_spikes["times"], rest["times"]])
         ids = np.concatenate([trace_spikes["ids"], rest["ids"]])
@@ -205,7 +225,7 @@ def record_once(sim, series, run_dir: Path, hour: float, *,
         save_neuron_timeseries(paths.data_path(run_dir, record_filename(CURRENT, hour)),
                                trace_i, neuron_ids=[trace_neuron], dt=dt)
 
-    # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
+    # 書いたものを読み直して出力する (replot.py と同じ呼び出し)。
     panels.emit(series.window(hour), metrics=metrics_csv)
 
 
@@ -243,8 +263,7 @@ def main():
     genn_model, layout = builder.build(rec_spike=True)
 
     # build 直後の記録 (結合・遅延・初期重み・座標・軸索・外部軸)。何を書くかは
-    # `store/built.py` の一覧。**書いたら読み直す** —— 構造図も窓ごとの図と同じく
-    # 記録から描くので、`replot.py` とまったく同じ呼び出しになる。
+    # `store/built.py` の一覧。
     write_built(run_dir, builder)
     # 記録窓はこれから書くので 0 個。`series.window(hour)` が 1 窓ずつ拾っていく。
     series = open_run(run_dir, require_windows=False)
@@ -261,8 +280,6 @@ def main():
           f"[1, {metrics.resolve_avalanche_smax(config)}] (N={builder.total_neurons})")
     dt = float(config.simulation.dt)
     record_window_ms = float(config.task.record_window_ms)
-    buffer_ms = float(getattr(config.task, "record_buffer_ms", record_window_ms))
-    chunk_steps = max(1, int(buffer_ms / dt))
     record_window_steps = max(1, int(record_window_ms / dt))
     record_starts = sorted(float(hour) * MS_PER_HOUR for hour in config.task.record_hours)
 
@@ -272,16 +289,18 @@ def main():
     for record_start_ms in record_starts:
         develop_ms = record_start_ms - current_ms
         if develop_ms < -1e-9:
-            raise ValueError("record_hours must be sorted and non-overlapping.")
+            raise ValueError(
+                f"record_hours の窓が重なっています ({record_start_ms / MS_PER_HOUR:.3f} h)。"
+                " 間隔を record_window_ms より広げてください。")
         if develop_ms > 0:
-            run_steps(sim, int(round(develop_ms / dt)), chunk_steps, keep_spikes=False)
+            run_steps(sim, int(round(develop_ms / dt)), keep_spikes=False)
             current_ms += develop_ms
 
         hour = record_hour(record_start_ms)
         record_once(
             sim, series, run_dir, hour,
             record_start_ms=record_start_ms,
-            record_window_steps=record_window_steps, chunk_steps=chunk_steps,
+            record_window_steps=record_window_steps,
             trace_neuron=trace_neuron, trace_window_s=trace_window_s,
             metrics_csv=metrics_csv,
         )

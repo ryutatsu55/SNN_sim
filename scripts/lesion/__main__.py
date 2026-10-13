@@ -2,8 +2,10 @@
 
     python -m scripts.lesion --parent <親 run または条件ディレクトリ>
 
-**引数は「どの run を引き継ぐか」「どの損傷プロトコルか」の 2 つだけ。** それ以外
-(切断 spec・タイムライン・解析オプション) はすべて `task.yaml` 側にある。
+**結果を左右する引数は「どの run を引き継ぐか」(`--parent`) と「どの損傷プロトコルか」
+(`--task`) の 2 つだけ。** それ以外 (切断 spec・タイムライン・解析オプション) はすべて
+`task.yaml` 側にある。残りの `--parallel` (同時に走らせる数) と `--dry-run` (下見だけ) は
+走らせ方を変えるだけで、run の結果は変えない。
 
 ## なぜ develop と違って `--config` を取らないのか
 
@@ -33,6 +35,10 @@ lesion の**ネットワーク設定は親 run から来る**。同じ seed で�
 切断 spec から機械的に決まる (`selectors.cut_label()`) ので、**名前を引数で受けない** ——
 名前と中身がずれる余地を作らないため。同じ親を同じ spec で 2 度切ることはできない
 (既にあれば止まる)。
+
+`--dry-run` の下見は `<切断条件>.dry-run/` に作る。本番と同じ名前にすると、下見の後に
+本番が「既にあります」で止まる。下見のディレクトリには `config.yaml` と `run.log` だけが
+残り、切断本数などの結果は `run.log` に出る。要らなくなったら手で消す。
 """
 import argparse
 import os
@@ -57,6 +63,8 @@ _HERE = Path(__file__).resolve().parent
 TASK_PATH = _HERE / "task.yaml"
 DEFAULT_TASK = "lesion"
 RUN_LOG_NAME = "run.log"
+# `--dry-run` の下見を置くディレクトリ名の印。人が見分けるためだけのもので、読み取らない。
+DRY_RUN_SUFFIX = ".dry-run"
 
 
 def parse_args():
@@ -120,8 +128,9 @@ def load_protocol(name: str) -> dict:
 def resolve_parallel(configs: list, requested: int | None) -> int:
     """同時に走らせる run の数。**既定は親 run の `simulation.parallel`。**
 
-    lesion は自分のネットワーク設定を持たないので、並列度も親から引き継ぐ (run の
-    `config.yaml` にもその値が焼き込まれるので、記録と実行が食い違わない)。
+    lesion は自分のネットワーク設定を持たないので、並列度も親から引き継ぐ。
+    `--parallel` で上書きした値も `prepare_runs()` が run の `config.yaml` に書き込むので、
+    記録と実行が食い違わない。
 
     親が複数あって値が割れているときは**選ばずに止める**。多数決も最大値も、
     どちらを採ったか記録に残らないため。
@@ -137,11 +146,16 @@ def resolve_parallel(configs: list, requested: int | None) -> int:
 
 
 def prepare_runs(manager: ConfigManager, parents: list[Path], configs: list, protocol: dict,
-                 label: str) -> list[Path]:
-    """**親 run の下に** `<切断条件>/` を作り、`config.yaml` を置く。"""
+                 run_name: str, parallel: int) -> list[Path]:
+    """**親 run の下に** `<run_name>/` を作り、`config.yaml` を置く。
+
+    `run_name` は切断条件 (`cut_label()`)。`--dry-run` ならそれに `DRY_RUN_SUFFIX` を付けたもの。
+
+    `config.yaml` の `simulation.parallel` は、実際に使う並列度 `parallel` で上書きする。
+    """
     run_dirs = []
     for parent, config in zip(parents, configs):
-        run_dir = parent / label
+        run_dir = parent / run_name
         if run_dir.exists():
             raise SystemExit(
                 f"{run_dir} は既にあります。\n"
@@ -155,6 +169,7 @@ def prepare_runs(manager: ConfigManager, parents: list[Path], configs: list, pro
         merged = dict(protocol)
         merged["parent_run"] = str(parent.resolve())
         config.task = type(config.task).model_validate(merged)
+        config.simulation.parallel = int(parallel)
         manager.save_config(config, save_dir=run_dir)
         run_dirs.append(run_dir)
     return run_dirs
@@ -187,6 +202,7 @@ def main():
     # **ネットワークを組む前に決まる。** 切断 spec だけから決まるので、ランチャが
     # run ディレクトリ名に使える (`run_one` 側で付く label と同じ値)。
     label = cut_label(protocol.get("cut") or [], str(protocol.get("cut_combine", "or")))
+    run_name = label + DRY_RUN_SUFFIX if args.dry_run else label
     manager = ConfigManager()
     # **親の config がこの run のネットワーク設定。** 並列度もここから取るので、
     # run ディレクトリを作る前に全部読んでおく。
@@ -210,7 +226,7 @@ def main():
           f"({'--parallel' if args.parallel is not None else '親 run の simulation.parallel'}"
           f", backend={backend})")
 
-    run_dirs = prepare_runs(manager, parents, configs, protocol, label)
+    run_dirs = prepare_runs(manager, parents, configs, protocol, run_name, parallel)
     for parent, run_dir in zip(parents, run_dirs):
         print(f"  {parent} -> {run_dir}")
 
@@ -225,7 +241,9 @@ def main():
             print(f"  {run_dir}  (ログ: {run_dir / RUN_LOG_NAME})", file=sys.stderr)
         print("  再実行: python -m scripts.lesion.run_one <run ディレクトリ>", file=sys.stderr)
         raise SystemExit(1)
-    print(f"完了しました: {len(run_dirs)} run  (それぞれ <親 run>/{label}/)")
+    print(f"完了しました: {len(run_dirs)} run  (それぞれ <親 run>/{run_name}/)")
+    if args.dry_run:
+        print(f"  下見の結果は各 <親 run>/{run_name}/{RUN_LOG_NAME} にあります")
 
 
 if __name__ == "__main__":

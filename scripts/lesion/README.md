@@ -19,7 +19,7 @@ python -m scripts.lesion --parent outputs/develop/<条件>
 | `--parent` | 引き継ぐ親 run。**run ディレクトリそのものでも、`seedNN/` を並べた条件ディレクトリでもよい** |
 | `--task` | `task.yaml` の損傷プロトコル名 (既定 `lesion`) |
 | `--parallel` | 同時に走らせる run の数。**既定は親 run の `simulation.parallel`** (親の本数で頭打ち)。**結果に影響しない**ので引数で上書きしてよい |
-| `--dry-run` | GeNN を触らず、切断対象を数えて終了 |
+| `--dry-run` | GeNN を触らず、切断対象を数えて終了。`<切断条件>.dry-run/` に作り、結果は `run.log` に出る |
 
 ### 出力は親 run の下
 
@@ -140,7 +140,10 @@ cut_combine: or
 
 **書いたら `--dry-run` で数える。** GeNN を触らずに下見だけ走るので、spec を確かめるのは
 これが一番早い。切断本数・属性ごとの「切断群 vs 残存群」・幾何 vs 位相の突き合わせまで
-端末に出る。run ディレクトリには `config.yaml` と `run.log` だけが残り、`data/` の記録は書かれない。
+`run.log` に出る (端末には出ない)。下見は本番とは別の `<親 run>/<切断条件>.dry-run/` に
+作られ、`config.yaml` と `run.log` だけが残る (`data/` の記録は書かれない)。だから下見の後に
+そのまま本番を走らせられる。同じ spec でもう一度下見すると「既にあります」で止まるので、
+要らなくなった下見のディレクトリは手で消す。
 
 ```bash
 python -m scripts.lesion --parent outputs/develop/<条件> --dry-run
@@ -376,13 +379,14 @@ GeNN のシナプス集団は `set_sparse_connections()` で確定し、実行�
   → 復元した重みを載せ、切断マスクで行を削除
   → 記録を書く (config / 切断前後の結合・遅延・重み・軸索幾何 / lesion.json / 切断プロファイル)
   → 読み直して構造図 (series.built())
-  → ベースライン (probe 0) = 親 run の記録時刻の窓をそのまま置く
-  → settle → record_hours の各時刻で probe
+  → setup → GeNN 上の重みが復元値と一致するか確かめる
+  → ベースライン (番号 BASELINE_INDEX) = 親 run の記録時刻の窓をそのまま置く
+  → settle → record_hours の各時刻で probe (番号は record_hours の添字 0, 1, …)
 ```
 
 **ベースラインは測り直さない。** 切断前のネットワークをもう一度走らせても、settle と
 記録窓のあいだに起きるのは親 run の続きでしかないので、親の `weights_{h}h.npz` と
-`spikes_{h}h.npz` をそのまま probe 0 に置く (引き継ぎ時刻は `task.from_hour`)。
+`spikes_{h}h.npz` をそのままベースラインに置く (引き継ぎ時刻は `task.from_hour`)。
 おかげで GeNN のコンパイルは run につき 1 回で済む。
 
 **ベースライン窓の幅は親のもの**で、`task.record_window_ms` とは違いうる。窓幅は窓ごとに

@@ -8,13 +8,20 @@
 
 ## 流れ
 
-    下見 (build するが compile しない)
-      → 親の重みを (pre, post) で復元し、切断対象を決める
-      → 記録を書く (結合 / lesion.json / 切断プロファイル)
-      → **ベースラインは親 run の記録時刻の窓をそのまま置く** (probe 0)
-    本番 (compile する 1 回きりの build)
-      → 復元した重みを載せ、切断マスクで行を削除
-      → settle → record_hours の各時刻で probe
+    下見 (結合を生成するが GeNN モデルは作らない)
+      → 親の外部軸を読み戻し、親の重みを (pre, post) で復元する
+      → 切断対象を決め、切断したものの素性を端末に出す
+      (--dry-run はここで終わる。run ディレクトリには何も書かない)
+    本番 (GeNN モデルを作る 1 回きりの build。復元した重みを載せ、切断した行を除いて登録)
+      → 記録を書く (build 直後の記録 / lesion.json / 切断プロファイル) → 構造図
+      → setup → GeNN 上の重みが復元値と一致するか確かめる
+      → **ベースラインは親 run の記録時刻の窓をそのまま置く** (番号 `BASELINE_INDEX`)
+      → settle → record_hours の各時刻で probe (番号は record_hours の添字 0, 1, …)
+
+記録は `<run>/data/`、図と表は `<run>/report/` に出る。
+
+**図はすべて、いったん書いた記録を読み直して描く。** だから描画部分は `replot.py` と
+まったく同じ呼び出しになり、走らせた直後の図と再解析の図が食い違わない。
 
 **ベースラインを自分で測らないのが要点。** 切断前のネットワークをもう一度走らせても、
 settle と記録窓のあいだに起きるのは親 run の続きでしかない。測り直すぶん GeNN の
@@ -47,8 +54,9 @@ from src.core.simulator import GeNNSimulator
 from src.utils.analysis.axons import synapse_crossed_bridges
 from src.utils.analysis.connectivity import bridge_part_indices
 
-from scripts.lesion.analysis import metrics as lesion_metrics
 from src.utils.analysis.weights import align_saved_to_coo
+
+from scripts.lesion.analysis import metrics as lesion_metrics
 from scripts.lesion.analysis.restore import (verify_axon_geometry,
                                              verify_geometry_alignment)
 from scripts.lesion.analysis.selectors import LesionContext, combine, parse_cut_spec
@@ -56,13 +64,12 @@ from scripts.lesion.store.parent_run import load_parent
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
 from scripts.lesion.store.built import write_built
-from scripts.lesion.store.formats import (METRICS_NAME, MS_PER_HOUR,
+from scripts.lesion.store.formats import (BASELINE_INDEX, METRICS_NAME, MS_PER_HOUR,
                                           PHASE_BASELINE, PHASE_POST, SPIKES, VOLTAGE,
                                           CURRENT, WEIGHTS, MetricsWriter,
                                           probe_filename, save_cut, save_manifest,
                                           save_spikes, save_neuron_timeseries,
                                           save_weight_values)
-from scripts.lesion.store.formats import BASELINE_INDEX
 from scripts.lesion.store.views import open_run
 
 import src.models.neurons.akita_escape_lif
@@ -81,17 +88,22 @@ def parse_args():
         description="run ディレクトリの config.yaml を読んで 1 つの損傷 run を走らせる。")
     parser.add_argument("run_dir", help="config.yaml が置かれた run ディレクトリ")
     parser.add_argument("--dry-run", action="store_true",
-                        help="GeNN を触らず、切断対象を数えて lesion.json を書いて終了")
+                        help="GeNN を触らず、切断対象を数えて表示して終了 (run ディレクトリには何も書かない)")
     return parser.parse_args()
 
 
-def run_steps(sim, steps: int, chunk_steps: int, keep_spikes: bool):
-    """chunk_steps ずつ進めながらスパイクを回収する。"""
+def run_steps(sim, steps: int, keep_spikes: bool):
+    """`steps` ステップ進め、その間のスパイクを `{"times", "ids"}` (時刻順) で返す。
+
+    時刻は GeNN の時計 [ms] (切断軸ではない)。`keep_spikes=False` ならスパイクは読まずに
+    捨て、空を返す (settle や probe 間を速く進めるため)。GeNN の記録バッファがあふれない
+    よう、バッファ長 (`sim.max_timesteps`) ずつ区切って進める。
+    """
     all_times = []
     all_ids = []
     remaining = int(steps)
     while remaining > 0:
-        n_steps = min(remaining, chunk_steps)
+        n_steps = min(remaining, sim.max_timesteps)
         sim.step(n_steps)
         if keep_spikes:
             spikes = sim.get_global_spikes()
@@ -172,7 +184,11 @@ def capture_neuron_state(sim, window_s: float, neuron_ids: np.ndarray):
 
 def build_network(config, model_name, restored_weights=None,
                   cut_mask=None, preserve_fan_in: bool = False, compile_model: bool = True):
-    """再ビルド + (任意で) 重み復元と構造的除去。
+    """config から同じネットワークを組み直し、`(builder, GeNN モデル, layout)` を返す。
+
+    `restored_weights` を渡すと重みをその値に差し替え、`cut_mask` を渡すと True の
+    シナプスを除いてから登録する。`compile_model=False` は下見用で、結合を生成するだけで
+    GeNN モデルは作らない (戻り値の 2 番目が None。`builder.global_coo()` は使える)。
 
     重みの差し替えと行の削除を**同じ 1 つの変換**で行う。`replace_global_coo()` は
     乱数の消費が終わった後・GeNN 登録の前に呼ばれるので、ネットワーク実現は
@@ -207,17 +223,13 @@ def build_network(config, model_name, restored_weights=None,
 
 
 def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
-          clock_start_ms: float, window_ms: float, chunk_steps: int, dt: float,
+          clock_start_ms: float, window_ms: float, dt: float,
           trace_neuron: int | None, trace_window_s: float, metrics_csv) -> None:
-    """probe 1 点ぶん: 窓を走らせ、npz を書き、**書いたものを読み直して**出力する。
+    """probe 1 点ぶん: 窓を走らせ、npz を書き、それを読み直して図と指標を出す。
 
     `start_ms` は窓の先頭の**切断軸**の時刻、`clock_start_ms` は同じ瞬間の **GeNN の
     時計**。settle のぶんだけずれるので、GeNN が返すスパイク時刻は切断軸へ移してから
     書く (npz の時刻は切断軸、`record_start_ms` はその上の原点)。
-
-    最後の一手が要点。in-memory の値をそのまま図へ渡すと、本番と再解析で描画経路が
-    2 本になる。一度書いてから `series.window(index)` で読み直せば、`replot.py` と
-    まったく同じ呼び出しになる。
 
     切断**後**の窓しか通らない (ベースラインは `write_baseline()`)。
 
@@ -229,7 +241,7 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
 
     trace = None
     if trace_neuron is None:
-        spikes = run_steps(sim, steps, chunk_steps, keep_spikes=True)
+        spikes = run_steps(sim, steps, keep_spikes=True)
     else:
         effective_trace_s = min(trace_window_s, window_ms / 1000.0)
         trace_v, trace_i, trace_spikes = capture_neuron_state(
@@ -240,7 +252,7 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
             raise ValueError(
                 f"トレース採取が記録窓を超えました ({len(trace_v)} > {steps} steps)。"
                 " record_buffer_ms を record_window_ms より小さくしてください。")
-        rest = (run_steps(sim, remaining, chunk_steps, keep_spikes=True) if remaining
+        rest = (run_steps(sim, remaining, keep_spikes=True) if remaining
                 else {"times": np.array([], dtype=np.float64),
                       "ids": np.array([], dtype=np.int32)})
         times = np.concatenate([trace_spikes["times"], rest["times"]])
@@ -266,12 +278,12 @@ def probe(sim, series, run_dir: Path, index: int, *, start_ms: float,
         save_neuron_timeseries(paths.data_path(run_dir, probe_filename(CURRENT, index)),
                                trace_i, neuron_ids=[trace_neuron], dt=dt)
 
-    # 書いたものを読み直す。**ここから先は replot.py と同一の呼び出し。**
+    # 書いたものを読み直して出力する (replot.py と同じ呼び出し)。
     panels.emit(series.window(index), metrics=metrics_csv)
 
 
 def write_baseline(series, run_dir: Path, parent, weights, metrics_csv) -> None:
-    """親 run の記録時刻の窓を、この run のベースライン (probe 0) として置く。
+    """親 run の記録時刻の窓を、この run のベースライン (番号 `BASELINE_INDEX`) として置く。
 
     **測り直さない。** 切断前のネットワークをもう一度走らせても、settle と記録窓の
     あいだに起きるのは親 run の続きでしかないので、親の記録をそのまま使う。
@@ -396,7 +408,6 @@ def main():
     window_ms = float(protocol.record_window_ms)
     # **基準は切断の瞬間。** ランチャが展開済みの時刻 [h] を並べてある。
     record_starts = sorted(float(hour) * MS_PER_HOUR for hour in protocol.record_hours)
-    chunk_steps = max(1, int(float(protocol.record_buffer_ms) / dt))
     trace_neuron, trace_window_s = resolve_trace(config)
     smax = lesion_metrics.resolve_avalanche_smax(config)
 
@@ -492,8 +503,7 @@ def main():
     save_manifest(paths.data_dir(run_dir), manifest)
     save_cut(paths.data_dir(run_dir), per_synapse)
 
-    # **書いたら読み直す。** 構造図も probe ごとの図と同じく記録から描くので、
-    # `replot.py` とまったく同じ呼び出しになる。probe はこれから書くので 0 個。
+    # 書いた記録を読み直して構造図を出す。probe はこれから書くので 0 個。
     series = open_run(run_dir, require_windows=False)
     print("\nGenerating post-lesion structure figures...")
     structure.emit(series.built())
@@ -516,8 +526,7 @@ def main():
     # **settle は時間軸に含まれない。** record_hours の 0 h は settle 明けの時刻。
     # そのぶん GeNN の時計は切断軸より先を指すので、ずれを持っておいて probe へ渡す。
     if protocol.settle_ms > 0:
-        run_steps(sim, int(round(float(protocol.settle_ms) / dt)), chunk_steps,
-                  keep_spikes=False)
+        run_steps(sim, int(round(float(protocol.settle_ms) / dt)), keep_spikes=False)
     clock_offset_ms = float(protocol.settle_ms)
 
     elapsed_ms = 0.0
@@ -528,15 +537,14 @@ def main():
                 f"record_hours の窓が重なっています ({record_start_ms / MS_PER_HOUR:.3f} h)。"
                 " 間隔を record_window_ms より広げてください。")
         if gap_ms > 0:
-            run_steps(sim, int(round(gap_ms / dt)), chunk_steps, keep_spikes=False)
+            run_steps(sim, int(round(gap_ms / dt)), keep_spikes=False)
             elapsed_ms += gap_ms
-        # **番号は `record_hours` の添字そのもの。** ベースラインは別名なのでずらさない。
-        index = k
-        print(f"  probe {index + 1}/{len(record_starts)}"
+        # probe 番号は `record_hours` の添字 k そのもの (ベースラインは BASELINE_INDEX)。
+        print(f"  probe {k + 1}/{len(record_starts)}"
               f"  t = {elapsed_ms / MS_PER_HOUR:.2f} h")
-        probe(sim, series, run_dir, index, start_ms=elapsed_ms,
+        probe(sim, series, run_dir, k, start_ms=elapsed_ms,
               clock_start_ms=elapsed_ms + clock_offset_ms, window_ms=window_ms,
-              chunk_steps=chunk_steps, dt=dt, trace_neuron=trace_neuron,
+              dt=dt, trace_neuron=trace_neuron,
               trace_window_s=trace_window_s, metrics_csv=metrics_csv)
         elapsed_ms += window_ms
 
