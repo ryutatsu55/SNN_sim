@@ -52,6 +52,10 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。今は無い。
+TABLES = ()
+
+
 def emit(window, *, metrics) -> None:
     """probe 1 点ぶんの出力。
 
@@ -59,8 +63,8 @@ def emit(window, *, metrics) -> None:
         window: `store/views.py` の `Window`。**直前に書いた npz を読み直したもの。**
         metrics: `formats.MetricsWriter`。このprobeの行を 1 行追記する。
     """
-    # --- 表 ---
-    # **`FIGURES` に入れていない。** 図と違って `(view, out_path)` ではなく、
+    # --- 記録 ---
+    # **`FIGURES` / `TABLES` に入れていない。** 報告と違って `(view, out_path)` ではなく、
     # 窓をまたいで開きっぱなしのライターへ 1 行足す操作だから。
     metrics.append(build_row(window))
 
@@ -69,6 +73,6 @@ def emit(window, *, metrics) -> None:
     # 図から元の記録を引くのに読み替えが要らない。**時刻はファイル名に埋めない** ——
     # 切断前の probe は負の時刻を持ち、間隔が細かいと float の往復で戻らないため。
     tag = probe_token(window.index)
-    for label, draw, kind, template in FIGURES:
-        guard(label, draw, window,
-              paths.fig_path(window.run_dir, kind, template.format(tag=tag)))
+    for label, make, kind, template in FIGURES + TABLES:
+        guard(label, make, window,
+              paths.report_path(window.run_dir, kind, template.format(tag=tag)))

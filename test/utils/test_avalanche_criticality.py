@@ -257,7 +257,7 @@ def test_correlation_decay_reports_inf_when_never_converging():
 
 
 # --------------------------------------------------------------------------------------
-# 統合 + 判定
+# 統合
 # --------------------------------------------------------------------------------------
 
 def test_analyze_avalanches_end_to_end():
@@ -281,6 +281,5 @@ def test_analyze_avalanches_end_to_end():
     assert metrics["bin_ms"] == 1.0
     assert metrics["alpha_size"] == pytest.approx(1.5, abs=0.2)
     assert metrics["sigma_bp"] == pytest.approx(1.0, abs=0.1)
-    # 判定キーが揃っていること
-    for key in ("check_slope_size", "check_slope_lifetime", "check_sigma", "check_corr_decay"):
-        assert key in metrics
+    # 閾値判定は列に持たない (記録には測った値だけを入れる)
+    assert not any(key.startswith("check_") for key in metrics)

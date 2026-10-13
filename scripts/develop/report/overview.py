@@ -16,7 +16,7 @@ from scripts.develop.figures.fig2d import fig2d
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
 #
-# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `figures/overview/` なので
+# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `report/overview/` なので
 # 表には持たせない。渡す view は run 全体の `Series`。
 FIGURES = (
     ("Figure 2c", fig2c, "figure2c_reproduction.png"),
@@ -25,10 +25,14 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。今は無い。
+TABLES = ()
+
+
 def emit(series) -> None:
-    """run 全体の図を `<run>/figures/overview/` へ。"""
-    out = paths.fig_dir(series.run_dir, paths.OVERVIEW)
+    """run 全体の図と表を `<run>/report/overview/` へ。"""
+    out = paths.report_dir(series.run_dir, paths.OVERVIEW)
     out.mkdir(parents=True, exist_ok=True)
 
-    for label, draw, name in FIGURES:
-        guard(label, draw, series, out / name)
+    for label, make, name in FIGURES + TABLES:
+        guard(label, make, series, out / name)

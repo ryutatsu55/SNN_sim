@@ -7,9 +7,9 @@
 `src/utils/analysis/` の既存関数に任せる。この分担のおかげで、ここにあるのは呼び出しと
 列名の組み立てだけになる。**数式は分岐したらバグ**なので共有層のまま。
 
-`metrics.csv` に入るのは**絶対値だけ**。ベースラインとの差 (`delta_*` / `ratio_*`) は
-そこから導ける派生値なので、run 終了後に `metrics_delta.csv` として別に出す
-(`write_delta_table`)。1 行ずつ追記する記録に、全行が揃わないと決まらない列は混ぜない。
+`metrics.csv` に入るのは**probe ごとに変わる値だけ**。配線のトポロジー (次数・成分・
+ハブ・媒介中心性など) は切断後の run を通して変わらないので、`analysis/structure.py` が
+切断の前後 1 回ずつ `structure.csv` に書く。
 """
 from __future__ import annotations
 
@@ -18,17 +18,17 @@ import numpy as np
 from src.utils.analysis.avalanche import avalanche_size_columns, split_avalanches
 from src.utils.analysis.criticality import (bimodality_d, burstiness_index,
                                             criticality_index_delta_cr)
-from src.utils.analysis.connectivity import group_connection_probability
 from src.utils.analysis.correlation import mean_neuronal_correlation
 from src.utils.analysis.graph import (betweenness_centrality, classify_roles,
-                                      degree_table, graph_metrics, module_participation)
+                                      degree_table, module_participation)
 from src.utils.analysis.isi import isi_metrics
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
-from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
+from src.utils.analysis.spikes import firing_rates, spike_group_metrics
 from src.utils.analysis.synchrony import (burst_columns, event_columns, global_event_columns,
                                           golomb_chi)
-from src.utils.analysis.weights import (block_values, excitatory_flags,
+from src.utils.analysis.weights import (align_subset_to_coo, block_values, excitatory_flags,
                                         synapse_distances, weight_block_metrics)
+from src.utils.runview import Coo, optional
 from src.utils.analysis.avalanche import analyze_avalanches
 
 from scripts.lesion.analysis.drive import drive_columns
@@ -51,16 +51,26 @@ def resolve_avalanche_smax(config) -> int:
     return int(config.simulation.N)
 
 
+def max_plasticity_weight(config) -> float:
+    """重み飽和率 (`weight_at_max_fraction`) の分母。可塑性の Wmax の最大値。
+
+    親 run (develop) と同じ定義でなければ切断前後の比較にならない。Wmax を持たない
+    モデルでは 1.0。
+    """
+    wmax_values = []
+    for syn_cfg in config.synapses.values():
+        wmax = getattr(syn_cfg.plasticity, "Wmax", None)
+        if wmax is not None:
+            wmax_values.append(float(wmax))
+    return max(wmax_values) if wmax_values else 1.0
+
+
 def build_row(window) -> dict:
     """`metrics.csv` の 1 行を作る。**本番の run も再解析もこの 1 つを通る。**
 
     必要な値は全部 `window` から取る。`spikes().times` は**窓の先頭を 0 とするローカル
     時刻**で、絶対時刻を使うとアバランチ分割は同じでも burstiness のビン割りがずれる
     (契約でローカルに固定済み)。
-
-    **解析のパラメータ (ハブ判定の閾値・媒介中心性の厳密解の上限など) は渡さない。**
-    それを使う関数 (`src/utils/analysis/graph.py`) が既定値として持っているので、
-    ここで上書きすると定義が 2 か所になる。
     """
     spikes = window.spikes()
     coo = window.coo()
@@ -68,7 +78,6 @@ def build_row(window) -> dict:
         "probe": int(window.index),
         "phase": window.phase,
         "hours_since_cut": float(window.hour),
-        "window_ms": float(window.record_window_ms),
     }
     out.update(spike_metrics(
         spikes.times, spikes.ids, window.layout, window.total_neurons,
@@ -79,14 +88,14 @@ def build_row(window) -> dict:
         # 落ちるだけで σ_bp が上がって見える (`store/views.py` の docstring)。
         avalanche_bin_ms=window.avalanche_bin_ms(),
     ))
-    out.update(structure_metrics(
-        coo.row, coo.col, coo.weights, window.layout, window.total_neurons))
+    out.update(weight_columns(coo.row, coo.col, coo.weights, window.layout,
+                              window.total_neurons, max_plasticity_weight(window.config)))
     # E / I から実際に届いた駆動。損傷で失った入力の量と、E/I の釣り合いの動き。
     out.update(drive_columns(
         spikes.times, spikes.ids, coo.row, coo.col, coo.weights,
         window.layout, window.config, window.record_window_ms))
     out.update(chi_columns(spikes.times, spikes.ids, window.layout, window.record_window_ms))
-    return add_diagnosis(out)
+    return out
 
 
 def chi_columns(times, ids, layout, window_ms: float) -> dict:
@@ -122,14 +131,13 @@ def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,
         # --- Akita 系 (親 run と同じ切り出し方。ここが比較の軸) ---
         "avalanche_threshold_ms": avalanche.threshold_ms,
         "num_avalanches": int(avalanche.sizes.size),
-        "avalanche_smax": int(smax),
         "llr": log_likelihood_ratio_power_vs_exponential(avalanche.sizes, smax=smax),
         "delta_cr": criticality_index_delta_cr(avalanche.sizes, smax=smax),
         "burstiness_index": burstiness_index(times, window_ms),
         "bimodality_d": bimodality_d(avalanche.sizes),
     }
     # 機能的結合 (Watanabe et al. 2026 の neuronal correlation)。**切断前後の比較の軸。**
-    # baseline の行にも同じ列が出るので、差は `metrics_delta.csv` が自動で持つ。
+    # baseline の行にも同じ列が出るので、切断前後はこの列どうしで比べる。
     # `correlation_pairs` を並べて出すのは、窓の中で 1 発も撃たないニューロンが
     # 平均から抜けるため —— 本数が減っていれば平均の上昇は回復ではない。
     row["mean_correlation"], row["correlation_pairs"] = mean_neuronal_correlation(
@@ -159,78 +167,22 @@ def spike_metrics(times, ids, layout, num_neurons: int, window_ms: float,
     return row
 
 
-def structure_metrics(row, col, weights, layout, num_neurons: int, *,
-                      module_axis: str = "module") -> dict:
-    """1 時点ぶんの構造指標 (トポロジー + 重み)。
+def weight_columns(row, col, weights, layout, num_neurons: int, wmax: float) -> dict:
+    """重みの指標。strength (重み付き次数) の平均と、E/I ブロック別の重み統計。
 
-    グラフ指標の中身 (何を測るか・どこで近似に落とすか) は `graph_metrics()` が決める。
+    **probe ごとに変わる構造の量はこれだけ。** 結合の有無だけで決まる量は
+    `analysis/structure.py` (切断の前後 1 回ずつ)。
     """
     row = np.asarray(row, dtype=np.int64)
     col = np.asarray(col, dtype=np.int64)
     weights = np.asarray(weights, dtype=np.float64)
-
-    labels = layout.labels(module_axis) if layout.has_axis(module_axis) else None
-    out = graph_metrics(row, col, num_neurons, weights=weights, labels=labels)
-
-    if labels is not None:
-        group = group_connection_probability(row, col, layout, module_axis)
-        out["within_module_prob"] = float(group.within_probability)
-        out["between_module_prob"] = float(group.between_probability)
-        out["segregation"] = float(group.segregation)
-
-    blocks = block_values(weights, row, col, layout)
-    out.update(weight_block_metrics(blocks, wmax=1.0))
+    degrees = degree_table(row, col, num_neurons, weights=weights)
+    out = {
+        "out_strength_mean": float(np.mean(degrees["out_strength"])),
+        "in_strength_mean": float(np.mean(degrees["in_strength"])),
+    }
+    out.update(weight_block_metrics(block_values(weights, row, col, layout), wmax=wmax))
     return out
-
-
-def add_diagnosis(row: dict) -> dict:
-    """`develop.py` と同じ活動診断列を足す。"""
-    row.update(diagnose_activity(
-        mean_rate_hz=row.get("mean_rate_hz", float("nan")),
-        weight_at_max_fraction=row.get("weight_at_max_fraction", float("nan")),
-    ))
-    return row
-
-
-def delta_from_baseline(rows: list[dict], baseline: dict) -> list[dict]:
-    """各行に `delta_{col}` / `ratio_{col}` を足す。
-
-    **ベースラインは切断直前の 1 点のみ。** この差だけで回復を語らず、`lesion.json` の
-    `parent_drift` と突き合わせて読むこと (理由は `scripts/lesion/README.md`)。
-    """
-    out = []
-    for row in rows:
-        merged = dict(row)
-        for key, value in row.items():
-            base = baseline.get(key)
-            if not isinstance(value, (int, float)) or not isinstance(base, (int, float)):
-                continue
-            if isinstance(value, bool) or isinstance(base, bool):
-                continue
-            merged[f"delta_{key}"] = float(value) - float(base)
-            merged[f"ratio_{key}"] = (float(value) / float(base)) if base else float("nan")
-        out.append(merged)
-    return out
-
-
-DELTA_NAME = "metrics_delta.csv"
-
-
-def write_delta_table(series, out_dir) -> None:
-    """`metrics.csv` からベースラインとの差の表を作り、`metrics_delta.csv` へ書く。
-
-    **run 全体が揃って初めて決まる**ので、1 行ずつ追記する `metrics.csv` には混ぜない。
-    基準にするのは phase が baseline の行 (無ければ最初の行)。
-    """
-    from pathlib import Path
-
-    from scripts.lesion.store.formats import PHASE_BASELINE, write_table
-
-    rows = series.metrics().to_dict("records")
-    if not rows:
-        return
-    baseline = next((row for row in rows if row.get("phase") == PHASE_BASELINE), rows[0])
-    write_table(delta_from_baseline(rows, baseline), Path(out_dir) / DELTA_NAME)
 
 
 # ======================================================================================
@@ -414,3 +366,47 @@ def format_cut_profile(comparison: list[dict], summary: dict, *, precision: int 
                          f" = {stats['fraction_of_group_cut'] * 100:5.1f}%"
                          f"   (切断全体の {stats['share_of_cut'] * 100:5.1f}%)")
     return "\n".join(lines)
+
+
+def pre_cut_coo(built) -> tuple[Coo, np.ndarray]:
+    """記録から切断前の結合を組み直し、`(切断前の COO, 切断マスク)` を返す。
+
+    重みと遅延は切断直後の値 (親 run から復元したもの)。残したシナプスの値は切断後の記録
+    (`weights_initial.npz` / `delays.npz`) から、切ったシナプスの値は `lesion_cut.npz` から、
+    **位置ではなく (pre, post) で**引き当てる。
+    """
+    pre = built.wiring_pre()
+    post = built.coo()
+    cut = built.cut()
+    n_cols = int(pre.shape[1])
+    key_pre = pre.row.astype(np.int64) * n_cols + pre.col.astype(np.int64)
+    key_cut = (np.asarray(cut["row"], dtype=np.int64) * n_cols
+               + np.asarray(cut["col"], dtype=np.int64))
+    is_cut = np.isin(key_pre, key_cut)
+    if int(is_cut.sum()) != key_cut.size or int((~is_cut).sum()) != post.num_synapses:
+        raise ValueError(
+            f"切断前 {pre.num_synapses} 本 = 切断 {key_cut.size} 本 + 残存 {post.num_synapses} 本"
+            " になりません。記録どうしが別の切断を指しています。")
+
+    weights = np.empty(pre.num_synapses, dtype=np.float64)
+    delays = np.empty(pre.num_synapses, dtype=np.float64)
+    for mask, row, col, w, d in (
+            (~is_cut, post.row, post.col, post.weights, post.delays),
+            (is_cut, cut["row"], cut["col"], cut["weight"], cut["delay_ms"])):
+        weights[mask] = align_subset_to_coo(row, col, w, pre.row[mask], pre.col[mask], n_cols)
+        delays[mask] = align_subset_to_coo(row, col, d, pre.row[mask], pre.col[mask], n_cols)
+    return Coo(pre.row, pre.col, weights, delays, pre.shape), is_cut
+
+
+def cut_profile_table(built, out_path) -> None:
+    """切断群と残存群の属性の比較表 (`cut_profile()` の comparison) を書く。
+
+    本番では切断の直後、再解析では記録から同じ表を作る。切断の要約 (`lesion.json`) と
+    違ってブリッジ通過 (`crossed`) は使わないので、記録だけで作り直せる。
+    """
+    from scripts.lesion.store.formats import write_table
+
+    coo, is_cut = pre_cut_coo(built)
+    _per_synapse, comparison, _summary = cut_profile(
+        coo, is_cut, built.layout, built.total_neurons, coords=optional(built.coords))
+    write_table(comparison, out_path)

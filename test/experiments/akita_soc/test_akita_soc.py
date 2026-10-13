@@ -147,9 +147,11 @@ class MetricsColumnsTest(unittest.TestCase):
             series = open_run(_make_run(tmp_dir, hours=(0.0,)))
             row = metrics.build_row(series.windows[0])
         for column in ("hour", "num_spikes", "mean_rate_hz", "llr", "delta_cr",
-                       "burstiness_index", "bimodality_d", "avalanche_smax",
-                       "weight_at_max_fraction", "diagnosis"):
+                       "burstiness_index", "bimodality_d", "weight_at_max_fraction"):
             self.assertIn(column, row, f"{column} 列がありません")
+        # config から分かる値と閾値判定は記録に入れない
+        for column in ("avalanche_smax", "diagnosis"):
+            self.assertNotIn(column, row)
 
     def test_smax_follows_the_network_size(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

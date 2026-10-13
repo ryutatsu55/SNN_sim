@@ -140,20 +140,20 @@ run ディレクトリの中身:
 ├── config.yaml           **run の記録**。seed は実値。起動前にランチャが置く
 ├── source_config.yaml    入力 YAML の逐語コピー (seed の範囲指定はここに残る)
 ├── run.log               この run の標準出力・標準エラー
-├── data/
+├── data/                 **記録** (測った値と、プログラムが読む計算結果)
 │   ├── connectivity.npz      結合構造 (row/col/shape)。run に 1 回だけ
 │   ├── layout_axes.npz       外部軸 (layer / module …)
 │   ├── axon_geometry.npz     軸索の折れ線 (axon_growth 系の config のみ)
 │   ├── metrics.csv           記録時刻ごとの指標。**1 行ずつ追記される**
-│   ├── connection_probability.csv  群間の結合確率 (build 直後に 1 回)
-│   ├── bridge_hops.csv       ブリッジのホップ数別の結合確率 (複合エリアの run のみ)
 │   ├── coords.npz            soma の座標 (`no_space` の run には無い)
 │   ├── weights_{h}h.npz      重みの値ベクトル (connectivity と index 整合)
 │   ├── spikes_{h}h.npz       スパイク (絶対時刻 ms)
 │   ├── voltage_{h}h.npz      窓の先頭の膜電位 (task.trace_neuron を指定した run のみ)
 │   └── current_{h}h.npz      窓の先頭の入力電流 (同上)
-└── figures/
+└── report/               **報告** (人が読む図と表)。消しても replot で作り直せる
     ├── structure/        area / connection_mask / network_sample / 各種分布 (build 直後に 1 枚ずつ)
+    │                     connection_probability.csv  群間の結合確率
+    │                     bridge_hops.csv  ブリッジのホップ数別の結合確率 (複合エリアの run のみ)
     ├── panels/           **記録窓ごと**の図。窓の数だけ増えるものはここへ
     │   ├── raster/
     │   ├── avalanche/
@@ -296,6 +296,7 @@ scripts/develop/
 | 指標の計算方法を変える | 同上。数式そのものは `src/utils/analysis/` |
 | 図の見た目を細かく変える | `figures/<その図>.py`。2 枚以上が一致すべき値なら `figures/style.py` |
 | 新しい図を足す | `figures/` に 1 ファイル + `report/<いつ出すか>.py` の `FIGURES` に 1 行 |
+| 人が読む表を足す | `analysis/` に `(view, out_path)` を取る関数 + `report/<いつ出すか>.py` の `TABLES` に 1 行 |
 | 図を出すタイミングを変える | `report/` の 3 ファイル間で 1 行移す |
 | 出力先のディレクトリを変える | `store/paths.py` |
 
@@ -309,8 +310,8 @@ scripts/develop/
 | `panels.py` | 記録窓ごと | `Window` |
 | `overview.py` | run 終了後 | `Series` |
 
-各ファイルは先頭に `FIGURES` という表を持ち、`emit()` は**その表を上から順に回すだけ**です。
-図を足すのは表に 1 行足すことで、`emit()` は触りません。`src/utils/runview.py` の `guard()`
+各ファイルは先頭に `FIGURES` (図) と `TABLES` (表) という 2 つの表を持ち、`emit()` は
+**その表を上から順に回すだけ**です。図や表を足すのは表に 1 行足すことで、`emit()` は触りません。`src/utils/runview.py` の `guard()`
 が 1 つずつ包み、**「この run はそのデータを持たない」(`MissingData`) と「バグで落ちた」を
 分けて**報告します。
 
@@ -322,16 +323,19 @@ FIGURES = (
 )
 
 def emit(built) -> None:
-    out = paths.fig_dir(built.run_dir, paths.STRUCTURE)
+    out = paths.report_dir(built.run_dir, paths.STRUCTURE)
     out.mkdir(parents=True, exist_ok=True)
-    for label, draw, name in FIGURES:
-        guard(label, draw, built, out / name)
+    for label, make, name in FIGURES + TABLES:
+        guard(label, make, built, out / name)
 ```
 
-**表に入らない出力もあります。** 置き場所が `figures/` ではないもの (結合確率の CSV) と、
-`(view, out_path)` の形をしていないもの (`metrics.csv` への 1 行追記) で、それらは
-`emit()` に明示行として残り、なぜ表に入らないかがその場に書いてあります。表は「出力の
-全部」ではなく「図の全部」です。
+出力は**報告**と**記録**の 2 種類です。
+
+- **報告** (人が読むもの) は `FIGURES` (図) と `TABLES` (CSV の表) に並び、どちらも
+  `(view, out_path)` を取って `report/<段階>/` へ出ます。`emit()` は `FIGURES + TABLES` を回すだけです。
+- **記録** (`data/` の CSV。測った値と、図などのプログラムが読む計算結果) は
+  `(view, out_path)` の形をしていない (`metrics.csv` への 1 行追記) ので、`emit()` に明示行として
+  残り、なぜ表に入らないかがその場に書いてあります。
 
 `panels.py` の表だけは図の種類も持ちます (`(名前, 関数, 種類, ファイル名)`) ——
 ラスターとアバランチとトレースが**別のディレクトリ**へ出るためです。ファイル名の `{tag}`
@@ -344,8 +348,8 @@ def emit(built) -> None:
 
 | ファイル | 役割 |
 |---|---|
-| `paths.py` | run の内部構造。`data/` と `figures/` を知るのはここだけ |
-| `formats.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ (`metrics.csv` も `MetricsWriter` / `load_metrics`)。結合確率の 2 本 (`write_table`) は人間向けで誰も読み返さない |
+| `paths.py` | run の内部構造。`data/` と `report/` を知るのはここだけ |
+| `formats.py` | 記録ファイル **1 つ**の読み書き。ファイル名の規約と **npz の中の鍵の名前**を、書く側と読む側が対で持つ (`metrics.csv` も `MetricsWriter` / `load_metrics`)。報告の表を書く `write_table` もここ (ファイル名は登録簿の `TABLES` が持つ) |
 | `built.py` | build 直後に何を書くかの一覧 (`write_built`)。外部軸・座標・軸索幾何・結合・遅延・初期重み |
 | `views.py` | 記録 (`formats.py`) を契約 (`src/utils/runview.py`) の形に組む。`Built` (build 直後)・`Window` (記録窓 1 つ)・`Series` (run 全体)。`open_run()` が入口、`series.built()` が構造図の入口 |
 
@@ -360,7 +364,7 @@ run を通して不変なもの (結合・座標・領域・軸索・遅延) は
 | ファイル | 役割 |
 |---|---|
 | `metrics.py` | **1 記録窓**の指標を 1 行の dict にする → `metrics.csv` |
-| `connectivity.py` | 構築されたネットワークの群間結合確率 → `connection_probability.csv` / `bridge_hops.csv` + run.log |
+| `connectivity.py` | 構築されたネットワークの群間結合確率 → 報告の表 `connection_probability.csv` / `bridge_hops.csv` + run.log |
 
 「どう測るか」の数式は `src/utils/analysis/` にある共有層に任せます。**ΔCr やべき乗フィット
 は実験ごとに違ってはいけない**ので、ここだけは複製しません (図は分岐が目的、数式は分岐が

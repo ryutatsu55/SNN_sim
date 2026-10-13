@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from scripts.develop.report import guard
 from scripts.develop.store import paths
-from scripts.develop.analysis.connectivity import write_report
+from scripts.develop.analysis.connectivity import (bridge_hops_table,
+                                                   connection_probability_table)
 from scripts.develop.figures.area import area_figure
 from scripts.develop.figures.connection_mask import (connection_mask,
                                                      empirical_connection_probability)
@@ -23,7 +24,7 @@ from scripts.develop.figures.synapse_hist import (delay_distribution, distance_d
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
 #
-# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `figures/structure/` なので
+# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `report/structure/` なので
 # 表には持たせない。`emit()` は**この表を上から順に回すだけ**。
 FIGURES = (
     ("area", area_figure, "area.png"),
@@ -43,21 +44,25 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じで、置き場所も同じ
+# `report/structure/`。図で見えている濃淡が何倍の差なのかは絵からは読めないので、数値でも残す。
+TABLES = (
+    ("connection probability table", connection_probability_table,
+     "connection_probability.csv"),
+    # ブリッジを持たない area では MissingData で skip される。
+    ("bridge hops table", bridge_hops_table, "bridge_hops.csv"),
+)
+
+
 def emit(built) -> None:
-    """構造図一式を `<run>/figures/structure/` へ、数値レポートを `data/` へ。"""
+    """構造の図と表を `<run>/report/structure/` へ。"""
     run_dir = built.run_dir
-    out = paths.fig_dir(run_dir, paths.STRUCTURE)
+    out = paths.report_dir(run_dir, paths.STRUCTURE)
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"  {built.total_neurons} neurons, {built.wiring().num_synapses} synapses")
 
-    for label, draw, name in FIGURES:
-        guard(label, draw, built, out / name)
+    for label, make, name in FIGURES + TABLES:
+        guard(label, make, built, out / name)
 
-    # --- 表 ---
-    # **`FIGURES` に入れていない。** 置き場所が `figures/` ではなく `data/` で、
-    # 渡すのもファイル名ではなくディレクトリだから (2 本まとめて出す)。
-    # 図で見えている濃淡が何倍の差なのかは絵からは読めないので、数値でも残す。
-    guard("connectivity report", write_report, built, paths.data_dir(run_dir))
-
-    print(f"Figures saved to: {out}")
+    print(f"Report saved to: {out}")

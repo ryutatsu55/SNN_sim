@@ -44,7 +44,6 @@ def rte_rows(series) -> list[dict]:
             "probe": int(window.index),
             "phase": window.phase,
             "hours_since_cut": float(window.hour),
-            "window_ms": float(window.record_window_ms),
             "rte": result.rte,
             "rte_connections": result.num_connections,
             "mean_te_bits": result.mean_te,

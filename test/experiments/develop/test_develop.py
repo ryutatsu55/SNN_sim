@@ -378,7 +378,7 @@ class RunPathsTest(unittest.TestCase):
 
     def test_rejects_unknown_figure_kind(self):
         with self.assertRaises(ValueError):
-            paths.fig_path("run", "histogram", "x.png")
+            paths.report_path("run", "histogram", "x.png")
 
 
 class MetricsColumnsTest(unittest.TestCase):
@@ -398,18 +398,18 @@ class MetricsColumnsTest(unittest.TestCase):
         self.assertIn("delta_cr", row)                                        # スパイク系
         self.assertTrue(any(k.startswith(("exc", "inh")) for k in row))       # E/I 系
         self.assertIn("weight_at_max_fraction", row)                          # 重みブロック系
-        self.assertIn("diagnosis", row)                                       # 診断
+        self.assertNotIn("diagnosis", row)                    # 閾値判定は記録に入れない
 
-    def test_parameters_come_from_the_config(self):
-        """`smax` は引数ではなく config から導かれること。
+    def test_config_values_are_not_columns(self):
+        """config やコードの定数から分かる値は列に残さないこと。
 
-        図と指標が別々に smax を決められる状態だと、図に書かれた α と CSV の α が
-        食い違う (どちらも例外を出さない)。`build_row` は window 1 つしか受け取らない。
+        `smax` は指標も図も config の N から直に読む。列にも持つと、読む側が 2 通りに
+        なり、片方だけ古い run の値を読む食い違いが起きうる。
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            window = open_run(_make_run(tmp_dir)).windows[0]
-            row = metrics.build_row(window)
-        self.assertEqual(row["avalanche_smax"], window.config.simulation.N)
+            row = self._row(tmp_dir)
+        for column in ("avalanche_smax", "event_bin_ms", "gevent_bin_ms", "gevent_num_groups"):
+            self.assertNotIn(column, row)
 
 
 class RunSeriesTest(unittest.TestCase):
@@ -573,13 +573,14 @@ class ReplotPlacementTest(unittest.TestCase):
         metrics_path = paths.data_path(run_dir, METRICS_NAME)
         self.assertTrue(metrics_path.exists(), f"{metrics_path} が無い")
         header = metrics_path.read_text(encoding="utf-8").splitlines()[0]
-        # fig2c の天井線がこの列を見る
-        self.assertIn("avalanche_smax", header)
+        # fig2c が読む列
+        for column in ("llr", "bimodality_d", "delta_cr", "burstiness_index"):
+            self.assertIn(column, header)
         # 重みブロック列まで揃っていること (本番と同じ列)
         self.assertIn("weight_at_max_fraction", header)
         # 図は種類別のサブディレクトリへ
-        self.assertTrue(paths.fig_path(run_dir, paths.RASTER, "raster_0h.png").exists())
-        self.assertTrue(paths.fig_path(run_dir, paths.AVALANCHE, "avalanche_0h.png").exists())
+        self.assertTrue(paths.report_path(run_dir, paths.RASTER, "raster_0h.png").exists())
+        self.assertTrue(paths.report_path(run_dir, paths.AVALANCHE, "avalanche_0h.png").exists())
 
     def test_writes_where_the_figures_read(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -607,8 +608,12 @@ class ReplotPlacementTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = _make_run(tmp_dir)
             replot(run_dir)
-            self.assertTrue(paths.fig_path(run_dir, paths.STRUCTURE,
-                                           "connection_mask_coarse.png").exists())
+            self.assertTrue(paths.report_path(run_dir, paths.STRUCTURE,
+                                              "connection_mask_coarse.png").exists())
+            # 人が読む表は図と同じ場所。記録 (data/) には置かない
+            self.assertTrue(paths.report_path(run_dir, paths.STRUCTURE,
+                                              "connection_probability.csv").exists())
+            self.assertFalse(paths.data_path(run_dir, "connection_probability.csv").exists())
 
     def test_metrics_hour_matches_the_series(self):
         """`metrics.csv` の hour 列と npz 由来の時刻が一致すること。

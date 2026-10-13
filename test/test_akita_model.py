@@ -39,7 +39,7 @@ from src.models.plasticity.custom_Akita import (
     recover_synaptic_resource,
 )
 from src.utils.analysis.powerlaw import discrete_distribution, fit_distribution_curves
-from src.utils.analysis.spikes import diagnose_activity, spike_group_metrics
+from src.utils.analysis.spikes import spike_group_metrics
 from src.utils.analysis.weights import (
     block_values,
     compute_block_metrics,
@@ -280,13 +280,6 @@ class AkitaSocMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["weight_mean"], 0.75)
         self.assertAlmostEqual(metrics["weight_at_max_fraction"], 0.5)
         self.assertAlmostEqual(metrics["weight_ei_mean"], 0.5)
-
-    def test_diagnose_activity_combines_overactivity_and_saturation(self):
-        diagnosis = diagnose_activity(mean_rate_hz=101.0, weight_at_max_fraction=0.88)
-
-        self.assertTrue(diagnosis["is_overactive"])
-        self.assertTrue(diagnosis["is_weight_saturated"])
-        self.assertEqual(diagnosis["diagnosis"], "overactive_and_weight_saturated")
 
 
 # 最小構成。sequential 割当なので興奮性が先頭に連番で並ぶ

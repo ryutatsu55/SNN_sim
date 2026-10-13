@@ -8,7 +8,7 @@
     data/weights_initial.npz   切断直後の重み = 親 run から復元した値の残存ぶん (同上)
     data/axon_geometry.npz     切断後の軸索幾何。axon_growth 系だけ。直列化は `AxonGeometry`
 
-`config.yaml` と切断の記録 (`lesion.json` / `lesion_cut.npz` / `cut_profile.csv`) は
+`config.yaml` と切断の記録 (`lesion.json` / `lesion_cut.npz`) は
 ここに含めない —— 前者は build の前にランチャが書く。後者は「何を切ったか」の記録で、
 ネットワークの形ではないので `run_one.py` が書く。
 

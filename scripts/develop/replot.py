@@ -83,10 +83,10 @@ def replot(run_dir: Path, *, with_structure: bool = True, verify: bool = False) 
 
     # 図のサブディレクトリを用意する。膜電位トレースの図は膜電位を採った run にだけ作る
     # (空ディレクトリが残ると「採ったが空」と「採っていない」が読めなくなる)。
-    fig_kinds = paths.DEFAULT_FIG_KINDS
+    report_kinds = paths.DEFAULT_REPORT_KINDS
     if any(window.voltage_path is not None for window in series.windows):
-        fig_kinds = fig_kinds + (paths.TRACE,)
-    paths.prepare(run_dir, fig_kinds)
+        report_kinds = report_kinds + (paths.TRACE,)
+    paths.prepare(run_dir, report_kinds)
 
     if verify:
         print("\nRebuilding network to verify it against the record...")

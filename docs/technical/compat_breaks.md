@@ -739,3 +739,59 @@ overlap 50) では、ブリッジ矩形 300 um のうち 100 um = 1/3 がモジ�
 チャンク実行と同じ。akita N=100 CPU で一致を確認)。
 
 旧 run の `trace_*.npz` は読まない。再描画ではトレース図だけが skip され、他は以前と同じ。
+
+---
+
+## 2026-10-13 — 出力を「記録」(`data/`) と「報告」(`report/`) に分けた (全実験)
+
+人が読む図と表を `<run>/report/<段階>/` に、測った値とプログラムが読む計算結果を
+`<run>/data/` に置くようにした。決め方は `docs/architecture/experiment_structure.md` §5。
+
+**シミュレーション結果も、残った列の値も変わらない。** 変わったのは置き場所と列の顔ぶれだけ。
+
+### 置き場所
+
+- `figures/` → **`report/`** (全実験。lesion の `lesion_compare/figures/` も `report/`)。
+- `connection_probability.csv` / `bridge_hops.csv`: `data/` → `report/structure/`。
+  登録簿の `TABLES` から出る。ブリッジを持たない area では `bridge_hops` が skip と出る。
+- lesion の `cut_profile.csv`: `data/` → `report/structure/`。`run_one.py` の直書きをやめ、
+  記録 (`connectivity_pre.npz` / `weights_initial.npz` / `delays.npz` / `lesion_cut.npz`) から
+  作り直す `TABLES` の行になった。既存の lesion run 13 本で、作り直した表が元の表と
+  ビット単位で一致することを確認した。
+- akita_soc は `connection_probability.csv` を出さなくなった (全結合で確率がすべて 1)。
+
+### 消えたもの
+
+- lesion の **`metrics_delta.csv`** (読み手がおらず、`metrics.csv` から作り直せる)。
+- 閾値判定の列: `is_overactive` / `is_weight_saturated` / `diagnosis` (3 実験)、
+  `bp_check_slope_size` / `bp_check_slope_lifetime` / `bp_check_sigma` / `bp_check_corr_decay`
+  (develop / lesion)。共有層の `diagnose_activity()` と `criticality_checks()` も削除。
+- config・layout・npz・コード定数から分かる列: `avalanche_smax` (3 実験)、`event_bin_ms` /
+  `gevent_bin_ms` / `gevent_num_groups` (develop / lesion)、lesion の `window_ms`
+  (`metrics.csv` と `rte.csv`)。
+- `fig2c` の LLR パネルの天井線 (`power-law ceiling`) を消した (develop / akita_soc)。
+  計算関数 `powerlaw.llr_ceiling_per_avalanche()` は残してある。
+- lesion `metrics.csv` のトポロジー指標 (次数・成分・participation・hub 数・betweenness・
+  clustering) と `within_module_prob` / `between_module_prob` / `segregation`。
+
+### 増えたもの
+
+- lesion の **`data/structure.csv`**: トポロジー指標を切断前 (`wiring = pre`) と切断後
+  (`post`) の 2 行で。切断後の配線は run を通して固定なので probe ごとには測らない。
+  プール値 (within / between / segregation) は入れない (`report/structure/connection_probability.csv`
+  の `synapses` / `pairs` と run.log にある)。
+
+### 値の定義が揃ったもの
+
+- lesion の `weight_*_at_max_fraction` の分母を `wmax=1.0` 固定から
+  `max_plasticity_weight(config)` (develop と同じ) に変えた。今ある全プロファイルが
+  Wmax = 1.0 なので**値は変わらない**。
+- lesion の `lesion.json` の `parent_drift` は親 `metrics.csv` の全列ではなく
+  `parent_run.DRIFT_METRIC_COLUMNS` の列だけを写す。
+
+### 古い run
+
+`replot` すれば新しいレイアウトで作り直される (`metrics.csv` は上書き、図と表は `report/`)。
+古い `figures/` と `data/` の報告の CSV (`connection_probability` / `bridge_hops` /
+`cut_profile`)・`metrics_delta.csv` は**消されずに残る**ので、
+要らなければ手で消す。古い lesion run を replot すると `structure.csv` も書かれる。

@@ -1,15 +1,15 @@
 """run ディレクトリの内部構造。
 
-**`data/` と `figures/` というリテラルを知っているのはこのモジュールだけ。** 書く側も
+**`data/` と `report/` というリテラルを知っているのはこのモジュールだけ。** 書く側も
 読む側も必ずここを通るので、片方だけ場所がずれることがない。
 
     <run>/
     ├── config.yaml          … run の**記録** (seed は実値のスカラー)。ランチャが置く
     ├── source_config.yaml   … 入力 YAML の逐語コピー (seed の範囲指定はここに残る)
     ├── run.log              … ランチャが子プロセスの出力を流し込む先
-    ├── data/                … npz と csv。**最初からここに書く**
+    ├── data/                … **記録** (npz と csv)。**最初からここに書く**
     │                          (座標は coords.npz。`no_space` の run には無い)
-    └── figures/
+    └── report/              … **報告** (人が読むもの: 図と表)。消しても replot で作り直せる
         ├── structure/       … 初期重み行列 / 重み・遅延の分布
         ├── panels/          … **記録窓ごと**の図。窓の数だけ増えるものはここへ
         │   ├── raster/
@@ -30,10 +30,10 @@ from __future__ import annotations
 from pathlib import Path
 
 DATA_SUBDIR = "data"
-FIGURES_SUBDIR = "figures"
+REPORT_SUBDIR = "report"
 
-# 図の種類 = `figures/` から見た相対パス。ここに無い種類を fig_path() に渡すと弾かれる
-# (タイポで図が迷子になるのを防ぐ)。
+# 報告の種類 = `report/` から見た相対パス。ここに無い種類を report_path() に渡すと弾かれる
+# (タイポで図や表が迷子になるのを防ぐ)。
 #
 # **記録窓ごとに出るものは `panels/` の下にまとめる。** run に 1 枚しか出ないもの
 # (structure / overview) と同じ階層に並べると、窓の数だけ中身が増えるディレクトリに
@@ -46,11 +46,11 @@ WEIGHT = f"{PANELS}/weight"
 WEIGHT_DIST = f"{PANELS}/weight_distribution"
 TRACE = f"{PANELS}/trace"
 OVERVIEW = "overview"
-FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, TRACE, OVERVIEW)
+REPORT_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, TRACE, OVERVIEW)
 
 # run を走らせる前に必ず作るディレクトリ。trace は task.trace_neuron を指定したときだけ作る
 # (空ディレクトリが残ると「採取したのに空だった」のか「採取していない」のか読めなくなる)。
-DEFAULT_FIG_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, OVERVIEW)
+DEFAULT_REPORT_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, OVERVIEW)
 
 
 def data_dir(run_dir: str | Path) -> Path:
@@ -62,20 +62,20 @@ def data_path(run_dir: str | Path, name: str) -> Path:
     return data_dir(run_dir) / name
 
 
-def fig_dir(run_dir: str | Path, kind: str) -> Path:
-    if kind not in FIG_KINDS:
-        raise ValueError(f"未知の図の種類: {kind!r} (使えるもの: {FIG_KINDS})")
-    return Path(run_dir) / FIGURES_SUBDIR / kind
+def report_dir(run_dir: str | Path, kind: str) -> Path:
+    if kind not in REPORT_KINDS:
+        raise ValueError(f"未知の報告の種類: {kind!r} (使えるもの: {REPORT_KINDS})")
+    return Path(run_dir) / REPORT_SUBDIR / kind
 
 
-def fig_path(run_dir: str | Path, kind: str, name: str) -> Path:
-    return fig_dir(run_dir, kind) / name
+def report_path(run_dir: str | Path, kind: str, name: str) -> Path:
+    return report_dir(run_dir, kind) / name
 
 
-def prepare(run_dir: str | Path, fig_kinds: tuple[str, ...] = DEFAULT_FIG_KINDS) -> Path:
+def prepare(run_dir: str | Path, kinds: tuple[str, ...] = DEFAULT_REPORT_KINDS) -> Path:
     """run ディレクトリ内のサブディレクトリを作る。run を走らせる前に 1 回呼ぶ。"""
     run_dir = Path(run_dir)
     data_dir(run_dir).mkdir(parents=True, exist_ok=True)
-    for kind in fig_kinds:
-        fig_dir(run_dir, kind).mkdir(parents=True, exist_ok=True)
+    for kind in kinds:
+        report_dir(run_dir, kind).mkdir(parents=True, exist_ok=True)
     return run_dir

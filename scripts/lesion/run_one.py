@@ -58,10 +58,10 @@ from scripts.lesion.store import paths
 from scripts.lesion.store.built import write_built
 from scripts.lesion.store.formats import (METRICS_NAME, MS_PER_HOUR,
                                           PHASE_BASELINE, PHASE_POST, SPIKES, VOLTAGE,
-                                          CURRENT, WEIGHTS, CUT_PROFILE_NAME, MetricsWriter,
+                                          CURRENT, WEIGHTS, MetricsWriter,
                                           probe_filename, save_cut, save_manifest,
                                           save_spikes, save_neuron_timeseries,
-                                          save_weight_values, write_table)
+                                          save_weight_values)
 from scripts.lesion.store.formats import BASELINE_INDEX
 from scripts.lesion.store.views import open_run
 
@@ -468,12 +468,12 @@ def main():
         return
 
     # ---------------- ここから先が「走る run」 ----------------
-    # **dry-run はここへ来ないので、下見のために data/ や figures/ が作られることはない**
+    # **dry-run はここへ来ないので、下見のために data/ や report/ が作られることはない**
     # (作ると完走した run と見分けが付かない)。
     # 膜電位トレースの図は採るときだけディレクトリを作る (空ディレクトリが残ると「採取したのに
     # 空だった」のか「採取していない」のかが読めなくなる)。
     paths.prepare(run_dir,
-                  paths.DEFAULT_FIG_KINDS
+                  paths.DEFAULT_REPORT_KINDS
                   + ((paths.TRACE,) if trace_neuron is not None else ()))
     print(f"\n=== {num_cut} 本を構造的に除去して回復を追う ===")
     keep = ~np.asarray(selection.cut, dtype=bool)
@@ -491,7 +491,6 @@ def main():
     write_built(run_dir, builder, layout, pre_coo=coo, keep=keep, geometry=geometry)
     save_manifest(paths.data_dir(run_dir), manifest)
     save_cut(paths.data_dir(run_dir), per_synapse)
-    write_table(comparison, paths.data_path(run_dir, CUT_PROFILE_NAME))
 
     # **書いたら読み直す。** 構造図も probe ごとの図と同じく記録から描くので、
     # `replot.py` とまったく同じ呼び出しになる。probe はこれから書くので 0 個。

@@ -98,7 +98,6 @@ def event_columns(times, ids, num_neurons: int, duration_ms: float,
     """`metrics.csv` に入れる列。`population_events()` の結果を `event_*` の名前で返す。"""
     events = population_events(times, ids, num_neurons, duration_ms, bin_ms)
     return {
-        "event_bin_ms": events.bin_ms,
         "event_rate_hz": events.event_rate_hz,
         "event_participation": events.participation,
         "event_participation_ceiling": events.participation_ceiling,
@@ -375,8 +374,6 @@ def global_event_columns(times, ids, num_neurons: int, duration_ms: float,
     """`metrics.csv` に入れる列。`global_events()` の結果を `gevent_*` の名前で返す。"""
     ev = global_events(times, ids, num_neurons, duration_ms, groups)
     return {
-        "gevent_bin_ms": ev.bin_ms,
-        "gevent_num_groups": ev.num_groups,
         "gevent_threshold_mean": ev.threshold_mean,
         "gevent_event_rate_hz": ev.event_rate_hz,
         "gevent_local_rate_hz": ev.local_rate_hz,

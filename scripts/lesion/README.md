@@ -427,25 +427,25 @@ run ディレクトリは `<親 run>/<切断条件>/`。
 <run>/
 ├── config.yaml           **run の記録**。親 run・切断 spec・タイムラインが全部入る
 ├── run.log
-├── data/
+├── data/                 **記録** (測った値と、プログラムが読む計算結果)
 │   ├── connectivity_pre.npz  切断**前**の結合 (全シナプス)
 │   ├── connectivity.npz      切断**後**の結合 (生き残り)
 │   ├── layout_axes.npz
 │   ├── coords.npz            soma の座標 (`no_space` の run には無い)。切断で動かない
 │   ├── lesion.json           **切断で何が起きたかの記録**
 │   ├── lesion_cut.npz        切断されたシナプス 1 本ごとの素性
-│   ├── cut_profile.csv       属性ごとの「切断群 vs 残存群」
-│   ├── metrics.csv           probe ごとの指標 (**絶対値のみ、1 行ずつ追記**)
-│   ├── metrics_delta.csv     ベースラインとの差 (run 終了後に一括)
+│   ├── structure.csv         配線のトポロジー指標 (次数・成分・ハブ・媒介中心性…)。切断前と切断後の 2 行
+│   ├── metrics.csv           probe ごとに変わる指標 (**1 行ずつ追記**)
 │   ├── rte.csv               probe ごとの RTE (実効結合の損傷前比。run 終了後に一括)
-│   ├── connection_probability.csv / bridge_hops.csv   切断**後**の群間結合確率
 │   ├── weights_p{NNN}.npz    その probe の重み (NNN = record_hours の添字)
 │   ├── spikes_p{NNN}.npz     スパイク + 窓の原点 / 窓幅 / phase
 │   ├── voltage_p{NNN}.npz    窓の先頭の膜電位。**採った probe だけ**
 │   ├── current_p{NNN}.npz    窓の先頭の入力電流。**採った probe だけ**
 │   └── {kind}_baseline.npz   親から引き継いだベースライン (番号を持たない)
-└── figures/
+└── report/               **報告** (人が読む図と表)。消しても replot で作り直せる
     ├── structure/        切断**後**のネットワークの形
+    │                     connection_probability.csv / bridge_hops.csv  切断**後**の群間結合確率
+    │                     cut_profile.csv  属性ごとの「切断群 vs 残存群」(lesion_cut.npz などの記録から作る)
     ├── panels/           **probe ごと**の図。probe の数だけ増えるものはここへ
     │   ├── raster/
     │   ├── avalanche/
@@ -507,7 +507,7 @@ baseline と post の窓幅は揃えておくこと (今の task.yaml はどち�
 
 ### `structure/` と `panels/` の出自は develop の複製
 
-`figures/` と `report/{structure,panels}.py` は **`scripts/develop/` から複製したもの**。
+`figures/` と `report/{structure,panels}.py` (コードのパッケージ) は **`scripts/develop/` から複製したもの**。
 いまのところ出る図の種類・ファイル名・描き方はほぼ同じで、窓のタイトルだけ `hour` では
 なく `label` (`baseline (-0.17 h)` / `post (+3.00 h)`) を使う —— 損傷実験では時刻だけでは
 切断の前後が読めないため。
@@ -570,7 +570,7 @@ python -m scripts.lesion.compare outputs/develop/<条件> --control outputs/deve
 <条件>/lesion_compare/
 ├── runs.csv       損傷 run 1 本 = 1 行 (切断数 % / 切った重み % / 低下 / χ の低下 / 回復 …)
 ├── control.csv    対照 run 1 本 = 1 行 (同じ式で測った回復)
-└── figures/       cut_weight / activity_drop / recovery_vs_drop / recovery_vs_cut
+└── report/        cut_weight / activity_drop / recovery_vs_drop / recovery_vs_cut
 ```
 
 - **定義は `analysis/summary.py` のモジュール docstring が正。** 回復 = (18–20 h の平均 − 0 h) ÷ 損傷前。
@@ -591,8 +591,8 @@ overview と同じ (表を書いてから、その表を図が読む)。リー�
 **run 1 本の中には sham (切らない対照) が無い。** ベースラインは親 run の記録 1 点だけなので、
 run 1 本では「回復」と「損傷が無くても進んだ発達の続き」を分離できない。対照との比較は
 `compare` の `--control` (切らずに走り続けた run) で行う。`lesion.json` の
-`parent_drift` に親 run の終盤の動きが入っているので、**回復幅がこのドリフト幅と同オーダー
-なら結論を出さないこと。**
+`parent_drift` に親 run の終盤の動き (`store/parent_run.py` の `DRIFT_METRIC_COLUMNS` の列) が
+入っているので、**回復幅がこのドリフト幅と同オーダーなら結論を出さないこと。**
 
 ---
 
@@ -620,11 +620,12 @@ scripts/lesion/
 │   └── parent_run.py  **親 run (develop 形式) を読む唯一の場所**
 ├── analysis/       何を測るか (表)
 │   ├── metrics.py     probe 1 つの指標 + 切断したものの素性
+│   ├── structure.py   配線のトポロジー指標 (切断前と切断後の 1 回ずつ) → structure.csv
 │   ├── effective.py   probe ごとの RTE (baseline を基準に一括) → rte.csv
 │   ├── summary.py     損傷 run 1 本 = 1 行の要約 (低下・回復・対照の定義) → runs.csv / control.csv
 │   ├── selectors.py   どこを切るか (spec のパースと選択)
 │   ├── restore.py     再ビルドが親と同じネットワークかの検証 (軸索幾何)
-│   └── connectivity.py 群間結合確率
+│   └── connectivity.py 群間結合確率 → 報告の表
 └── figures/        どう描くか (図)
 ```
 
@@ -635,6 +636,7 @@ lesion は develop の run を読むが、**`scripts/develop/` を import しな
 (`config.yaml` / `connectivity.npz` / `weights_{h}h.npz` / `spikes_{h}h.npz` /
 `layout_axes.npz` / `axon_geometry.npz` / `metrics.csv`) で、これは develop の内部事情ではなく
 **develop と lesion の契約**。ファイル名も `store/parent_run.py` がローカルに宣言する。
+`metrics.csv` から読む列も同じく `CONTROL_METRIC_COLUMNS` / `DRIFT_METRIC_COLUMNS` として宣言してある。
 
 規約が変わったら直す場所は 1 つで、そのことがモジュールの docstring に書いてある。
 **この一覧が、develop 側で記録の規約を変える人にとっての索引になる。**

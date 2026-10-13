@@ -15,14 +15,13 @@ from __future__ import annotations
 
 from scripts.akita_soc.report import guard
 from scripts.akita_soc.store import paths
-from scripts.akita_soc.analysis.connectivity import write_report
 from scripts.akita_soc.figures.synapse_hist import delay_distribution, weight_distribution
 from scripts.akita_soc.figures.weight_matrix import weight_matrix
 
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
 #
-# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `figures/structure/` なので
+# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `report/structure/` なので
 # 表には持たせない。`emit()` は**この表を上から順に回すだけ**。
 FIGURES = (
     ("delay distribution", delay_distribution, "delay_distribution.png"),
@@ -36,21 +35,22 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。
+#
+# **群間結合確率の表は出さない。** akita_soc は全結合なので、E/I の 4 組すべてが確率 1 に
+# なり、表から読み取れることが無い (develop には `connection_probability.csv` がある)。
+TABLES = ()
+
+
 def emit(built) -> None:
-    """構造図一式を `<run>/figures/structure/` へ、数値レポートを `data/` へ。"""
+    """構造の図と表を `<run>/report/structure/` へ。"""
     run_dir = built.run_dir
-    out = paths.fig_dir(run_dir, paths.STRUCTURE)
+    out = paths.report_dir(run_dir, paths.STRUCTURE)
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"  {built.total_neurons} neurons, {built.wiring().num_synapses} synapses")
 
-    for label, draw, name in FIGURES:
-        guard(label, draw, built, out / name)
+    for label, make, name in FIGURES + TABLES:
+        guard(label, make, built, out / name)
 
-    # --- 表 ---
-    # **`FIGURES` に入れていない。** 置き場所が `figures/` ではなく `data/` で、
-    # 渡すのもファイル名ではなくディレクトリだから (2 本まとめて出す)。
-    # 図で見えている濃淡が何倍の差なのかは絵からは読めないので、数値でも残す。
-    guard("connectivity report", write_report, built, paths.data_dir(run_dir))
-
-    print(f"Figures saved to: {out}")
+    print(f"Report saved to: {out}")

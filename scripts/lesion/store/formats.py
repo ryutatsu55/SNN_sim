@@ -86,8 +86,10 @@ INITIAL_WEIGHTS_NAME = "weights_initial.npz"
 
 MANIFEST_NAME = "lesion.json"
 CUT_NAME = "lesion_cut.npz"
-CUT_PROFILE_NAME = "cut_profile.csv"
 METRICS_NAME = "metrics.csv"
+# 配線のトポロジー指標。**切断前と切断後の 2 行だけ。** 切断後の配線は run を通して
+# 固定なので、probe ごとの `metrics.csv` には入れない (重みを使う指標はあちら)。
+STRUCTURE_NAME = "structure.csv"
 # probe ごとの RTE (実効結合の損傷前比)。全 probe が揃ってから一度に書く表。
 RTE_NAME = "rte.csv"
 # run の束 (`compare`) の表。置き場所は `paths.compare_dir()`。

@@ -20,7 +20,7 @@ from src.utils.analysis.avalanche import analyze_avalanches, avalanche_size_colu
 from src.utils.analysis.correlation import mean_neuronal_correlation
 from src.utils.analysis.synchrony import burst_columns, event_columns, global_event_columns
 from src.utils.analysis.powerlaw import log_likelihood_ratio_power_vs_exponential
-from src.utils.analysis.spikes import diagnose_activity, firing_rates, spike_group_metrics
+from src.utils.analysis.spikes import firing_rates, spike_group_metrics
 from src.utils.analysis.weights import block_values, weight_block_metrics
 
 
@@ -74,7 +74,6 @@ def spike_columns(local_times, ids, total_neurons: int, record_window_ms: float,
         "mean_rate_hz": float(np.mean(rates)),
         "avalanche_threshold_ms": avalanche.threshold_ms,
         "num_avalanches": int(avalanche.sizes.size),
-        "avalanche_smax": int(smax),
         "llr": log_likelihood_ratio_power_vs_exponential(avalanche.sizes, smax=smax),
         "delta_cr": criticality_index_delta_cr(avalanche.sizes, smax=smax),
         "burstiness_index": burstiness_index(local_times, record_window_ms),
@@ -141,8 +140,4 @@ def build_row(window) -> dict:
                                     record_window_ms))
     out.update(weight_columns(window.weights(), wiring.row, wiring.col, layout,
                               max_plasticity_weight(window.config)))
-    out.update(diagnose_activity(
-        mean_rate_hz=out["mean_rate_hz"],
-        weight_at_max_fraction=out["weight_at_max_fraction"],
-    ))
     return out

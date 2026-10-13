@@ -73,7 +73,7 @@ scripts/develop/
 │   ├── built.py        build 直後に何を書くかの一覧 (write_built)
 │   └── views.py        Built / Window / Series (formats と契約をつなぐ)。open_run()
 │
-├── analysis/        表を作る
+├── analysis/        何を測るか (記録の行と、報告の表)
 │   ├── metrics.py
 │   └── connectivity.py
 │
@@ -112,7 +112,7 @@ scripts/develop/
 | | 知る | **知らない** |
 |---|---|---|
 | `run_one` / `replot` | GeNN の回し方。`report` の 3 つを呼ぶ順番 | どんな図が出るか。どんな指標があるか |
-| `report/*` | この段階で何を出すか。出力先の種類 | 描き方。測り方。ファイル名の規約 |
+| `report/*` | この段階で何を出すか。出力先の種類。報告のファイル名 | 描き方。測り方。記録のファイル名の規約 |
 | `store/*` | ファイル名。npz のキー。ディレクトリ | 何のために読まれるか。matplotlib |
 | `analysis/*` | 何を測るか。列名 | どう描かれるか。どこに置かれるか |
 | `figures/*` | 見た目のすべて | いつ呼ばれるか。どこに置かれるか |
@@ -165,23 +165,22 @@ analysis/connectivity.py  def write_report(built, out_dir) -> None
 ```python
 # report/panels.py
 """記録窓ごとに出すもの。"""
-from scripts.develop.report import guard
-from scripts.develop.store import paths
-from scripts.develop.analysis.metrics import build_row
-from scripts.develop.figures.raster import raster
-from scripts.develop.figures.avalanche import avalanche_distribution
-from scripts.develop.figures.trace import neuron_trace
+FIGURES = (     # 図: (ログ上の名前, 描く関数, 種類, ファイル名)
+    ("raster", raster, paths.RASTER, "raster_{tag}.png"),
+    ("avalanche plot", avalanche_distribution, paths.AVALANCHE, "avalanche_{tag}.png"),
+    ("neuron trace", neuron_trace, paths.TRACE, "neuron_trace_{tag}.png"),
+)
+TABLES = ()     # 人が読む表 (csv)。形は FIGURES と同じ
 
 
 def emit(window, *, metrics) -> None:
-    run, hour = window.run_dir, window.hour
+    # 記録: (view, out_path) の形ではないので表に入れず、明示行で書く
     metrics.append(build_row(window))
-    guard("raster", raster, window,
-          paths.fig_path(run, paths.RASTER, f"raster_{hour:g}h.png"))
-    guard("avalanche", avalanche_distribution, window,
-          paths.fig_path(run, paths.AVALANCHE, f"avalanche_{hour:g}h.png"))
-    guard("neuron trace", neuron_trace, window,
-          paths.fig_path(run, paths.TRACE, f"neuron_trace_{hour:g}h.png"))
+    # 報告: 表を上から回すだけ
+    tag = f"{window.hour:g}h"
+    for label, make, kind, template in FIGURES + TABLES:
+        guard(label, make, window,
+              paths.report_path(window.run_dir, kind, template.format(tag=tag)))
 ```
 
 `metrics` を受け取るのは `panels` だけ。**`metrics.csv` は記録窓をまたいで 1 行ずつ
@@ -196,11 +195,44 @@ def emit(window, *, metrics) -> None:
 
 ## 5. 出力の一覧
 
-| 段階 | 図 | 表 |
+| 段階 | 図 (`FIGURES`) | 報告の表 (`TABLES`) | 記録 (`data/`) |
+|---|---|---|---|
+| `structure` | `area` `connection_mask_coarse` `network_sample` `axon_network` `connection_probability` `delay_distribution` `distance_distribution` `weight_distribution` | `connection_probability.csv` `bridge_hops.csv` | — |
+| `panels` | `raster_{h}h` `avalanche_{h}h` `weight_matrix_{h}h` `neuron_trace_{h}h` | — | `metrics.csv` の 1 行 |
+| `overview` | `figure2c` `figure2d` | — | — |
+
+### 記録と報告
+
+出力は**読み手**で 2 種類に分け、置き場所で区別する。
+
+| | 記録 | 報告 |
 |---|---|---|
-| `structure` | `area` `connection_mask_coarse` `network_sample` `axon_network` `connection_probability` `delay_distribution` `distance_distribution` `weight_distribution` | `connection_probability.csv` `bridge_hops.csv` |
-| `panels` | `raster_{h}h` `avalanche_{h}h` `weight_matrix_{h}h` `neuron_trace_{h}h` | `metrics.csv` の 1 行 |
-| `overview` | `figure2c` `figure2d` | — |
+| 読み手 | プログラム (図・標準出力・別の集計)。または計算の記録 (測った値) | 人だけ |
+| 中身 | 測った値と、プログラムが使うために計算した値 | 人が読むために整形したもの (図と表) |
+| 置き場所 | `<run>/data/` | `<run>/report/<段階>/` |
+| 書き手 | `emit()` の明示行 + `store/formats.py` | 登録簿の `FIGURES` / `TABLES` |
+| 消したら | replot で作り直す必要がある | 何も失わない (replot で作り直せる) |
+| プログラムが読んでよいか | よい (窓・run をまたぐ図のキャッシュ) | 読まない |
+
+記録に入れる値の決め方:
+
+1. **測った値は計算の記録なので記録に入れてよい。** 人しか読まない列でも、表を 2 つに
+   割らずに同じ記録に置く。
+2. **差・比・閾値判定などの派生値は、プログラム (図・標準出力・別の集計) が使うときだけ**
+   記録してよい。どこからも使われない派生値は入れない。
+3. **値が変わる単位で 1 回だけ測る。** 窓ごとに変わらない値 (例: lesion の切断後の
+   トポロジー) を窓ごとの行に入れない。
+4. **config・layout・npz のメタデータ・コードの定数から分かる値は列にしない。**
+   読む側がそこから読む (例: アバランチ分布の図はべき乗フィットの smax を config の N から得る)。
+5. **記録のファイル名は `store/formats.py`、報告のファイル名は登録簿の表**が持つ。
+6. **報告の素材は必ず記録に残す。** 報告は登録簿の関数が記録 (view) から作るので、
+   `report/` は丸ごと消しても replot で戻る。記録から作れない報告が必要になったら、
+   報告を記録へ移すのではなく、足りない素材を記録に足す (例: lesion の `cut_profile.csv` は
+   切ったシナプスの重み・遅延を `lesion_cut.npz` に残してあるので、記録から作り直せる)。
+
+窓をまたぐ図 (`fig2c` / `*_track` / `dose_response`) が記録の CSV を読むのは、解析関数を
+直接呼ぶと全窓 (dose_response なら全 run × 全窓) の再計算になるため。同じ関数を通るので
+値は一致する。
 
 ---
 

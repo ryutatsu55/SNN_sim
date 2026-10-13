@@ -24,11 +24,11 @@ FIGURES = (
 
 
 def emit(collection) -> None:
-    """表を `lesion_compare/` へ書き、図を `lesion_compare/figures/` へ。"""
-    # --- 表 (図より先) ---
+    """記録の表を `lesion_compare/` へ書き、図を `lesion_compare/report/` へ。"""
+    # --- 記録 (図より先) ---
     # **guard で包まない。** 図は全部この表を読むので、書けなかったときに続けると
     # 前回の表で描いてしまう。
     write_summary(collection, collection.out_dir)
 
     for label, draw, name in FIGURES:
-        guard(label, draw, collection, paths.compare_fig_path(collection.cond_dir, name))
+        guard(label, draw, collection, paths.compare_report_path(collection.cond_dir, name))

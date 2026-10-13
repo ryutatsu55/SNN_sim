@@ -12,7 +12,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.utils.analysis.powerlaw import llr_ceiling_per_avalanche
 from src.utils.analysis.weights import BLOCK_ORDER, block_masks, excitatory_flags
 from scripts.akita_soc.figures import save
 
@@ -65,9 +64,7 @@ def fig2c(series, out_path: Path) -> None:
             continue
         ax.plot(hours, df[column], color='black', linewidth=1.5)
 
-        if column == 'llr':
-            _draw_llr_ceiling(ax, hours, df)
-        elif column == 'delta_cr':
+        if column == 'delta_cr':
             ax.axhline(0, color='gray', linestyle='--', linewidth=1)
         elif column == 'burstiness_index':
             top = max(df[column]) if max(df[column]) > 0 else 0.5
@@ -104,19 +101,3 @@ def _weight_trajectories(series) -> tuple[np.ndarray, dict[str, np.ndarray]]:
             stacks[name].append(values[masks[name]])
     return series.hours, {f"W_{name}": np.array(stacks[name]) for name in BLOCK_ORDER}
 
-
-def _draw_llr_ceiling(ax, hours, df) -> None:
-    """べき乗分布が [1, smax] で出せる LLR の上限を重ねる。
-
-    論文 Fig.2(c) の絶対値はこの線を超えており (72h で 1.65 倍)、**LLR の絶対値は論文と
-    比較できない**。自分の値が天井の何割かで読むこと。詳細は `powerlaw.py` の docstring。
-
-    `metrics.csv` の `llr` も同じ [1, smax] で評価してあるので、線と縦軸は同じ土俵。
-    """
-    if 'avalanche_smax' not in df.columns or 'num_avalanches' not in df.columns:
-        return
-    smax = int(df['avalanche_smax'].iloc[0])
-    ax.plot(hours, llr_ceiling_per_avalanche(smax=smax) * df['num_avalanches'],
-            color='tab:green', linestyle='-.', linewidth=1,
-            label=f'power-law ceiling (smax={smax})')
-    ax.legend(fontsize=7, loc='lower right')

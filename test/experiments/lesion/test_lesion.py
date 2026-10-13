@@ -450,6 +450,85 @@ class BuildRecordTest(unittest.TestCase):
             np.testing.assert_array_equal(coo.delays, post.delays)
             np.testing.assert_array_equal(series.wiring_pre().row, pre.row)
 
+    def _post_lesion_run(self, run_dir: Path):
+        """3 本に 1 本を切った run の切断直後の記録を書き、(切断前, 切断後) の COO を返す。
+
+        `run_one.py` と同じく `lesion_cut.npz` (切ったシナプスの素性) も書く。
+        """
+        from scripts.lesion.analysis.metrics import cut_profile
+        from scripts.lesion.store import paths
+        from scripts.lesion.store.built import write_built
+        from scripts.lesion.store.formats import save_cut
+
+        builder = _builder()
+        pre = builder.global_coo()
+        # 重みと遅延はシナプスごとに違う値にする (引き当てを取り違えたら表が変わるように)
+        pre = pre._replace(weights=np.linspace(0.1, 1.0, pre.num_synapses),
+                           delays=np.linspace(1.0, 3.0, pre.num_synapses))
+        keep = np.ones(pre.num_synapses, dtype=bool)
+        keep[::3] = False
+        builder.replace_global_coo(GlobalCOO(pre.row[keep], pre.col[keep], pre.weights[keep],
+                                             pre.delays[keep], pre.shape))
+        paths.prepare(run_dir)
+        ConfigManager().save_config(builder.config, save_dir=run_dir)
+        write_built(run_dir, builder, builder.layout, pre_coo=pre, keep=keep)
+        per_synapse, _comparison, _summary = cut_profile(
+            pre, ~keep, builder.layout, builder.layout.total_neurons)
+        save_cut(paths.data_dir(run_dir), per_synapse)
+        return pre, builder.global_coo()
+
+    def test_cut_profile_is_rebuilt_from_the_records(self):
+        """記録から作り直した比較表が、切断の瞬間に持っていた値から作った表と同じであること。
+
+        残存側は切断後の記録、切断側は `lesion_cut.npz` から (pre, post) で引き当てる。
+        引き当てを取り違えると、例外を出さずに別の値の表になる。
+        """
+        from scripts.lesion.analysis.metrics import cut_profile, pre_cut_coo
+        from scripts.lesion.store.views import open_run
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pre, _post = self._post_lesion_run(Path(tmp_dir))
+            built = open_run(Path(tmp_dir), require_windows=False).built()
+            coo, is_cut = pre_cut_coo(built)
+            np.testing.assert_array_equal(coo.row, pre.row)
+            np.testing.assert_allclose(coo.weights, pre.weights)
+            np.testing.assert_allclose(coo.delays, pre.delays)
+            np.testing.assert_array_equal(is_cut[::3], True)
+            self.assertEqual(int(is_cut.sum()), len(range(0, pre.num_synapses, 3)))
+            _p, expected, _s = cut_profile(pre, is_cut, built.layout, built.total_neurons)
+            _p, rebuilt, _s = cut_profile(coo, is_cut, built.layout, built.total_neurons)
+        np.testing.assert_equal(rebuilt, expected)   # nan どうしも等しいとみなす
+
+    def test_structure_record_has_one_row_per_wiring(self):
+        """`structure.csv` は切断前と切断後の 2 行で、それぞれの配線から測ってあること。
+
+        トポロジーは切断後の run を通して変わらないので probe ごとには測らない。
+        """
+        from scripts.lesion.analysis.structure import structure_rows
+        from scripts.lesion.store.views import open_run
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pre, post = self._post_lesion_run(Path(tmp_dir))
+            rows = structure_rows(open_run(Path(tmp_dir), require_windows=False).built())
+        self.assertEqual([row["wiring"] for row in rows], ["pre", "post"])
+        self.assertEqual(rows[0]["num_synapses"], pre.num_synapses)
+        self.assertEqual(rows[1]["num_synapses"], post.num_synapses)
+        # 重みを使う量は probe ごとの metrics.csv の担当
+        self.assertNotIn("out_strength_mean", rows[0])
+
+    def test_structure_stage_separates_records_from_reports(self):
+        """構造の段階は記録を `data/` に、人が読む表を `report/structure/` に書くこと。"""
+        from scripts.lesion.report import structure
+        from scripts.lesion.store import paths
+        from scripts.lesion.store.formats import STRUCTURE_NAME
+        from scripts.lesion.store.views import open_run
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            self._post_lesion_run(run_dir)
+            structure.emit(open_run(run_dir, require_windows=False).built())
+            self.assertTrue(paths.data_path(run_dir, STRUCTURE_NAME).exists())
+            for name in ("connection_probability.csv", "cut_profile.csv"):
+                self.assertTrue(paths.report_path(run_dir, paths.STRUCTURE, name).exists())
+                self.assertFalse(paths.data_path(run_dir, name).exists())
+
     def test_initial_weights_are_not_mistaken_for_a_probe(self):
         """`weights_initial.npz` が probe の glob に拾われないこと。"""
         from scripts.lesion.store.formats import (INITIAL_WEIGHTS_NAME, WEIGHTS,

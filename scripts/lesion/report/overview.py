@@ -9,7 +9,6 @@ from __future__ import annotations
 from scripts.lesion.report import guard
 from scripts.lesion.store import paths
 from scripts.lesion.analysis.effective import write_rte_table
-from scripts.lesion.analysis.metrics import write_delta_table
 from scripts.lesion.figures.chi_track import chi_track
 from scripts.lesion.figures.correlation_track import mean_correlation_track
 from scripts.lesion.figures.drive_track import drive_track
@@ -22,7 +21,7 @@ from scripts.lesion.figures.weight_track import (weight_distribution_shift,
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
 #
-# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `figures/overview/` なので
+# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `report/overview/` なので
 # 表には持たせない。渡す view は run 全体の `Series`。
 #
 # **記録時刻ごとに出る図はこの段階には無い。** probe ごとの図は `panels.py` が受け持つ。
@@ -40,22 +39,20 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。今は無い。
+TABLES = ()
+
+
 def emit(series) -> None:
-    """run 全体の図を `<run>/figures/overview/` へ、差の表を `data/` へ。"""
-    out = paths.fig_dir(series.run_dir, paths.OVERVIEW)
+    """RTE を `data/` に記録し、run 全体の図と表を `<run>/report/overview/` へ。"""
+    out = paths.report_dir(series.run_dir, paths.OVERVIEW)
     out.mkdir(parents=True, exist_ok=True)
 
-    # --- 表 (図より先) ---
+    # --- 記録 (図より先) ---
     # **`FIGURES` に入れていない。** 置き場所が `data/` で、`rte track` の図がこれを読む。
     # 基準 (baseline の窓) が決まらないと値が決まらないので、1 行ずつ追記する
-    # metrics.csv には混ぜない。
+    # metrics.csv には混ぜない。baseline を持たない run では MissingData で skip される。
     guard("RTE table", write_rte_table, series, paths.data_dir(series.run_dir))
 
-    for label, draw, name in FIGURES:
-        guard(label, draw, series, out / name)
-
-    # --- 表 ---
-    # **`FIGURES` に入れていない。** 置き場所が `figures/` ではなく `data/` だから。
-    # ベースラインとの差は**全 probe が揃って初めて決まる**ので、1 行ずつ追記する
-    # metrics.csv には混ぜず、ここで別の CSV として出す。
-    guard("metrics delta table", write_delta_table, series, paths.data_dir(series.run_dir))
+    for label, make, name in FIGURES + TABLES:
+        guard(label, make, series, out / name)

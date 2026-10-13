@@ -96,6 +96,10 @@ class Built(runview.Built):
     def wiring(self) -> Wiring:
         return self._series.wiring()
 
+    def wiring_pre(self) -> Wiring:
+        """切断**前**の結合。切断前後のトポロジーを並べる記録 (`structure.csv`) が使う。"""
+        return self._series.wiring_pre()
+
     def coords(self) -> np.ndarray:
         return self._series.coords()
 
@@ -116,6 +120,10 @@ class Built(runview.Built):
         wiring = self.wiring()
         return Coo(row=wiring.row, col=wiring.col, weights=self.weights(),
                    delays=self._series.delays(), shape=wiring.shape)
+
+    def cut(self) -> dict:
+        """切断されたシナプス 1 本ごとの素性 (`lesion_cut.npz`)。切断前の結合を組み直すのに使う。"""
+        return self._series.cut()
 
 
 class Window(runview.Window):

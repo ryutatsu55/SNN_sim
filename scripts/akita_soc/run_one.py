@@ -231,8 +231,8 @@ def main():
         )
 
     trace_neuron, trace_window_s = resolve_trace(config)
-    fig_kinds = paths.DEFAULT_FIG_KINDS + ((paths.TRACE,) if trace_neuron is not None else ())
-    paths.prepare(run_dir, fig_kinds)
+    report_kinds = paths.DEFAULT_REPORT_KINDS + ((paths.TRACE,) if trace_neuron is not None else ())
+    paths.prepare(run_dir, report_kinds)
 
     print(f"run: {run_dir}  seed={seed}  backend={config.simulation.backend}")
     if trace_neuron is not None:

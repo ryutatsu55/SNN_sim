@@ -66,6 +66,15 @@ RECORD_START_KEY = "record_start_ms"
 # 親 run の終盤ドリフトとして manifest に添える行数。
 DRIFT_TAIL_ROWS = 3
 
+# **lesion が読む親 run (develop 形式) の `metrics.csv` の列。** develop の記録の列を
+# 変えるときはここを見ること —— 実験どうしは import し合えないので、依存はここにしか書けない。
+#
+# 対照 run の回復を測る列 (`analysis/summary.py`)。無ければ止める。
+CONTROL_METRIC_COLUMNS = ("hour", "mean_rate_hz")
+# 終盤ドリフトとして `lesion.json` の `parent_drift` に写す列。親が持たない列は写さない。
+DRIFT_METRIC_COLUMNS = ("hour", "mean_rate_hz", "mean_correlation", "bp_sigma_bp",
+                        "delta_cr", "llr")
+
 
 @dataclass(frozen=True)
 class Parent:
@@ -167,7 +176,7 @@ def _load_spikes(path: Path, hour: float) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _load_drift(data_dir: Path) -> dict:
-    """親 run の `metrics.csv` の末尾数行。**結果を読むときのドリフトの目安。**
+    """親 run の `metrics.csv` の末尾数行の `DRIFT_METRIC_COLUMNS`。**結果を読むときのドリフトの目安。**
 
     親がこれを持たなくても run は完走するので、**取れなかったときは理由を返す。**
     空 dict だと「親に metrics.csv が無かった」と「読んだが行が無かった」が区別できず、
@@ -180,6 +189,7 @@ def _load_drift(data_dir: Path) -> dict:
         rows = list(csv.DictReader(handle))[-DRIFT_TAIL_ROWS:]
     if not rows:
         return {"unavailable": f"親 run の {METRICS_NAME} に行がありません: {path}"}
+    rows = [{key: row[key] for key in DRIFT_METRIC_COLUMNS if key in row} for row in rows]
     return {"note": "sham 無しなので、回復幅がこのドリフト幅と同オーダーなら結論を出さない",
             "tail_rows": rows}
 
@@ -258,4 +268,8 @@ def load_parent_metrics(run_dir: Path) -> pd.DataFrame:
     path = _parent_data_dir(Path(run_dir)) / METRICS_NAME
     if not path.exists():
         raise FileNotFoundError(f"{path} がありません。")
-    return pd.read_csv(path)
+    table = pd.read_csv(path)
+    missing = [column for column in CONTROL_METRIC_COLUMNS if column not in table.columns]
+    if missing:
+        raise KeyError(f"{path} に対照の回復を測る列がありません: {missing}")
+    return table

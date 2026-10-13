@@ -34,6 +34,10 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。今は無い。
+TABLES = ()
+
+
 def emit(window, *, metrics) -> None:
     """記録時刻 1 点ぶんの出力。
 
@@ -41,8 +45,8 @@ def emit(window, *, metrics) -> None:
         window: `store/views.py` の `Window`。**直前に書いた npz を読み直したもの。**
         metrics: `formats.MetricsWriter`。この窓の行を 1 行追記する。
     """
-    # --- 表 ---
-    # **`FIGURES` に入れていない。** 図と違って `(view, out_path)` ではなく、
+    # --- 記録 ---
+    # **`FIGURES` / `TABLES` に入れていない。** 報告と違って `(view, out_path)` ではなく、
     # 窓をまたいで開きっぱなしのライターへ 1 行足す操作だから。
     metrics.append(build_row(window))
 
@@ -50,6 +54,6 @@ def emit(window, *, metrics) -> None:
     # 窓を指すのは記録時刻。`f"{hour:g}"` は有効数字 6 桁なので**目印にしか使わない**
     # (時刻の正は npz の record_start_ms が持つ)。
     tag = f"{window.hour:g}h"
-    for label, draw, kind, template in FIGURES:
-        guard(label, draw, window,
-              paths.fig_path(window.run_dir, kind, template.format(tag=tag)))
+    for label, make, kind, template in FIGURES + TABLES:
+        guard(label, make, window,
+              paths.report_path(window.run_dir, kind, template.format(tag=tag)))

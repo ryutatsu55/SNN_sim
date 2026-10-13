@@ -246,11 +246,10 @@ def analyze_avalanches(
     Returns:
         (avalanches, lags_ms, mean_corr, metrics)
     """
-    # 循環 import を避けるため関数内で読む —— criticality.py は判定のしきい値を持つだけで
-    # アバランシェの切り出しには関与しないが、逆向き (criticality -> avalanche) の import が
-    # 将来生えたときにここが先に壊れる方が分かりやすい。
-    from src.utils.analysis.criticality import (correlation_decay_ms, criticality_checks,
-                                                pair_cross_correlogram)
+    # 循環 import を避けるため関数内で読む —— criticality.py はアバランシェの切り出しには
+    # 関与しないが、逆向き (criticality -> avalanche) の import が将来生えたときに
+    # ここが先に壊れる方が分かりやすい。
+    from src.utils.analysis.criticality import correlation_decay_ms, pair_cross_correlogram
     from src.utils.analysis.powerlaw import fit_exponent
 
     avalanches = detect_avalanches_binned(spike_times, duration_ms,
@@ -281,5 +280,4 @@ def analyze_avalanches(
         "max_lifetime_ms": (float(avalanches.lifetimes_ms.max())
                             if avalanches.num_avalanches else float("nan")),
     }
-    metrics.update({k: float(v) for k, v in criticality_checks(metrics).items()})
     return avalanches, lags, corr, metrics

@@ -117,7 +117,7 @@ def test_event_columns_names_are_stable():
     rng = np.random.default_rng(5)
     times, ids = _events(np.arange(0.0, DURATION_MS, 500.0), N // 2, rng)
     columns = event_columns(times, ids, N, DURATION_MS)
-    assert set(columns) == {"event_bin_ms", "event_rate_hz", "event_participation",
+    assert set(columns) == {"event_rate_hz", "event_participation",
                             "event_participation_ceiling", "synchronous_fraction",
                             "active_fraction_median"}
     assert 0.0 < ACTIVE_FRACTION < 1.0

@@ -1,8 +1,8 @@
 """**切断の直後**に出すもの。
 
 develop の `structure.py` が「build 直後」に出すのに対し、lesion は**切断が済んだ
-ネットワーク**の形を出す。切断前の形は親 run の `figures/structure/` に残っているので、
-ここで両方は出さない。
+ネットワーク**の形を出す。切断前の形は親 run の `report/structure/` に残っているので、
+ここで両方は出さない。例外は記録の `structure.csv` で、切断の前後を 1 行ずつ並べる。
 
 受け取るのは `series.built()` (切断直後の記録を読む view)。軸索幾何は切断後に絞った
 ものが記録されている (`store/built.py`) ので、切ったはずの結合は描かれない。
@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from scripts.lesion.report import guard
 from scripts.lesion.store import paths
-from scripts.lesion.analysis.connectivity import write_report
+from scripts.lesion.analysis.connectivity import (bridge_hops_table,
+                                                  connection_probability_table)
+from scripts.lesion.analysis.metrics import cut_profile_table
+from scripts.lesion.analysis.structure import write_structure
+from scripts.lesion.store.formats import STRUCTURE_NAME
 from scripts.lesion.figures.area import area_figure
 from scripts.lesion.figures.connection_mask import (connection_mask,
                                                     empirical_connection_probability)
@@ -26,7 +30,7 @@ from scripts.lesion.figures.synapse_hist import (delay_distribution, distance_di
 
 # **この段階で出るものの一覧。** 足すならここへ 1 行足す。
 #
-# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `figures/structure/` なので
+# `(ログ上の名前, 描く関数, ファイル名)`。置き場所は全部 `report/structure/` なので
 # 表には持たせない。`emit()` は**この表を上から順に回すだけ**。
 FIGURES = (
     ("area", area_figure, "area.png"),
@@ -46,21 +50,32 @@ FIGURES = (
 )
 
 
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じで、置き場所も同じ
+# `report/structure/`。切断で群間結合がどれだけ減ったかは、この表を親 run のものと比べれば読める。
+TABLES = (
+    ("connection probability table", connection_probability_table,
+     "connection_probability.csv"),
+    # ブリッジを持たない area では MissingData で skip される。
+    ("bridge hops table", bridge_hops_table, "bridge_hops.csv"),
+    # 切ったシナプスと残したシナプスの属性の比較。「何を失ったか」を残存群と並べて読む。
+    ("cut profile table", cut_profile_table, "cut_profile.csv"),
+)
+
+
 def emit(built) -> None:
-    """構造図一式を `<run>/figures/structure/` へ、数値レポートを `data/` へ。"""
+    """切断前後のトポロジーを `data/` に記録し、構造の図と表を `<run>/report/structure/` へ。"""
     run_dir = built.run_dir
-    out = paths.fig_dir(run_dir, paths.STRUCTURE)
+
+    # --- 記録 ---
+    # **`guard()` を通さない。** 落ちたら記録が欠けるので、警告 1 行で流さずに止める。
+    write_structure(built, paths.data_path(run_dir, STRUCTURE_NAME))
+
+    out = paths.report_dir(run_dir, paths.STRUCTURE)
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"  切断後: {built.total_neurons} neurons, {built.wiring().num_synapses} synapses")
 
-    for label, draw, name in FIGURES:
-        guard(label, draw, built, out / name)
+    for label, make, name in FIGURES + TABLES:
+        guard(label, make, built, out / name)
 
-    # --- 表 ---
-    # **`FIGURES` に入れていない。** 置き場所が `figures/` ではなく `data/` で、
-    # 渡すのもファイル名ではなくディレクトリだから (2 本まとめて出す)。
-    # 切断で群間結合がどれだけ減ったかは、この表を親 run のものと比べれば読める。
-    guard("connectivity report", write_report, built, paths.data_dir(run_dir))
-
-    print(f"Figures saved to: {out}")
+    print(f"Report saved to: {out}")

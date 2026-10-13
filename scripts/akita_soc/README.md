@@ -99,7 +99,7 @@ scripts/akita_soc/
 ├── akita_soc.yaml  メイン config
 │
 ├── report/         いつ何を出すか  ← ここを見れば出力が一覧できる
-│   ├── structure.py   build 直後: 初期重み行列 / 重み・遅延の分布 / 結合確率の表
+│   ├── structure.py   build 直後: 初期重み行列 / 重み・遅延の分布 (全結合なので結合確率の表は出さない)
 │   ├── panels.py      記録窓ごと: ラスター / アバランチ / 重み行列 / トレース / metrics 1 行
 │   └── overview.py    run 終了後: fig2c / fig2d
 ├── store/          どこに何があり、どう読み書きするか
@@ -117,7 +117,7 @@ scripts/akita_soc/
 | 旧 | 新 |
 |---|---|
 | CLI 引数 11 個 (`--record-hours` / `--seed` / `--out-dir` …) | `--config` と `--condition` の 2 つ。残りは config へ |
-| 出力が `outputs/<日時>_seedN/` 直下に平置き | `outputs/akita_soc/<条件>/` の `data/` と `figures/<種類>/` |
+| 出力が `outputs/<日時>_seedN/` 直下に平置き | `outputs/akita_soc/<条件>/` の `data/` (記録) と `report/<種類>/` (図と表) |
 | 走り終えてから `organize_output()` で移す | 最初から `data/` へ書く |
 | 再解析が `metrics_replot.csv` に逃げる (列が本番より少ない) | 本番と同じ関数・同じ列なので `metrics.csv` を上書き |
 | `configs/components/tasks.yaml` の `akita_soc_fig2*` | `scripts/akita_soc/task.yaml` |
