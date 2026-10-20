@@ -248,6 +248,7 @@ def make_app_config(cfg, snapshot_path, multiplier, inhibition_factor):
                 for label, tau in (("Exc", cfg.tau_exc_ms), ("Inh", cfg.tau_inh_ms))
             },
             network=dict(
+                area=dict(profile_name="no_space"),
                 space=dict(profile_name="saved_snapshot", **saved),
                 connection=dict(profile_name="saved_snapshot", **saved),
                 weight=dict(profile_name="baseline_pair_weights", **weight),

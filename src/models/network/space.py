@@ -5,15 +5,24 @@ from typing import Optional, Dict, Any, List
 from src.core.registry import SPATIAL_MODELS
 from pathlib import Path
 
+# 型注釈のためだけでなく、**AREA_MODELS の登録デコレータを発火させるための import** でもある。
+# 既存のエントリポイントはどれも `import src.models.network.space` を持っているので、
+# ここで area を引き込んでおけば全スクリプトでエリアが解決できる。
+from .area import BaseArea
+
 class BaseSpace(ABC):
     """空間座標を生成する基底クラス"""
-    def __init__(self, config: Dict[str, Any], num_neurons: int, rng: np.random.RandomState, layout=None):
+    def __init__(self, config: Dict[str, Any], num_neurons: int, rng: np.random.RandomState, layout=None,
+                 area: Optional[BaseArea] = None):
         self.config = config
         self.num_neurons = num_neurons
         self.rng = rng
         # NetworkLayout。ニューロン種ごとの意図的バイアスや無相関化(シャッフル)を
         # 具象クラス側で実装したい場合に self.layout.ids_by("polarity") などを参照する。
         self.layout = layout
+        # BaseArea。soma を配置できる領域で、配置は area.sample(n, self.rng) を呼ぶ。
+        # エリア自身は rng を持たないので、乱数の消費はこの呼び出し順にだけ依存する。
+        self.area = area
 
     def describe_axes(self) -> Dict[str, Any]:
         """任意フック: この空間モデルが定義するカテゴリ/ソート軸を宣言する。
@@ -115,6 +124,76 @@ class RandomCircle2DSpace(BaseSpace):
         coords = np.zeros((self.num_neurons, 3), dtype=np.float32)
         coords[:, 0] = radius * np.cos(theta)
         coords[:, 1] = radius * np.sin(theta)
+
+        return coords
+
+@SPATIAL_MODELS.register("area_uniform")
+class AreaUniformSpace(BaseSpace):
+    """`network.area` が定義する領域内に一様ランダムに配置する空間モデル。
+
+    形状の知識は一切持たず、すべてエリアに委譲する(`area.sample()`)。円/矩形のような
+    単純形状では解析的サンプリング、`composite` のような複雑形状では棄却サンプリングが
+    エリア側で選ばれる。パラメータは空(形は areas.yaml が決める)。
+
+    エリアが `part_of()` を持つ(= `CompositeArea`)場合、各ニューロンがどの part に
+    落ちたかを **`module` 軸**として宣言する。これによりモジュール構造は専用の空間クラスを
+    書かなくても、エリアの定義だけから自動的に得られる。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._module_labels: Optional[np.ndarray] = None
+
+    def describe_axes(self) -> Dict[str, Any]:
+        if self._module_labels is None:
+            return {}
+        return {"module": self._module_labels}
+
+    def generate(self):
+        if self.area is None:
+            raise ValueError(
+                "area_uniform は有界な network.area を必要とします。メイン config の network に"
+                " area: disk などを指定してください (no_space は無界なので一様サンプリング"
+                " できません)。"
+            )
+
+        # soma を置ける部分領域。既定は area そのもの(**同一オブジェクト**なので乱数の
+        # 消費数も従来と変わらない)。`allow_soma: false` の part がある複合領域では
+        # それを除いた union が返る。軸索側は NetworkBuilder が渡した area をそのまま
+        # 使い続けるので、「soma はモジュール内、軸索はブリッジも通る」が実現する。
+        # ダックタイピングで受けるのは他のエリア参照(part_of など)と同じ作法。
+        region = getattr(self.area, "soma_area", self.area)
+
+        xy = region.sample(self.num_neurons, self.rng)
+
+        coords = np.zeros((self.num_neurons, 3), dtype=np.float32)
+        coords[:, :2] = xy
+
+        # 実効密度の報告。Sumi et al. (2025) の培養は 400 neurons/mm^2 = 4e-4 /um^2 なので、
+        # ニューロン数とエリアの大きさが噛み合っていない config に早く気づけるようにする。
+        # 分母は **soma 配置領域**の面積 — N はそこにしか居ないので、これが実効密度になる。
+        area_um2 = region.area_um2
+        if area_um2:
+            density = self.num_neurons / area_um2
+            total_um2 = self.area.area_um2 if region is not self.area else None
+            extent = (f"soma area={area_um2 * 1e-6:.3f} mm^2 / total {total_um2 * 1e-6:.3f} mm^2"
+                      if total_um2 else f"area={area_um2 * 1e-6:.3f} mm^2")
+            print(f"    Density: {density * 1e6:.1f} neurons/mm^2 "
+                  f"(N={self.num_neurons}, {extent})")
+
+        # module 軸(エリアが複合領域なら、どの part に落ちたか)。
+        # **soma 配置領域の上で採る。** ブリッジがモジュールへ食い込む帯では、モジュール内の
+        # 点でも全体領域の part_of は「より深い」ブリッジ part を返しうるので、全体領域で
+        # 採ると soma が B0-1 とラベルされてしまう。region の part_names は親から
+        # 引き継いだ名前なので、除外前と同じ M0, M1, ... が出る。
+        part_of = getattr(region, "part_of", None)
+        if callable(part_of):
+            names = getattr(region, "part_names", None)
+            idx = part_of(xy)
+            self._module_labels = (
+                np.asarray(names, dtype=object)[idx].astype(str) if names is not None
+                else np.array([f"M{i}" for i in idx])
+            )
 
         return coords
 

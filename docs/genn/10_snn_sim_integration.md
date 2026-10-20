@@ -21,7 +21,7 @@ configs/*.yaml ──▶ ConfigManager(Pydantic検証) ──▶ AppConfig
                               ▼
    GeNNSimulator ── build/load/step/push/pull/reset でシミュレーション実行
                               ▼
-   results/spikes ──▶ src/utils/visualize で可視化、outputs/ へ保存
+   results/spikes ──▶ src/utils/plotting で可視化、outputs/ へ保存
 ```
 
 主なディレクトリ:
@@ -257,7 +257,8 @@ visualize.network(weights=builder.global_weights, coords=builder.global_coords, 
 
 - 出力先は [src/core/output_manager.py](../../src/core/output_manager.py) の
   `create_run_output_dir(TASK_NAME)` がタイムスタンプ付きで作成（`outputs/<task>/<timestamp>/`）。
-- 可視化は [src/utils/visualize/](../../src/utils/visualize/)（ラスター、ネットワーク図、重み追跡など）。
+- 可視化は [src/utils/plotting/](../../src/utils/plotting/)（ラスター、ネットワーク図、重み行列など）。
+  重み追跡など Akita 実験固有のものは [src/utils/experiments/akita_soc/](../../src/utils/experiments/akita_soc/)。
 
 ## 10.8 GeNN 汎用ドキュメントとの対応表
 

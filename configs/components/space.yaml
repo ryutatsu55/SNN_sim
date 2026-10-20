@@ -27,6 +27,11 @@ random_2d_n10000:
 random_circle_2d:
   r: 3000.0   # um
 
+# network.area が定義する領域内に一様ランダム配置する。形の指定は一切持たない
+# (それは areas.yaml の仕事) が、resolve() がプロファイルキーの存在を要求するので
+# 空マッピングを置いておく。エリアが複合領域なら module 軸も自動で立つ。
+area_uniform: {}
+
 block_2d:
   x_range: [0.0, 100.0]  # um
   y_range: [0.0, 100.0]  # um

@@ -41,6 +41,7 @@ synapses:
       type: ExpCond
       mode: inhibitory
 network:
+  area: no_space            # 領域の制約なし (確率ベースの結合なので領域を参照しない)
   space: no_space
   connection: constant_prob_full
   weight: constant_zero

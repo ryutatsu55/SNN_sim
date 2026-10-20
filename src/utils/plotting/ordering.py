@@ -44,6 +44,15 @@ class Ordering:
         """境界の表示位置。`level` を指定するとその階層のものだけ返す。"""
         return [pos for pos, lv in self.boundaries if level is None or lv == level]
 
+    def visible_boundaries(self, skip: tuple[str, ...] = ("polarity",)) -> list[tuple[int, int]]:
+        """`skip` に挙げた軸の切り替わり位置を除いた境界。
+
+        「E/I は色で判別できるので線は引かない」という描画側の約束をここで表す。
+        `boundaries` の level は `axes` の添字なので、軸名で素直に落とせる。
+        境界そのものは `boundaries` に残るので、落とすのは描画対象からだけ。
+        """
+        return [(pos, level) for pos, level in self.boundaries if self.axes[level] not in skip]
+
 
 def resolve_ordering(layout, order_axes: tuple[str, ...] | None = DEFAULT_ORDER_AXES) -> Ordering:
     """並べ替え順とブロック境界を求める。

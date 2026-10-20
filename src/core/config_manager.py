@@ -122,6 +122,10 @@ class ComponentConfig(BaseModel):
 
 class NetworkConfig(BaseModel):
     """ネットワークトポロジー生成の設定"""
+    # ニューロンを配置し軸索を閉じ込める 2D 領域。space より先に構築される。
+    # 他の 4 コンポーネントと同じく必須。領域の制約を置かない場合も `area: no_space` と
+    # 明示的に書く (既定値で暗黙に決まると、記録を読んでも領域が分からなくなる)。
+    area: ComponentConfig
     space: ComponentConfig
     connection: ComponentConfig
     weight: ComponentConfig
@@ -343,6 +347,9 @@ class ConfigManager:
 
         # 読み込むべきコンポーネントYAMLと、test.yaml 内のキー名のマッピング
         network_map = {
+            # area を先頭に置くのは構築順 (area -> space -> connection -> ...) と
+            # 保存される config.yaml のキー順を揃えるため。
+            "areas.yaml": ("area", network["area"]),
             "space.yaml": ("space", network["space"]),
             "connections.yaml": ("connection", network["connection"]),
             "weights.yaml": ("weight", network["weight"]),
@@ -443,6 +450,10 @@ class ConfigManager:
         simulation.backend も補完しない。ただし assignment と違い**検証は通す** (None 可)。
         backend はレイアウト復元に不要なので、backend フィールドが無い時代の config.yaml でも
         解析はできるべきだから。再実行しようとした時点で NetworkBuilder が弾く。
+
+        network.area も補完しない。assignment と同じく必須フィールドなので、記録に無ければ
+        検証エラーで落ちる (領域を暗黙に決めると、記録を読んでもどの領域で走ったか
+        分からなくなる)。
         """
         config_path = Path(resolved_config)
         resolved = self._load_yaml(config_path)

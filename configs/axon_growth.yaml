@@ -1,0 +1,56 @@
+# 軸索伸長アルゴリズムによる結合生成 (Sumi et al. 2025 Front. Neurosci. 19:1570783 §2.8)。
+# 論文の培養系ジオメトリ: 直径 3 mm の円板に 400 neurons/mm^2 → N = 2827。
+# 軸索は Rayleigh 分布した長さだけ「ほぼ直線」に伸び、樹状突起円 (半径 150 um) と
+# 交差するごとに確率 20% で結合する。円板の縁に当たった軸索は壁沿いに偏向し、外へは出ない。
+simulation:
+  N: 2827  # 面積より算出 (pi * 1.5^2 mm^2 x 400 neurons/mm^2)
+  dt: 0.1
+  seed: 1
+  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
+
+inputs:
+  # akita_escape_lif の escape 発火が自発活動を供給するため外部ノイズは不要。
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  # 400 neurons/mm^2 x pi * 1.5^2 mm^2 = 2827、E/I = 80/20
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    polarity: excitatory
+    num: 2262
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    polarity: inhibitory
+    num: 565
+
+synapses:
+  from_Exc:
+    source: [Layer_Exc]
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: [Layer_Inh]
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  area: disk                # 直径 3 mm の円板 (radius 1500 um)
+  space: area_uniform       # エリア内に一様ランダム配置
+  connection: axon_growth   # 軸索伸長アルゴリズム
+  weight: lognormal_broad   # 対数正規初期重み
+  delay: distance_based     # 距離依存遅延 delay(d)=d/500 + 1.0ms

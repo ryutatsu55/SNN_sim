@@ -49,6 +49,7 @@ synapses:
       mode: inhibitory
 
 network:
+  area: no_space            # 領域の制約なし (確率ベースの結合なので領域を参照しない)
   space: "C.elegans"        # ordered_coords.csv の実3D座標 + Layer(IN1..IN4)
   connection: "C.elegans"   # synapse_mask.csv (chem∪elec)
   weight: "C.elegans"       # weight_matrix_chem/elec.csv (elec 上書き, [min,max] クリップ→max正規化)

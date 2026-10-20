@@ -1,8 +1,12 @@
 """ラスター図。
 
-`layout` を渡すと y 軸を `order_axes` の順に並べ替え、E/I で色分けしてブロック境界に
-線を引く。並べ替えの指定は重み行列 (`plotting.matrices`) と共通なので、
-`order_axes=("layer", "polarity")` のような指定が両方の図に同じ意味で効く。
+`layout` を渡すと y 軸を `order_axes` の順に並べ替え、E/I で色分けして
+**E/I 以外の**ブロック境界に線を引く。並べ替えの指定は重み行列 (`plotting.matrices`) と
+共通なので、`order_axes=("layer", "polarity")` のような指定が両方の図に同じ意味で効く。
+
+E/I の切り替わりに線を引かないのは、赤/青の色分けが既にその位置を示しているから。
+`order_axes=("module", "polarity")` なら線はモジュール境界だけになり、各モジュール帯の
+中は色だけで E→I が読める。
 """
 from __future__ import annotations
 
@@ -29,8 +33,8 @@ def plot_raster(
     """スパイク列のラスター図を描く。
 
     `layout` (NetworkLayout) を渡すと y 軸を `order_axes` の順に並べ替え (表示ID は
-    1 始まり)、興奮性=赤 / 抑制性=青で色分けし、ブロックの境目に破線を引く。
-    省略時、または `order_axes=None` のときは生のグローバルIDをそのまま y 軸に使う。
+    1 始まり)、興奮性=赤 / 抑制性=青で色分けし、**E/I 以外の**ブロックの境目に破線を
+    引く。省略時、または `order_axes=None` のときは生のグローバルIDをそのまま y 軸に使う。
 
     Args:
         times: スパイク時刻 [ms]
@@ -67,7 +71,7 @@ def plot_raster(
 
         ax.scatter(t_s[exc_mask], display[exc_mask], s=marker_size, color="tab:red", label="Excitatory")
         ax.scatter(t_s[~exc_mask], display[~exc_mask], s=marker_size, color="tab:blue", label="Inhibitory")
-        for position, level in ordering.boundaries:
+        for position, level in ordering.visible_boundaries():
             if 0 < position < total:
                 ax.axhline(position + 0.5, color="gray",
                            lw=0.8 if level == 0 else 0.5, ls="--")

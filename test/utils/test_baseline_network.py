@@ -136,6 +136,7 @@ def test_builder_coo_and_pair_weights(cfg, tmp_path):
     make_snapshot(cfg, 11, path)
     arrays, _, _ = load_snapshot(path)
     app = make_app_config(cfg, path, 2, 0.5)
+    assert app.network.area.profile_name == "no_space"
     builder = NetworkBuilder(app)
     builder.build()
     codes = []
@@ -148,8 +149,11 @@ def test_builder_coo_and_pair_weights(cfg, tmp_path):
         [cfg.weights.ee * 2, cfg.weights.ei * 2, cfg.weights.ie, cfg.weights.ii]
     )
     pair = (arrays["rows"] >= cfg.n_exc).astype(int) * 2 + (arrays["cols"] >= cfg.n_exc)
-    np.testing.assert_allclose(builder.sparse_weights, expected[pair])
-    np.testing.assert_allclose(builder.sparse_delays + cfg.dt_ms, arrays["arrival_ms"])
+    coo = builder.global_coo()
+    np.testing.assert_array_equal(coo.row, arrays["rows"])
+    np.testing.assert_array_equal(coo.col, arrays["cols"])
+    np.testing.assert_allclose(coo.weights, expected[pair])
+    np.testing.assert_allclose(coo.delays + cfg.dt_ms, arrays["arrival_ms"])
     with pytest.raises(ValueError, match="N/E/I"):
         make_app_config(changed(cfg, n=21), path, 1, 1)
 

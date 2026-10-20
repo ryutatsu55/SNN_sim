@@ -1,0 +1,57 @@
+# 臨界状態テスト暫定版
+# (custom_Akita e/i-stdp・ExpCond・akita_escape_lif)。
+# 空間配置 + 距離依存結合 + 距離依存遅延 を組み合わせる。
+# 初期重みは対数正規 (MD §10)、STDP は custom_Akita を MD §7 に整合 (e/i-stdp_beggs)。
+simulation:
+  N: 3600  # 面積より算出（例：(3×3mm^2)× 400 neuron/mm^2 = 3,600 neurons）
+  dt: 0.1
+  seed: 1
+  backend: cuda       # GeNN バックエンド: cuda | cpu | auto
+
+inputs:
+  # akita_escape_lif の escape 発火(f_rest)が自発活動を供給するため外部ノイズは不要。
+  GaussianNoise:
+    enable: false
+    mean: 0.0
+    sd: 0.0
+
+neurons:
+  # E/I = 80/20
+  Layer_Exc:
+    type: akita_escape_lif_physical
+    mode: excitatory
+    polarity: excitatory
+    num: 2880
+  Layer_Inh:
+    type: akita_escape_lif_physical
+    mode: inhibitory
+    polarity: inhibitory
+    num: 720
+
+synapses:
+  from_Exc:
+    source: [Layer_Exc]
+    plasticity:
+      type: custom_Akita
+      mode: e-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: excitatory
+  from_Inh:
+    source: [Layer_Inh]
+    plasticity:
+      type: custom_Akita
+      mode: i-stdp_physical
+      pairing: trace
+    synapse:
+      type: ExpCond
+      mode: inhibitory
+
+network:
+  area: no_space            # 領域の制約なし (確率ベースの結合なので領域を参照しない)
+  space: random_circle_2d   # ランダム円形
+  connection: beggs_plenz   # 距離依存結合
+  weight: lognormal_broad     # 対数正規初期重み
+  # weight: constant_zero     # all zero
+  delay: distance_based     # 距離依存遅延 delay(d)=d/500 + 1.0ms

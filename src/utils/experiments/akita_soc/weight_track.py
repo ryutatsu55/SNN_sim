@@ -21,9 +21,9 @@ from src.core.output_manager import AXES_NAME, CONFIG_NAME, data_dir, locate, re
 from src.utils.analysis.weights import compute_block_metrics
 from src.utils.experiments.akita_soc.runio import (
     WEIGHTS,
-    connection_mask_from_config,
     discover_records,
-    load_weight_matrix,
+    load_connectivity,
+    load_weight_values,
     write_metrics_csv,
 )
 from src.utils.plotting.matrices import plot_single_weight_matrix, plot_weight_panel
@@ -56,38 +56,45 @@ def visualize_weight_tracks(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # organize_output() 後は npz が data/ にあるので、列挙はそちらを見る (出力は run 直下)。
-    weight_files = discover_records(data_dir(run_dir), WEIGHTS)
+    source_dir = data_dir(run_dir)
+    weight_files = discover_records(source_dir, WEIGHTS)
     if not weight_files:
         raise FileNotFoundError(f"No weights_*h.npz files found in: {run_dir}")
 
-    first_weights = load_weight_matrix(weight_files[0].path)
-
-    if layout.total_neurons != first_weights.shape[0]:
+    # 結合構造は run を通して不変なので 1 回だけ読む。以降の記録は値ベクトルだけ。
+    connectivity = load_connectivity(source_dir)
+    if layout.total_neurons != connectivity.shape[0]:
         raise ValueError(
-            f"Layout total_neurons={layout.total_neurons} does not match weight matrix size={first_weights.shape[0]}."
+            f"Layout total_neurons={layout.total_neurons} does not match "
+            f"connectivity size={connectivity.shape[0]}."
         )
 
-    connection_mask = connection_mask_from_config(run_dir, first_weights.shape[0])
     weight_items = []
     delta_items = []
     metric_rows = []
     previous_weights = None
 
     for item in weight_files:
-        weights = load_weight_matrix(item.path)
-        if weights.shape != first_weights.shape:
-            raise ValueError(f"Weight shape mismatch: {item.path}")
+        weights = load_weight_values(item.path)
+        if weights.size != connectivity.row.size:
+            raise ValueError(
+                f"Weight count mismatch: {item.path} has {weights.size} values, "
+                f"connectivity has {connectivity.row.size} synapses."
+            )
         weight_items.append((item.hour, weights))
         metric_rows.extend(
             compute_block_metrics(
                 hour=item.hour,
                 weights=weights,
+                row=connectivity.row,
+                col=connectivity.col,
                 layout=layout,
-                connection_mask=connection_mask,
                 previous_weights=previous_weights,
             )
         )
         plot_single_weight_matrix(
+            row=connectivity.row,
+            col=connectivity.col,
             weights=weights,
             layout=layout,
             out_path=output_dir / f"weight_matrix_{item.hour:g}h.png",
@@ -99,6 +106,8 @@ def visualize_weight_tracks(
         previous_weights = weights
 
     plot_weight_panel(
+        row=connectivity.row,
+        col=connectivity.col,
         weight_items=weight_items,
         layout=layout,
         out_path=output_dir / "weight_matrix_panel.png",
@@ -107,6 +116,8 @@ def visualize_weight_tracks(
     )
     if delta_items:
         plot_weight_panel(
+            row=connectivity.row,
+            col=connectivity.col,
             weight_items=delta_items,
             layout=layout,
             out_path=output_dir / "weight_delta_panel.png",

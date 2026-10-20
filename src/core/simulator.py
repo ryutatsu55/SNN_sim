@@ -268,12 +268,11 @@ class GeNNSimulator:
         return coo
 
     def pull_synapse(self, var_name: str) -> np.ndarray:
-        """
-        ネットワーク全体のシナプス変数の現在状態を、
-        (total_neurons, total_neurons) のグローバル行列の形状で引き上げる
+        """シナプス変数を (total_neurons, total_neurons) の密行列として引き上げる。
 
-        大規模ネットワークでは密行列が確保できないため、`DENSE_PULL_LIMIT_BYTES` を
-        超える場合は COO 版へ誘導する。
+        **`pull_synapse_coo()` の表示用ビュー**であって、独立した経路ではない。値を
+        取ってくるのは常に COO 側の 1 実装で、ここはそれを行列へ散らすだけ。密行列が
+        確保できない規模では `DENSE_PULL_LIMIT_BYTES` で止めて COO 版へ誘導する。
         """
         required_bytes = self.total_neurons ** 2 * 4
         if required_bytes > DENSE_PULL_LIMIT_BYTES:
@@ -283,18 +282,9 @@ class GeNNSimulator:
                 " pull_synapse_coo() / pull_synapse_flat() を使ってください。"
             )
 
+        coo = self.pull_synapse_coo(var_name)
         global_matrix = np.zeros((self.total_neurons, self.total_neurons), dtype=np.float32)
-
-        for syn_pop_name, syn_pop in self.model.synapse_populations.items():
-            index = self.builder.synapse_index.get(syn_pop_name)
-            if index is None:
-                raise KeyError(
-                    f"synapse_index に '{syn_pop_name}' がありません。"
-                    " NetworkBuilder.build() を経ずに構築されたモデルの可能性があります。"
-                )
-            syn_pop.vars[var_name].pull_from_device()
-            global_matrix[index.global_src, index.global_tgt] = syn_pop.vars[var_name].values
-
+        global_matrix[coo["row"], coo["col"]] = coo["data"]
         return global_matrix
 
     def get_global_spikes(self) -> Dict[str, np.ndarray]:

@@ -14,11 +14,11 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
-import yaml
 
-from src.core.output_manager import CONFIG_NAME, CONNECTIVITY_NAME, locate
+from src.core.output_manager import CONNECTIVITY_NAME
 
 # 記録ファイル名 `<種別>_<時刻>h.npz`。種別に数字を含めない前提で時刻と切り分ける。
 RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
@@ -74,80 +74,51 @@ def discover_records(directory: Path, kind: str) -> list[RecordFile]:
     return sorted(files, key=lambda item: item.hour)
 
 
-# 疎 (COO) の重みファイルから密行列を復元してよい上限。これを超えると
-# (N,N) が確保できないため、呼び出し側で COO のまま扱う必要がある。
-DENSE_RECONSTRUCTION_LIMIT = 20000
+class Connectivity(NamedTuple):
+    """run 全体で共通の結合構造 (`connectivity.npz`)。
+
+    構造はシミュレーション中に変わらないので run につき 1 ファイル。各記録の
+    `weights_{h}h.npz` は値ベクトル (`data`) だけを持ち、この row/col と index が整合する。
+    """
+    row: np.ndarray
+    col: np.ndarray
+    shape: tuple[int, int]
 
 
-def load_weight_matrix(path: Path) -> np.ndarray:
-    """重み npz を密な (N,N) 行列として読む。
+def load_connectivity(directory: Path) -> Connectivity:
+    """`connectivity.npz` を読む。記録ごとではなく run につき 1 回だけ呼ぶこと。"""
+    path = Path(directory) / CONNECTIVITY_NAME
+    if not path.exists():
+        raise FileNotFoundError(
+            f"結合情報 {path} が見つかりません。"
+            " weights_*h.npz と対になる connectivity.npz が必要です"
+            " (密形式で保存された古い run は再実行してください)。"
+        )
+    data = np.load(path, allow_pickle=True)
+    shape = np.asarray(data["shape"], dtype=np.int64)
+    return Connectivity(
+        row=np.asarray(data["row"], dtype=np.int64),
+        col=np.asarray(data["col"], dtype=np.int64),
+        shape=(int(shape[0]), int(shape[1])),
+    )
 
-    2 つの形式を受け付ける:
-      - 密形式: キー "weights" に (N,N) 行列
-      - COO 形式: キー "data" (+ 同ディレクトリの connectivity.npz の row/col)
-    COO の場合は N が大きすぎると復元しない (呼び出し側で COO のまま扱うこと)。
+
+def load_weight_values(path: Path) -> np.ndarray:
+    """重み npz から値ベクトル (1D) を読む。`connectivity.npz` の row/col と index 整合。
+
+    密形式 (キー `weights` に (N,N) 行列) で保存された古い run は受け付けない。行列だけでは
+    「結合が無い」と「重みが 0 まで下がった」を区別できず、統計に 0 が混ざるため。
     """
     data = np.load(path, allow_pickle=True)
-
-    if "weights" in data.files:
-        weights = np.asarray(data["weights"], dtype=np.float64)
-        if weights.ndim != 2 or weights.shape[0] != weights.shape[1]:
-            raise ValueError(f"{path} must contain a square 2D weight matrix.")
-        return weights
-
     if "data" not in data.files:
-        raise KeyError(f"{path} does not contain 'weights' or 'data'.")
-
-    # COO 形式。row/col は記録ごとに繰り返さず connectivity.npz に一度だけ持つ。
-    values = np.asarray(data["data"], dtype=np.float64)
-    if "row" in data.files and "col" in data.files:
-        row = np.asarray(data["row"], dtype=np.int64)
-        col = np.asarray(data["col"], dtype=np.int64)
-        size = int(np.asarray(data["shape"])[0]) if "shape" in data.files else None
-    else:
-        connectivity_path = path.parent / CONNECTIVITY_NAME
-        if not connectivity_path.exists():
-            raise FileNotFoundError(
-                f"{path} は COO 形式ですが、結合情報 {connectivity_path} が見つかりません。"
+        if "weights" in data.files:
+            raise ValueError(
+                f"{path} は密形式 (キー 'weights') で保存された古い run です。"
+                " 解析は COO 形式 (キー 'data' + connectivity.npz) のみを受け付けます。"
+                " 再実行してください。"
             )
-        connectivity = np.load(connectivity_path, allow_pickle=True)
-        row = np.asarray(connectivity["row"], dtype=np.int64)
-        col = np.asarray(connectivity["col"], dtype=np.int64)
-        size = int(np.asarray(connectivity["shape"])[0])
-
-    if size is None:
-        size = int(max(row.max(), col.max())) + 1
-    if size > DENSE_RECONSTRUCTION_LIMIT:
-        raise MemoryError(
-            f"{path} は N={size} の疎行列です。密行列 ({size**2 * 8 / 2**30:.1f} GiB) には"
-            " 復元しません。COO のまま扱ってください"
-            " (src/utils/plotting/network.py の粗視化プロットを参照)。"
-        )
-
-    matrix = np.zeros((size, size), dtype=np.float64)
-    matrix[row, col] = values
-    return matrix
-
-
-def _load_yaml(path: Path) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def connection_mask_from_config(run_dir: Path, size: int) -> np.ndarray | None:
-    config_path = locate(run_dir, CONFIG_NAME)
-    config = _load_yaml(config_path) if config_path is not None else {}
-    connection = config.get("network", {}).get("connection", {})
-    profile = connection.get("profile_name")
-    allow_self = bool(connection.get("allow_self_connections", False))
-    p = connection.get("p")
-
-    if profile == "constant_prob_full" or p == 1.0:
-        mask = np.ones((size, size), dtype=bool)
-        if not allow_self:
-            np.fill_diagonal(mask, False)
-        return mask
-    return None
+        raise KeyError(f"{path} にキー 'data' がありません。")
+    return np.asarray(data["data"], dtype=np.float64).reshape(-1)
 
 
 def write_metrics_csv(rows: list[dict[str, float | str]], out_path: Path) -> None:
