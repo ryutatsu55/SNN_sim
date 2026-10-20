@@ -30,6 +30,13 @@ lesion:
     - "bridge:parts=BC0-2-3"
   cut_combine: or            # "or" | "and"
 
+  # --- 切断後に止める可塑性 ---------------------------------------------------
+  # シナプス群の名前 (config.synapses のキー) を並べると、その群の STDP の学習率を 0 にして
+  # 切断後を走らせる (`protocol/freeze.py`)。短期可塑性 (U, tau_rec) は止めない。
+  # 回復が i-STDP (from_Inh) と e-STDP (from_Exc) のどちらから来るかを切り分けるためのもの。
+  # **空でなければ run ディレクトリ名に `+freeze-<群>` が付く。**
+  freeze_plasticity: []
+
   # --- タイムライン ----------------------------------------------------------
   # 切断直後に落ち着かせる時間 [ms]。
   settle_ms: 60000.0
@@ -69,9 +76,38 @@ lesion_dense_probe:
   cut:
     - "bridge:kind=inter_cluster"
   cut_combine: or
+  freeze_plasticity: []
   settle_ms: 60000.0
   record_hours: [0..6:0.25]
   record_window_ms: 300000.0
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0
+
+# 回復がどちらの STDP から来るかを切り分ける対 (2026-10-20)。比べる相手は同じ切断で
+# 何も止めない run (`random-any-any-f0.1-seed0`、`lesion` プロファイルで cut だけ同じ)。
+lesion_freeze_inh:
+  from_hour: null
+  cut:
+    - "random:fraction=0.1"
+  cut_combine: or
+  freeze_plasticity: [from_Inh]   # i-STDP を止める (I→E と I→I の重みが固定)
+  settle_ms: 60000.0
+  record_hours: [0..20]
+  record_window_ms: 600000.0
+  record_buffer_ms: 10000.0
+  trace_neuron: null
+  trace_window_s: 10.0
+
+lesion_freeze_exc:
+  from_hour: null
+  cut:
+    - "random:fraction=0.1"
+  cut_combine: or
+  freeze_plasticity: [from_Exc]   # e-STDP を止める (E→E と E→I の重みが固定)
+  settle_ms: 60000.0
+  record_hours: [0..20]
+  record_window_ms: 600000.0
   record_buffer_ms: 10000.0
   trace_neuron: null
   trace_window_s: 10.0

@@ -1,15 +1,17 @@
 """損傷 run の束を 1 run = 1 行に要約する (用量反応の表 `runs.csv` / `control.csv`)。
 
 **低下・回復・対照の定義はここにしかない。** 図は表の列を読むだけ。
-r = `metrics.csv` の `mean_rate_hz` (ネットワーク全体)、χ = `chi_all`。
+r = `metrics.csv` の `mean_rate_hz` (ネットワーク全体)、χ = `chi_all`、
+C = `mean_correlation` (ニューロン対の平均相関)。
 
     切断数 [%]      cut_pct        = 切った本数 ÷ 切断前の全シナプス数 × 100
     切った重み [%]  cut_weight_pct = lesion.json の cut_profile.weight_lost_fraction × 100
     低下            drop           = (r_pre − r_0) ÷ r_pre
     χ の低下        chi_drop       = 1 − χ_0 ÷ χ_pre
+    相関の低下      corr_drop      = (C_pre − C_0) ÷ C_pre
     回復            rec            = (r の LATE_HOURS 平均 − r_0) ÷ r_pre
 
-r_pre は baseline (親 run の切断時刻の窓)、r_0 は切断直後 (0 h) の窓。
+r_pre / C_pre は baseline (親 run の切断時刻の窓)、r_0 / C_0 は切断直後 (0 h) の窓。
 
 **対照も同じ式で測る。** 切らずに走り続けた run で、切断時刻 t0 (損傷 run の
 `restored_from_hour`) を 0 h に読み替える。切っていないので r_pre = r_0 = r(t0):
@@ -88,6 +90,8 @@ def build_row(series) -> dict:
         rate_late=r_late,
         drop=(r_pre - r0) / r_pre,
         chi_drop=1.0 - float(p0.chi_all) / float(pre.chi_all),
+        corr_drop=(float(pre.mean_correlation) - float(p0.mean_correlation))
+        / float(pre.mean_correlation),
         rec=(r_late - r0) / r_pre,
         late_from_h=LATE_HOURS[0],
         late_to_h=LATE_HOURS[1],
@@ -114,7 +118,9 @@ def build_control_row(control, cut_hour: float) -> dict:
 def write_summary(collection, out_dir) -> None:
     """`runs.csv` と `control.csv` を書く。
 
-    種類が `KINDS` に無い損傷 run は表に入れず、その旨を出力する。
+    種類が `KINDS` に無い損傷 run と、切断後に可塑性を止めた run (`frozen_plasticity`) は
+    表に入れず、その旨を出力する。用量反応は「何も止めずに切った」run どうしの比較なので、
+    止めた run を同じ種類に混ぜない。
     切断時刻が run ごとに違う束は止める (対照を測る時刻が 1 つに決まらない)。
 
     対照の行の `matches_lesion_baseline` は、対照の r(t0) が同じ (seed, backend) の
@@ -122,6 +128,10 @@ def write_summary(collection, out_dir) -> None:
     """
     rows = []
     for series in collection.lesion_runs():
+        frozen = series.manifest().get("frozen_plasticity") or []
+        if frozen:
+            print(f"  対象外 (切断後に可塑性を止めた run): {series.run_dir}  [{'-'.join(frozen)}]")
+            continue
         row = build_row(series)
         if row["kind"] is None:
             print(f"  対象外 (種類が決まらない spec): {row['run']}  [{row['spec']}]")

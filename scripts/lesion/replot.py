@@ -36,7 +36,7 @@ if str(project_root) not in sys.path:
 from src.core.NetworkBuilder import NetworkBuilder
 from src.utils.runview import BuiltNetwork, optional
 
-from scripts.lesion.analysis.restore import verify_axon_geometry
+from scripts.lesion.protocol.restore import verify_axon_geometry
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
 from scripts.lesion.store.formats import METRICS_NAME, MetricsWriter

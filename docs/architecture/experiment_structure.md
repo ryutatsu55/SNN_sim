@@ -117,6 +117,16 @@ scripts/develop/
 | `analysis/*` | 何を測るか。列名 | どう描かれるか。どこに置かれるか |
 | `figures/*` | 見た目のすべて | いつ呼ばれるか。どこに置かれるか |
 
+### 実験の進め方を持つ層 (`protocol/`。いまは lesion だけ)
+
+lesion の run は「何を切るか」「切った後に何を止めるか」「親 run を正しく引き継げたか」が
+結果を決める。これは**測り方 (`analysis/`) ではなく実験の進め方**なので、`analysis/` に置くと
+指標の計算が run の作り方 (spec の解釈や run ディレクトリ名) を知ってしまう。かといって
+`run_one.py` に埋め込むと、ディレクトリ名を決めるランチャと再ビルドを確かめる `replot --verify`
+が使えない。そこで `scripts/lesion/protocol/` に置き、**入口だけ**が import する
+(`analysis/` / `store/` / `report/` / `figures/` は import しない)。表に出す条件 (例: 迂回経路の表の
+`spec` / `frozen`) は、ディレクトリ名からではなく `lesion.json` から作る。
+
 ### 不変条件（import 文を見れば違反が分かる）
 
 以下の `store/` `analysis/` `figures/` `report/` は、**すべてその実験のもの**

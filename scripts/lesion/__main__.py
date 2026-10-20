@@ -32,7 +32,7 @@ lesion の**ネットワーク設定は親 run から来る**。同じ seed で�
 
 **`outputs/lesion/` は使わない。** 損傷 run は親 run に完全に従属していて、親を消したら
 再現も再解析もできないので、置き場所も親に従属させる。ディレクトリ名 `<切断条件>` は
-切断 spec から機械的に決まる (`selectors.cut_label()`) ので、**名前を引数で受けない** ——
+切断 spec (と `task.freeze_plasticity`) から機械的に決まる (`protocol/freeze.py` の `run_label()`) ので、**名前を引数で受けない** ——
 名前と中身がずれる余地を作らないため。同じ親を同じ spec で 2 度切ることはできない
 (既にあれば止まる)。
 
@@ -55,7 +55,7 @@ if str(project_root) not in sys.path:
 from src.core.config_manager import (CONFIG_NAME, ConfigManager, expand_hours_spec,
                                      load_yaml)
 
-from scripts.lesion.analysis.selectors import cut_label
+from scripts.lesion.protocol.freeze import run_label
 
 _HERE = Path(__file__).resolve().parent
 
@@ -149,7 +149,7 @@ def prepare_runs(manager: ConfigManager, parents: list[Path], configs: list, pro
                  run_name: str, parallel: int) -> list[Path]:
     """**親 run の下に** `<run_name>/` を作り、`config.yaml` を置く。
 
-    `run_name` は切断条件 (`cut_label()`)。`--dry-run` ならそれに `DRY_RUN_SUFFIX` を付けたもの。
+    `run_name` は切断条件 (`protocol/freeze.py` の `run_label()`)。`--dry-run` ならそれに `DRY_RUN_SUFFIX` を付けたもの。
 
     `config.yaml` の `simulation.parallel` は、実際に使う並列度 `parallel` で上書きする。
     """
@@ -199,9 +199,9 @@ def main():
 
     parents = discover_parents(Path(args.parent))
     protocol = load_protocol(args.task)
-    # **ネットワークを組む前に決まる。** 切断 spec だけから決まるので、ランチャが
-    # run ディレクトリ名に使える (`run_one` 側で付く label と同じ値)。
-    label = cut_label(protocol.get("cut") or [], str(protocol.get("cut_combine", "or")))
+    # **ネットワークを組む前に決まる。** 切断 spec (と止めた可塑性) だけから決まるので、
+    # ランチャが run ディレクトリ名に使える (`run_one` 側で付く label と同じ値)。
+    label = run_label(protocol)
     run_name = label + DRY_RUN_SUFFIX if args.dry_run else label
     manager = ConfigManager()
     # **親の config がこの run のネットワーク設定。** 並列度もここから取るので、
@@ -222,6 +222,8 @@ def main():
     print(f"parent    : {args.parent}  ({len(parents)} run)")
     print(f"task      : {args.task}")
     print(f"cut       : {protocol.get('cut')}  -> {label}")
+    if protocol.get("freeze_plasticity"):
+        print(f"freeze    : {protocol.get('freeze_plasticity')} (切断後の STDP を止める)")
     print(f"parallel  : {parallel}  "
           f"({'--parallel' if args.parallel is not None else '親 run の simulation.parallel'}"
           f", backend={backend})")

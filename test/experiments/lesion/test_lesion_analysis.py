@@ -1,4 +1,4 @@
-"""損傷実験のために足した解析モジュール (axons / graph / isi) と復元経路。
+"""損傷実験のために足した解析モジュール (axons / graph / isi / 迂回経路) と復元経路。
 
 実データではなく**合成データで検算**する (test_beggs_plenz.py と同じ方針)。
 area は `src/models` を import せずダックタイピングの fake で作る —— これは
@@ -26,6 +26,9 @@ from src.utils.analysis.isi import (  # noqa: E402
     cv_isi, isi_metrics, isi_per_neuron, local_variation)
 from src.utils.analysis.weights import (  # noqa: E402
     WeightRestoreError, align_saved_to_coo, align_subset_to_coo)
+
+from scripts.lesion.analysis.detours import (  # noqa: E402
+    MAX_LENGTH, enumerate_paths, lead_fraction)
 
 
 # ======================================================================================
@@ -433,3 +436,61 @@ def test_subset_alignment_survives_a_permuted_saved_order():
 def test_subset_alignment_rejects_a_target_that_is_not_a_subset():
     with pytest.raises(WeightRestoreError, match="部分集合"):
         align_subset_to_coo([0, 1], [1, 2], [0.1, 0.2], [3], [3], 4)
+
+
+# ======================================================================================
+# 迂回経路 (`scripts/lesion/analysis/detours.py`)
+# ======================================================================================
+
+def _graph(edges):
+    index = {edge: k for k, edge in enumerate(edges)}
+    adjacency = [[] for _ in range(1 + max(max(e) for e in edges))]
+    for (i, j), k in index.items():
+        adjacency[i].append((j, k))
+    return adjacency, index
+
+
+class TestEnumeratePaths:
+    """迂回経路は長さ 2〜MAX_LENGTH の単純な経路で、直接の結合と端点の再訪を含まない。"""
+
+    EDGES = [(0, 2), (0, 1), (1, 2), (0, 3), (3, 2), (3, 4), (4, 2), (2, 0), (1, 0), (4, 5), (5, 2)]
+
+    def _paths(self, a, b, max_length=MAX_LENGTH):
+        adjacency, index = _graph(self.EDGES)
+        found = enumerate_paths(adjacency, index, a, b, max_length)
+        return sorted(tuple(self.EDGES[e] for e in p) for p in found)
+
+    def test_direct_edge_is_not_a_detour(self):
+        assert ((0, 2),) not in self._paths(0, 2)
+
+    def test_lengths_two_and_three(self):
+        assert self._paths(0, 2) == sorted([
+            ((0, 1), (1, 2)), ((0, 3), (3, 2)), ((0, 3), (3, 4), (4, 2))])
+
+    def test_max_length_cuts_longer_paths(self):
+        assert ((0, 3), (3, 4), (4, 5), (5, 2)) in self._paths(0, 2, max_length=4)
+        assert all(len(p) <= 2 for p in self._paths(0, 2, max_length=2))
+
+    def test_paths_do_not_revisit_endpoints(self):
+        # 2 → 0 → 1 → ... の 0 経由は a=2 から始まるので、b=1 への経路で 2 を再訪しない。
+        for path in self._paths(2, 1, max_length=4):
+            nodes = [path[0][0]] + [edge[1] for edge in path]
+            assert len(nodes) == len(set(nodes))
+
+
+class TestLeadFraction:
+    """post 先行率は窓内のスパイク対のうち post が先の割合で、対が無ければ NaN。"""
+
+    def test_counts_post_first_pairs(self):
+        trains = [np.array([10.0, 100.0]), np.array([5.0, 105.0])]
+        # 対は (pre 10, post 5): post が先、(pre 100, post 105): pre が先。
+        assert lead_fraction(trains, [0], [1], 20.0)[0] == pytest.approx(0.5)
+
+    def test_pairs_outside_window_are_ignored(self):
+        trains = [np.array([10.0]), np.array([5.0, 500.0])]
+        assert lead_fraction(trains, [0], [1], 20.0)[0] == pytest.approx(1.0)
+
+    def test_no_pairs_is_nan(self):
+        trains = [np.array([10.0]), np.array([900.0]), np.array([])]
+        out = lead_fraction(trains, [0, 0], [1, 2], 20.0)
+        assert np.isnan(out).all()
