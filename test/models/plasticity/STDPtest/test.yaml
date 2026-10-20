@@ -43,8 +43,6 @@ inputs:
 #       Wmin: 0.0
 #       Wmax: 1.0
 #       trace_algorithm: delay_corrected
-#     delay_by_target:
-#       Layer_Exc: 10.0
 neurons:
   Layer_Inh:
     type: test_LIF
@@ -80,8 +78,6 @@ synapses:
       beta_I: 1.0
       Wmin: 0.0
       Wmax: 1.0
-    delay_by_target:
-      Layer_Exc: 10.0
 network:
   area:
     profile_name: no_space

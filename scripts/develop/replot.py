@@ -1,0 +1,117 @@
+"""既存の run から図と指標を作り直す (再解析)。
+
+    python -m scripts.develop.replot <run ディレクトリ> [--verify]
+
+**本番と同じ関数を通る。** 記録窓ごとの出力は `report.panels.emit()`、run 全体は
+`report.overview.emit()`、構造は `report.structure.emit()` で、どれも `run_one.py` が
+呼ぶものと同一なので、列も値も図もバイト単位で一致する。
+
+**作り直すのは全部。** 構造図も窓ごとの図も run 全体の図も、指標も、例外なく上書きする
+(一部だけ新しい状態を作らないため)。
+
+**構造図も記録から描く。** build 直後の記録 (`store/built.py`) を
+`series.built()` で読むので、本番の run と同じ呼び出しになる。ネットワークは組み直さない。
+
+`--verify` を付けたときだけ、`config.yaml` からネットワークを**再ビルド**して記録と同じ
+結合集合が出るかを確かめる (`BuiltNetwork.verify_against`)。確かめるのは「いまのコードで
+その run の seed から同じネットワークが出るか」= コードの性質で、run の記録の正しさでは
+ない。ふだんの守りは golden テスト (`test/test_network_golden.py`)。ネットワークの生成は
+`config.simulation.seed` だけに依存する (backend は GeNN のデバイス RNG = スパイク列にしか
+効かない) ので、cuda で走らせた run でも cpu で再ビルドできる。
+"""
+import argparse
+import os
+import sys
+from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/snn_sim_matplotlib")
+
+project_root = Path(__file__).resolve().parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from src.core.NetworkBuilder import NetworkBuilder
+
+from scripts.develop.report import overview, panels, structure
+from scripts.develop.store import paths
+from src.utils.runview import BuiltNetwork
+from scripts.develop.store.formats import METRICS_NAME, MetricsWriter
+from scripts.develop.store.views import open_run
+
+# プロファイル名を Python クラスへ解決するために必要 (@register は import で走る)。
+import src.models.neurons.akita_escape_lif
+import src.models.neurons.akita_escape_lif_physical
+import src.models.network.connectors
+import src.models.network.delays
+import src.models.network.space
+import src.models.network.weights
+import src.models.plasticity.custom_Akita
+import src.models.synapses.standard_models
+import src.models.synapses.custom
+
+# `--verify` の再ビルドに使うバックエンド。**構造は backend に依存しない**ので、CUDA の
+# 無い環境でも cuda の run を確かめられるよう cpu に固定する。
+REBUILD_BACKEND = "cpu"
+# 再ビルド用の GeNN モデル名。コンパイルはしないので <名前>_CODE は作られない。
+REBUILD_MODEL_NAME = "develop_replot"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="既存 run の図と指標を作り直す。")
+    parser.add_argument("run_dir", help="config.yaml と data/ を持つ run ディレクトリ")
+    parser.add_argument("--no-structure", action="store_true",
+                        help="構造図を飛ばす")
+    parser.add_argument("--verify", action="store_true",
+                        help="config.yaml から再ビルドし、記録と同じ結合が出るか確かめる")
+    return parser.parse_args()
+
+
+def verify_rebuild(series) -> None:
+    """`config.yaml` からネットワークを組み直し、記録と同じ結合集合か確かめる。違えば止める。"""
+    config = series.config.model_copy(deep=True)
+    config.simulation.backend = REBUILD_BACKEND
+    builder = NetworkBuilder(config, model_name=REBUILD_MODEL_NAME)
+    builder.build(rec_spike=True)
+    BuiltNetwork.from_builder(builder, series.run_dir).verify_against(series.wiring())
+    print("  再ビルドした結合は記録と一致しました。")
+
+
+def replot(run_dir: Path, *, with_structure: bool = True, verify: bool = False) -> Path:
+    run_dir = Path(run_dir)
+    series = open_run(run_dir)
+    print(f"Replot: {run_dir} (N={series.total_neurons})")
+
+    # 図のサブディレクトリを用意する。膜電位トレースの図は膜電位を採った run にだけ作る
+    # (空ディレクトリが残ると「採ったが空」と「採っていない」が読めなくなる)。
+    report_kinds = paths.DEFAULT_REPORT_KINDS
+    if any(window.voltage_path is not None for window in series.windows):
+        report_kinds = report_kinds + (paths.TRACE,)
+    paths.prepare(run_dir, report_kinds)
+
+    if verify:
+        print("\nRebuilding network to verify it against the record...")
+        verify_rebuild(series)
+
+    if with_structure:
+        print("\nGenerating network structure figures...")
+        structure.emit(series.built())
+
+    metrics_csv = MetricsWriter(paths.data_path(run_dir, METRICS_NAME))
+    for window in series.windows:
+        panels.emit(window, metrics=metrics_csv)
+    print(f"  Recomputed metrics -> {metrics_csv.path}")
+
+    print("\nGenerating visualizations...")
+    overview.emit(series)
+
+    print(f"Replot done: {run_dir}")
+    return run_dir
+
+
+def main():
+    args = parse_args()
+    replot(Path(args.run_dir), with_structure=not args.no_structure, verify=args.verify)
+
+
+if __name__ == "__main__":
+    main()

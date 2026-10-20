@@ -26,11 +26,11 @@ synapses:
       mode: default
 
 network:
+  area: no_space
   space: no_space
   connection: constant_prob_full_autapse
   weight: constant
   delay: constant
-  sparse: "off"
 
 layout:
   assignment: sequential

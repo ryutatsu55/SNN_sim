@@ -1,6 +1,7 @@
 """CPU実測でパルスの境界と遅延シナプスの到着時刻を検証する。"""
 
 from pathlib import Path
+import subprocess
 import sys
 
 import numpy as np
@@ -10,6 +11,35 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 pygenn = pytest.importorskip("pygenn")
 from scripts.autapse_comparison import Case, ROOT, delayed_pulse_model, run_bank
+
+
+def test_single_autapse_cli_saves_finite_cpu_result(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/autapse_experiment.py"),
+            "--duration-ms", "40",
+            "--out-dir", str(tmp_path / "outputs"),
+            "--genn-code-dir", str(tmp_path / "build"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    runs = list((tmp_path / "outputs/single_autapse").iterdir())
+    assert len(runs) == 1
+    voltage = np.loadtxt(runs[0] / "membrane_voltage.csv", delimiter=",", skiprows=1)
+    assert voltage.shape == (400, 2)
+    assert np.all(np.isfinite(voltage))
+    assert voltage[-1, 0] == pytest.approx(40.0)
+    spikes = np.loadtxt(runs[0] / "spikes.csv", delimiter=",", skiprows=1, ndmin=2)
+    assert spikes.shape[0] > 0
+    assert np.all(spikes[:, 1] == 0)
+    saved = yaml.safe_load((runs[0] / "config.yaml").read_text())
+    assert saved["network"]["area"]["profile_name"] == "no_space"
+    assert saved["task"]["duration"] == 40.0
 
 
 def test_rectangular_and_exponential_input(tmp_path):

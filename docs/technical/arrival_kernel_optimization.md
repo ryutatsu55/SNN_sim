@@ -1,6 +1,6 @@
 # シナプス kernel の高速化 (N=40000 の実行時間問題)
 
-2026-07-20〜21 実施。`configs/beggs_plenz.yaml` (N=40000) の実行が実時間の 31.5 倍かかり
+2026-07-20〜21 実施。`configs/beggs_plenz.yaml` (N=40000, 現在は削除済み) の実行が実時間の 31.5 倍かかり
 12h プロトコルが 15.7 日になる問題の、原因特定・対策・結果の記録。
 
 **結論: 3154 → 120 µs/step (26 倍)。12h プロトコルは 15.7 日 → 約 14 時間。**
@@ -79,7 +79,7 @@ GeNN が PreSpan 用に既に持っている `numThreadsPerSpike` (1 スパイ�
 - `genSynapseArrivalKernel`: `spike = id / T`, `thread = id % T` に分解し、
   バケツ内ループを `for(i = arrStart + thread; i < arrEnd; i += T)` へ
 
-SNN_sim 側 ([NetworkBuilder.py](../src/core/NetworkBuilder.py) `_arrival_threads_per_spike`) が
+SNN_sim 側 ([NetworkBuilder.py](../../src/core/NetworkBuilder.py) `_arrival_threads_per_spike`) が
 T = 行長 / 遅延段数 を 2 の冪 (上限 32) に丸めて自動決定する。N=40000 での自動決定値:
 E→E 32 (行長1134/42段)、E→I 8 (213/33)、I→E 32 (561/30)、I→I 4 (61/24)。
 
@@ -229,8 +229,11 @@ N=40000 固定、抑制の強さ (`i-stdp_beggs_gi*`) だけを変えて発火�
 ### 8-2. 規模 — 仕事量に比例、ただし床がある
 
 面積密度一定で N を縮めた config での測定 (task=`beggs_plenz_smoke`)。
-**注意: これらは科学的に等価な縮小版ではない** ([beggs_plenz_parameters.md](beggs_plenz_parameters.md) 参照)。
-箱が σ より小さくなるため fan-in が変わり、その結果発火率も変わる。
+**注意: これらは科学的に等価な縮小版ではない。**
+箱が σ より小さくなるため fan-in が変わり、その結果発火率も変わる (N=1000 では
+箱の一辺 237 µm が σ_ee = 300 µm を下回り、本来つながるはずの結合が切れる)。
+**動態の予測には使えない。ここでの用途は性能計測だけ。**
+（根拠を詳述していた `docs/beggs_plenz_parameters.md` は 39b60c9 で削除済み）
 
 | N | シナプス数 | 発火率 | シナプス更新/step | µs/step |
 |---|---|---|---|---|
@@ -287,7 +290,8 @@ C. elegans のようにスケールの大きい構成でも遅延分解能を落
   ばらつく。今回の変更が原因ではない (N=1000 では bit-exact)。`addToPostDelay` の
   atomicAdd の順序が実行ごとに変わり、浮動小数の加算順序の差がカオス的に増幅されるため。
   アバランシェ統計を seed 単位で議論するなら、この非決定性の扱いを決める必要がある
-- 発火率 9.4 Hz の妥当性 (fan-in 1202 に起因) は未検討。[beggs_plenz_parameters.md](beggs_plenz_parameters.md) §10 参照
+- 発火率 9.4 Hz の妥当性 (fan-in 1202 に起因) は未検討。詳細を書いていた
+  `docs/beggs_plenz_parameters.md` は 39b60c9 で削除済み
 
 ---
 

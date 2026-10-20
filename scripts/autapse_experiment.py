@@ -1,6 +1,7 @@
 """単一 LIF ニューロンの興奮性オータプスを実行する最小実験。"""
 
 import argparse
+from datetime import datetime
 import os
 import sys
 from pathlib import Path
@@ -19,7 +20,6 @@ if str(project_root) not in sys.path:
 
 from src.core.config_manager import ConfigManager
 from src.core.NetworkBuilder import NetworkBuilder
-from src.core.output_manager import create_run_output_dir
 from src.core.simulator import GeNNSimulator
 
 # レジストリ登録のトリガー
@@ -101,7 +101,8 @@ def main() -> None:
     apply_overrides(config, args)
     config.simulation.backend = "cuda" if args.gpu else "cpu"
 
-    output_dir = create_run_output_dir("single_autapse", base_dir=args.out_dir)
+    output_dir = Path(args.out_dir) / "single_autapse" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir.mkdir(parents=True, exist_ok=True)
     builder = NetworkBuilder(
         config,
         model_name="SingleAutapse",

@@ -253,6 +253,25 @@ def bridge_part_indices(area) -> np.ndarray:
     return indices
 
 
+def module_part_indices(area) -> np.ndarray:
+    """area の part のうち **ブリッジでない** (= soma を置ける) ものの index。
+
+    `bridge_part_indices()` の補集合。ブリッジの露出部 —— どのモジュールにも属さない
+    通路の部分 —— を「ブリッジ part の内側かつここに挙がる part のすべての外側」として
+    定義するのに使う。
+
+    Raises:
+        ValueError: `bridge_part_indices()` と同じ条件、または part がすべてブリッジの場合。
+    """
+    bridges = set(bridge_part_indices(area).tolist())
+    part_names = list(getattr(area, "part_names", []))
+    indices = np.array([i for i in range(len(part_names)) if i not in bridges],
+                       dtype=np.int64)
+    if indices.size == 0:
+        raise ValueError("すべての part がブリッジなので、モジュールが 1 つもありません。")
+    return indices
+
+
 def part_overlap_graph(area, *, samples: int = 33) -> np.ndarray:
     """composite area の part 同士が**重なっているか**の (P, P) bool 行列。
 

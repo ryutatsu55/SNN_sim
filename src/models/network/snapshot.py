@@ -40,24 +40,14 @@ class SnapshotSpace(BaseSpace):
 
 @CONNECTION_MODELS.register("saved_snapshot")
 class SnapshotConnection(BaseConnection):
-    supports_sparse = True
-
-    def generate_sparse(self):
+    def generate(self):
         arrays = _read(self)
         return arrays["rows"], arrays["cols"]
-
-    def generate(self):
-        rows, cols = self.generate_sparse()
-        result = np.zeros((self.num_neurons, self.num_neurons), dtype=np.int8)
-        result[rows, cols] = 1
-        return result
 
 
 @WEIGHT_MODELS.register("baseline_pair_weights")
 class BaselinePairWeights(BaseWeight):
-    supports_sparse = True
-
-    def generate_sparse(self, rows, cols):
+    def generate(self, rows, cols):
         is_inhibitory = np.zeros(self.num_neurons, dtype=bool)
         is_inhibitory[self.layout.ids_by("polarity")["inhibitory"]] = True
         pair = is_inhibitory[rows].astype(int) * 2 + is_inhibitory[cols]
@@ -72,27 +62,13 @@ class BaselinePairWeights(BaseWeight):
             raise ValueError("E/Iの結合重みの符号または有限性が不正です")
         return weights[pair]
 
-    def generate(self):
-        rows, cols = np.nonzero(self.mask)
-        result = np.zeros(self.mask.shape)
-        result[rows, cols] = self.generate_sparse(rows, cols)
-        return result
-
 
 @DELAY_MODELS.register("saved_arrival_delay")
 class SnapshotDelay(BaseDelay):
-    supports_sparse = True
-
-    def generate_sparse(self, rows, cols):
+    def generate(self, rows, cols):
         arrays = _read(self)
         if not np.array_equal(rows, arrays["rows"]) or not np.array_equal(
             cols, arrays["cols"]
         ):
             raise ValueError("遅延とCOOの並びが一致しません")
         return arrival_to_dendritic_ms(arrays["arrival_ms"], self.config.dt)
-
-    def generate(self):
-        rows, cols = np.nonzero(self.mask)
-        result = np.zeros(self.mask.shape)
-        result[rows, cols] = self.generate_sparse(rows, cols)
-        return result

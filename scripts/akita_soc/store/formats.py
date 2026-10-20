@@ -1,0 +1,346 @@
+"""akita_soc 実験の記録ファイルの形式 (ファイル名と npz の鍵名)。
+
+`weights_{h}h.npz` / `spikes_{h}h.npz` の "h" は 72 時間発達実験の記録時刻であって、
+プロジェクト共通の概念ではない。よって `src/core/` (config.yaml は `config_manager.py`、
+layout_axes.npz は `layout.py` が持つ) には置かず、この実験のモジュールが持つ。
+
+**この規約を知っているのはここだけ**。ファイル名 (`record_filename` / `discover_records`)
+だけでなく、**npz の中の鍵の名前**も書き出しと読み取りが対で持つ (`save_spikes` /
+`load_spikes` など)。片方だけ変えて食い違うことがない。
+
+ファイルを**置く場所**は `paths.py` が持ち、**run 1 つを時刻順に読む**のは `views.py`。
+このモジュールはファイル 1 つの読み書きまでを受け持つ。build 直後に何を書くかの一覧は
+`built.py`。
+
+返す値の形は `src/utils/runview.py` の契約 (`Spikes` / `NeuronTimeseries` / `Wiring`) に従う。
+**この実験に固有なのはファイル名と npz の鍵名だけで、読めた値の形は全実験共通。**
+
+**`scripts/develop/store/formats.py` と同じ規約だが、別のファイルとして持つ。**
+実験ごとに記録の中身は変わりうるので、共通化して片方の都合でもう片方が動くことを
+避ける (図と同じ線引き)。共有するのは「読めた値の形」= 契約だけ。
+"""
+from __future__ import annotations
+
+import csv
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from src.utils.runview import MissingData, NeuronTimeseries, Spikes, Wiring
+
+# 記録ファイル名 `<種別>_<時刻>h.npz`。種別に数字を含めない前提で時刻と切り分ける。
+RECORD_PATTERN = re.compile(r"(?P<kind>[A-Za-z_]+)_(?P<hour>.+)h\.npz")
+
+WEIGHTS = "weights"
+SPIKES = "spikes"
+# 記録窓の先頭で毎ステップ採ったニューロンの変数。膜電位 V と入力電流 Isyn_rec を
+# 別ファイルに書く。task.trace_neuron を指定した run だけが書き、採るのはそのニューロン、
+# 長さは trace_window_s。
+# スパイクは同じ窓の spikes の npz にある。
+VOLTAGE = "voltage"
+CURRENT = "current"
+
+# 結合構造。シミュレーション中に変わらないので run につき 1 回だけ書く。
+CONNECTIVITY_NAME = "connectivity.npz"
+
+# soma の座標。結合構造と同じく run を通して不変なので 1 回だけ書く。
+#
+# **`no_space` の run は持たない。** config だけからは復元できない (空間コンポーネントが
+# RNG を引く) ので、axes と同じ理由でここに残す。これがあると記録窓の view からも
+# 空間の図が描ける。
+COORDS_NAME = "coords.npz"
+
+# 伝播遅延 [ms]。結合構造と同じく run を通して不変なので 1 回だけ書く。
+# `connectivity.npz` の row/col と index 整合する値ベクトル (重みと同じ形)。
+DELAYS_NAME = "delays.npz"
+
+# **build 直後**の重み。記録時刻ごとの `weights_{h}h.npz` と同じ形 (値ベクトル) だが、
+# `record_hours` が 0 を含むかどうかによらず必ず書く。名前が `weights_*h.npz` の
+# glob に掛からない (末尾が `h.npz` でない) ので、記録時刻の列挙には混ざらない。
+INITIAL_WEIGHTS_NAME = "weights_initial.npz"
+
+# 記録時刻ごとの指標。本番の run も再解析も**同じこのファイル**に書く
+# (どちらも metrics.build_row() を通るので列も値も一致する)。
+METRICS_NAME = "metrics.csv"
+
+MS_PER_HOUR = 60.0 * 60.0 * 1000.0
+
+# スパイク npz に埋める記録窓の原点 [ms]。
+#
+# **ファイル名から時刻を復元しない**ための鍵。ファイル名は `f"{hour:g}h"` = 有効数字
+# 6 桁なので、record_hours が非整数だと往復で元の値に戻らない (1/3 h なら約 1.2 ms
+# ずれる)。原点がずれると burstiness_index のビン割りが変わり、本番と再解析で値が
+# 食い違う。ファイル名は並べ替えと人間の目印だけに使い、**時刻の正は npz が持つ**。
+RECORD_START_KEY = "record_start_ms"
+
+
+@dataclass(frozen=True)
+class RecordFile:
+    hour: float
+    path: Path
+
+
+def record_filename(kind: str, hour: float) -> str:
+    """記録ファイル名を組み立てる。読み取り側と同じ規約を使うための唯一の入口。"""
+    return f"{kind}_{hour:g}h.npz"
+
+
+def parse_record_name(name: str) -> tuple[str, float]:
+    """`weights_6.5h.npz` -> ("weights", 6.5)。規約に合わなければ ValueError。"""
+    match = RECORD_PATTERN.fullmatch(name)
+    if match is None:
+        raise ValueError(f"記録ファイル名の規約に合いません: {name}")
+    try:
+        return match["kind"], float(match["hour"])
+    except ValueError:
+        raise ValueError(f"記録時刻を数値として読めません: {name}") from None
+
+
+def parse_hour(path: Path | str, kind: str | None = None) -> float:
+    """ファイル名から記録時刻 [h] を取り出す。規約外なら **ValueError**。
+
+    `kind` を指定すると種別の一致も確認する (spikes を weights として読む取り違えを防ぐ)。
+    """
+    found_kind, hour = parse_record_name(Path(path).name)
+    if kind is not None and found_kind != kind:
+        raise ValueError(f"{kind} の記録を期待しましたが {found_kind} でした: {path}")
+    return hour
+
+
+def record_glob(kind: str) -> str:
+    """記録ファイルを列挙する glob パターン。存在確認だけしたい側もこれを使う。"""
+    return f"{kind}_*h.npz"
+
+
+def discover_records(directory: Path, kind: str) -> list[RecordFile]:
+    """`directory` 直下の記録ファイルを時刻の昇順で返す。"""
+    files = [RecordFile(hour=parse_hour(path, kind), path=path)
+             for path in Path(directory).glob(record_glob(kind))]
+    return sorted(files, key=lambda item: item.hour)
+
+
+def load_connectivity(directory: Path) -> Wiring:
+    """`connectivity.npz` を読んで `Wiring` にする。run につき 1 回だけ呼ぶこと。
+
+    ファイルの中身は `Wiring` そのもの (`row` / `col` / `shape`)。遅延と重みは別ファイル。
+
+    構造はシミュレーション中に変わらないので run に 1 ファイル。各記録の
+    `weights_{h}h.npz` は値ベクトル (`data`) だけを持ち、この row/col と index が整合する。
+    """
+    path = Path(directory) / CONNECTIVITY_NAME
+    if not path.exists():
+        raise FileNotFoundError(
+            f"結合情報 {path} が見つかりません。"
+            " weights_*h.npz と対になる connectivity.npz が必要です"
+            " (密形式で保存された古い run は再実行してください)。"
+        )
+    data = np.load(path, allow_pickle=True)
+    shape = np.asarray(data["shape"], dtype=np.int64)
+    wiring = Wiring(
+        row=np.asarray(data["row"], dtype=np.int64),
+        col=np.asarray(data["col"], dtype=np.int64),
+        shape=(int(shape[0]), int(shape[1])),
+    )
+    _require_row_major(wiring, path)
+    return wiring
+
+
+def _require_row_major(wiring: Wiring, path: Path) -> None:
+    """記録された COO が**行優先ソート済み**であることを確かめ、違えば止める。
+
+    並びが違うと、位置で重みと対応づけたときに黙って別のシナプスに値が乗る。
+    キーの狭義単調増加は「行優先かつ (pre, post) の重複なし」と同値。
+    """
+    if wiring.row.size < 2:
+        return
+    # **int64 で掛ける。** int32 のままだと N が大きいときに折り返り、別のペアが
+    # 同じキーになって「ソート済み」に見えてしまう。
+    key = wiring.row * int(wiring.shape[1]) + wiring.col
+    bad = int(np.count_nonzero(np.diff(key) <= 0))
+    if bad:
+        raise ValueError(
+            f"{path} の結合が行優先ソート済みではありません ({bad} 箇所)。\n"
+            "  COO の並びを揃える前に作られた run です。位置で重みと対応づけると"
+            " 別のシナプスに乗るので、読み込みを拒否しました。\n"
+            "  再実行してください (docs/technical/compat_breaks.md 参照)。"
+        )
+
+
+def load_weight_values(path: Path) -> np.ndarray:
+    """重み npz から値ベクトル (1D) を読む。`connectivity.npz` の row/col と index 整合。
+
+    密形式 (キー `weights` に (N,N) 行列) で保存された古い run は受け付けない。行列だけでは
+    「結合が無い」と「重みが 0 まで下がった」を区別できず、統計に 0 が混ざるため。
+    """
+    data = np.load(path, allow_pickle=True)
+    if "data" not in data.files:
+        if "weights" in data.files:
+            raise ValueError(
+                f"{path} は密形式 (キー 'weights') で保存された古い run です。"
+                " 解析は COO 形式 (キー 'data' + connectivity.npz) のみを受け付けます。"
+                " 再実行してください。"
+            )
+        raise KeyError(f"{path} にキー 'data' がありません。")
+    return np.asarray(data["data"], dtype=np.float64).reshape(-1)
+
+
+def save_connectivity(path: Path, row, col, shape) -> None:
+    """結合構造を書く。**鍵名 (`row` / `col` / `shape`) を知る場所を 1 つにするための対。**
+
+    構造はシミュレーション中に変わらないので run につき 1 回だけ呼ぶ。
+    """
+    np.savez_compressed(path, row=np.asarray(row), col=np.asarray(col),
+                        shape=np.asarray(shape))
+
+
+def write_table(rows: list[dict], out_path: Path) -> None:
+    """dict の並びを CSV にする。**列は最初の行のキー順**、後の行で増えた分は末尾。
+
+    `MetricsWriter` が「1 行ずつ追記する記録」なのに対し、こちらは**一度に確定する表**
+    (構造の集計など) 用。列をここで決め打ちしないので、行を作る側が列を持てる。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with open(out_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def save_coords(path: Path, coords) -> None:
+    """soma の座標を書く。キー名を知っているのは読み書きのこの対だけ。
+
+    `no_space` の run では呼ばないこと (座標が無いことと、`inf` で埋めた座標を
+    保存したことを読む側から区別できなくなる)。
+    """
+    np.savez_compressed(path, data=np.asarray(coords, dtype=np.float64))
+
+
+def load_coords(path: Path) -> np.ndarray:
+    """`save_coords()` が書いた座標を読む。非有限値は「座標が無い」として扱う。"""
+    with np.load(path) as data:
+        coords = np.asarray(data["data"], dtype=np.float64)
+    if not np.all(np.isfinite(coords)):
+        raise MissingData("coords", "座標に有限でない値があります (no_space)")
+    return coords
+
+
+def save_weight_values(path: Path, values: np.ndarray) -> None:
+    """重みを値ベクトルとして書く。キー名を知っているのは読み書きのこの対だけ。"""
+    np.savez_compressed(path, data=np.asarray(values))
+
+
+def save_delays(path: Path, values) -> None:
+    """遅延 [ms] を値ベクトルとして書く。`connectivity.npz` の row/col と index 整合。"""
+    np.savez_compressed(path, data=np.asarray(values, dtype=np.float64))
+
+
+def load_delays(path: Path) -> np.ndarray:
+    """`save_delays()` が書いた遅延 [ms] を読む。"""
+    with np.load(path) as data:
+        return np.asarray(data["data"], dtype=np.float64).reshape(-1)
+
+
+def load_metrics(path: Path) -> pd.DataFrame:
+    """`MetricsWriter` が書いた `metrics.csv` を読む。書きと読みの対。"""
+    return pd.read_csv(path)
+
+
+def save_spikes(path: Path, times, ids, record_start_ms: float) -> None:
+    """スパイクと**記録窓の原点**を書く。原点を一緒に残すのがこの関数の要点。"""
+    np.savez_compressed(path, times=np.asarray(times), ids=np.asarray(ids),
+                        **{RECORD_START_KEY: float(record_start_ms)})
+
+
+def load_spikes(path: Path) -> Spikes:
+    """スパイク npz を読み、**窓の原点を引いたローカル時刻**で返す。
+
+    絶対時刻は返さない。必要なら `read_record_start_ms()` の値を足す。
+    """
+    with np.load(path) as data:
+        if RECORD_START_KEY not in data.files:
+            raise KeyError(
+                f"{path} に {RECORD_START_KEY} がありません。"
+                f" 記録窓の原点を持たない古い run です (再実行してください)。"
+            )
+        times = np.asarray(data["times"], dtype=np.float64)
+        ids = np.asarray(data["ids"])
+        start_ms = float(data[RECORD_START_KEY])
+    return Spikes(times=times - start_ms, ids=ids)
+
+
+def read_record_start_ms(path: Path) -> float:
+    """スパイク npz から原点だけを読む。npz は鍵ごとに展開されるので配列は解かない。"""
+    with np.load(path) as data:
+        if RECORD_START_KEY not in data.files:
+            raise KeyError(
+                f"{path} に {RECORD_START_KEY} がありません。"
+                f" 記録窓の原点を持たない古い run です (再実行してください)。"
+            )
+        return float(data[RECORD_START_KEY])
+
+
+def record_hour(record_start_ms: float) -> float:
+    """記録窓の原点 [ms] を記録時刻 [h] に直す。
+
+    記録ファイル名・`Window.hour`・`metrics.csv` の `hour` 列はすべてこれで作るので、
+    同じ窓の時刻はどこでもビット単位で一致する。
+    """
+    return record_start_ms / MS_PER_HOUR
+
+
+def save_neuron_timeseries(path: Path, values, *, neuron_ids, dt: float) -> None:
+    """選んだニューロンのある変数の時系列 (選んだニューロン数, ステップ数) を書く。
+
+    `neuron_ids` は `values` の各行のグローバル ID。
+    """
+    np.savez_compressed(path, values=np.asarray(values),
+                        neuron_ids=np.asarray(neuron_ids, dtype=np.int64), dt=float(dt))
+
+
+def load_neuron_timeseries(path: Path) -> NeuronTimeseries:
+    with np.load(path) as data:
+        return NeuronTimeseries(values=np.asarray(data["values"]),
+                                neuron_ids=np.asarray(data["neuron_ids"]),
+                                dt=float(data["dt"]))
+
+
+class MetricsWriter:
+    """`metrics.csv` を **1 行ずつ追記**する。途中で落ちた run もそこまでが読める。
+
+    ヘッダは**最初の行で確定**する。以降の行でキーが変わると例外。
+
+    **`metrics.csv` は図ではなく記録ファイル**なので、npz と同じくこのモジュールに置く。
+    run の途中で書かれ (`run_one.py`)、`load_metrics()` で読まれ (`Series.metrics()`)、
+    再解析が作り直す。ここが知っているのは「どのファイルにどういう作法で書くか」だけで、
+    列の中身は `analysis/metrics.py` が決める。書く側だけが `save_*` 関数ではなくクラスなのは、
+    記録窓をまたいで「最初の行で確定したヘッダ」を持ち続けるため。
+    """
+
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fieldnames: list[str] | None = None
+
+    def append(self, row: dict) -> None:
+        keys = list(row.keys())
+        if self._fieldnames is None:
+            self._fieldnames = keys
+            with open(self.path, "w", newline="", encoding="utf-8") as handle:
+                csv.DictWriter(handle, fieldnames=keys).writeheader()
+        elif keys != self._fieldnames:
+            raise ValueError(
+                "metrics の列が途中で変わりました。\n"
+                f"  最初の行: {self._fieldnames}\n"
+                f"  今回の行: {keys}"
+            )
+        with open(self.path, "a", newline="", encoding="utf-8") as handle:
+            csv.DictWriter(handle, fieldnames=self._fieldnames).writerow(row)

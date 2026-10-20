@@ -108,4 +108,4 @@
 
 ## 関連（本プロジェクト内ドキュメント）
 
-- 再現の技術メモ: [`akita_soc_reproduction_memo.md`](akita_soc_reproduction_memo.md)
+- 再現の技術メモ: [`docs/technical/akita_soc_reproduction_memo.md`](technical/akita_soc_reproduction_memo.md)

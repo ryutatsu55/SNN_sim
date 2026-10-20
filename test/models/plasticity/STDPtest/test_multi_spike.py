@@ -264,7 +264,7 @@ def measure_delay_ms(sim, ctx):
     """(src,tgt) の伝播遅延[ms]を dendritic / axonal 両対応で取得する。
 
     - dendritic 経路: per-synapse 変数 d(タイムステップ) を持つ → d * dt。
-    - axonal 経路   : delay_by_target 指定で custom_Akita が d を持たず、遅延は
+    - axonal 経路   : axonal な遅延モデルで custom_Akita が d を持たず、遅延は
                       SynapseGroup.axonal_delay_steps(group 均一)で表現される。
                       到着遅延 = (axonal_delay_steps + 1) * dt (GeNN の st_pre 補正に一致)。
     """

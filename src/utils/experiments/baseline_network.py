@@ -253,7 +253,6 @@ def make_app_config(cfg, snapshot_path, multiplier, inhibition_factor):
                 connection=dict(profile_name="saved_snapshot", **saved),
                 weight=dict(profile_name="baseline_pair_weights", **weight),
                 delay=dict(profile_name="saved_arrival_delay", dt=cfg.dt_ms, **saved),
-                sparse="force",
             ),
             layout=dict(assignment="sequential"),
             task=dict(

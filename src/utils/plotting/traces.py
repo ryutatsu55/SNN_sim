@@ -1,173 +1,51 @@
-"""単一ニューロンの時系列 (膜電位・電流・スパイク) と STDP 窓の描画。"""
-import os
+"""単一ニューロンの膜電位トレース。
+
+**run の図。** 記録窓の先頭で毎ステップ採った膜電位・入力電流
+(`window.voltage()` / `window.current()`) から `task.trace_neuron` の行を取り出し、
+同じ時間のラスターと並べて描く。
+x 軸は採った長さで切るので、長時間シミュレーション (72h 等) の記録窓の先頭だけを表示できる。
+
+モデル単体を手で駆動した結果を描く図 (`neuron_test` / `PQN_test` / `stdp_window`) は
+`model_test.py` にある。あちらは run ではないので契約を取らない。
+"""
+from __future__ import annotations
+
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.utils.plotting.common import save_figure
 
-def PQN_test(V_data, I_in, config, title="PQN_V_test"):
-    tmax = config.task.duration/1000
-    time_axis = np.arange(len(V_data)) * config.simulation.dt / 1000.0
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [4, 1]}, figsize=(8, 4), sharex=True)
+def neuron_trace(window, out_path: Path) -> None:
+    """`task.trace_neuron` の膜電位・入力電流を、同じ時間の全体のラスターと並べて描く。
 
-    ax1.plot(time_axis, V_data, color='tab:blue')
-    ax1.set_ylabel('v')
-    ax1.set_xlim(0, tmax)
+    レイアウトは `model_test.neuron_test` と同じ (ラスター / V / I)。
+    """
+    voltage = window.voltage()
+    current = window.current()
+    neuron_id = int(window.config.task.trace_neuron)
+    duration_ms = voltage.duration_ms
+    time_axis = np.arange(voltage.values.shape[1]) * voltage.dt / 1000.0
 
-    ax2.plot(time_axis, I_in, color='black')
-    ax2.set_ylabel('I')
-    ax2.set_xlabel('[s]')
-    ax2.set_xlim(0, tmax)
+    spikes = window.spikes()
+    head = spikes.times < duration_ms
 
-    plt.tight_layout()
-    plt.savefig(f"{title}.png")
+    fig, (ax0, ax1, ax2) = plt.subplots(
+        3, 1, gridspec_kw={"height_ratios": [1, 4, 1]},
+        figsize=(9, 4), sharex=True)
 
-def neuron_test(V_data, I_in, spike_times, spike_ids, config, id=0, title="neuron_test", save_path=".", x_data=None):
-    V_data = V_data[:, id]
-    I_in = I_in[:, id]
-    tmax = config.task.duration / 1000
-    time_axis = np.arange(len(V_data)) * config.simulation.dt / 1000.0
-
-    if x_data is not None:
-        fig, (ax0, ax1, ax2, ax3) = plt.subplots(
-            4, 1,
-            gridspec_kw={'height_ratios': [1, 4, 1, 1]},
-            figsize=(9, 5), sharex=True
-        )
-    else:
-        fig, (ax0, ax1, ax2) = plt.subplots(
-            3, 1,
-            gridspec_kw={'height_ratios': [1, 4, 1]},
-            figsize=(9, 4), sharex=True
-        )
-
-    spike_times = spike_times / 1000.0
-    ax0.scatter(spike_times, spike_ids, s=10)
+    ax0.scatter(spikes.times[head] / 1000.0, spikes.ids[head], s=10)
     ax0.set_ylabel("Neuron ID")
-    ax0.set_ylim(id - 0.5, id + 0.5)
+    ax0.set_title(f"neuron {neuron_id}")
 
-    ax1.plot(time_axis, V_data, color='tab:blue')
-    ax1.set_ylabel('v [mV]')
-    ax1.set_xlim(0, tmax)
+    ax1.plot(time_axis, voltage.of(neuron_id), color="tab:blue")
+    ax1.set_ylabel("v [mV]")
 
-    ax2.plot(time_axis, I_in, color='black')
-    ax2.set_ylabel('I [nA]')
-    ax2.set_xlim(0, tmax)
+    ax2.plot(time_axis, current.of(neuron_id), color="black")
+    ax2.set_ylabel("I [nA]")
+    ax2.set_xlim(0, duration_ms / 1000.0)
+    ax2.set_xlabel("Time [s]")
 
-    if x_data is not None:
-        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-        for neuron_id in range(x_data.shape[1]):
-            col = x_data[:, neuron_id]
-            if np.all(np.isnan(col)):
-                continue
-            ax3.plot(time_axis, col, color=colors[neuron_id % len(colors)], label=f'neuron {neuron_id}')
-        ax3.set_ylabel('x (STP)')
-        ax3.set_xlabel('Time [s]')
-        ax3.set_xlim(0, tmax)
-        ax3.legend(fontsize=7, loc='upper right')
-    else:
-        ax2.set_xlabel('Time [s]')
-
-    plt.tight_layout()
-    plt.savefig(f"{save_path}/{title}.png")
-
-def neuron_trace(V, I_in, spike_times, spike_ids, dt, id=0, window_s=10.0,
-                 title="neuron_trace", save_path="."):
-    """
-    単一ニューロンの膜電位・シナプス電流・スパイクを固定時間窓で描画する。
-
-    neuron_test と同じレイアウト(ラスター / V / I)だが、x軸上限を config.task.duration
-    ではなく引数 window_s で固定するため、長時間シミュレーション(72h等)から切り出した
-    短い窓(既定10秒)をそのまま表示できる。
-
-    Args:
-        V: 対象ニューロンの膜電位 [mV] の1次元配列 (長さ = ステップ数)
-        I_in: 対象ニューロンのシナプス電流 (Isyn) の1次元配列。None ならI パネルを省略
-        spike_times: 窓内スパイク時刻 [ms] (窓の先頭を0とするローカル時刻)
-        spike_ids: spike_times に対応するグローバルニューロンID
-        dt: シミュレーションのタイムステップ [ms]
-        id: 電圧トレースを表示する対象ニューロンID (ラスターの中心)
-        window_s: x軸に表示する時間幅 [s]
-    """
-    V = np.asarray(V)
-    time_axis = np.arange(len(V)) * dt / 1000.0
-
-    if I_in is not None:
-        fig, (ax0, ax1, ax2) = plt.subplots(
-            3, 1,
-            gridspec_kw={'height_ratios': [1, 4, 1]},
-            figsize=(9, 4), sharex=True
-        )
-    else:
-        fig, (ax0, ax1) = plt.subplots(
-            2, 1,
-            gridspec_kw={'height_ratios': [1, 4]},
-            figsize=(9, 3.5), sharex=True
-        )
-
-    spike_times = np.asarray(spike_times) / 1000.0
-    ax0.scatter(spike_times, spike_ids, s=10)
-    ax0.set_ylabel("Neuron ID")
-
-    ax1.plot(time_axis, V, color='tab:blue')
-    ax1.set_ylabel('v [mV]')
-    ax1.set_xlim(0, window_s)
-
-    if I_in is not None:
-        ax2.plot(time_axis, np.asarray(I_in), color='black')
-        ax2.set_ylabel('I [nA]')
-        ax2.set_xlim(0, window_s)
-        ax2.set_xlabel('Time [s]')
-    else:
-        ax1.set_xlabel('Time [s]')
-
-    plt.tight_layout()
-    plt.savefig(f"{save_path}/{title}.png")
-    plt.close()
-
-
-def stdp_window(dw: np.ndarray, dt: np.ndarray, title="stdp_window", save_path="."):
-    """
-    STDPの学習特性（Δt vs Δw）をプロットし、画像として保存する関数。
-
-    Args:
-        dw: 重みの変化量 (Δw = w_after - w_before) の配列
-        dt: スパイク時間差 (Δt = t_post - t_pre) [ms] の配列
-        title: グラフ/ファイル名
-        save_path: 画像の保存先ディレクトリ
-    """
-    plt.figure(figsize=(10, 6))
-
-    # 0点を強調するガイドライン
-    plt.axhline(0, color='black', linewidth=1, linestyle='--')
-    plt.axvline(0, color='black', linewidth=1, linestyle='--')
-
-    # データの散布図と近似線
-    plt.scatter(dt, dw, color='blue', alpha=0.6, label='Measured Data')
-
-    # スムーズな曲線を描くためのソート処理（プロット用）
-    sort_idx = np.argsort(dt)
-    plt.plot(dt[sort_idx], dw[sort_idx], color='red', linewidth=2, label='STDP Curve')
-
-    # 軸ラベルの設定
-    plt.xlabel(r'Spike Timing Difference: $\Delta t$ [ms]', fontsize=12)
-    plt.ylabel(r'Weight Change: $\Delta w$ (or $\Delta g$)', fontsize=12)
-    plt.title(title, fontsize=14)
-
-    # 領域の解説（LTP/LTD）
-    plt.text(max(dt)*0.7, max(dw)*0.1, 'LTP (Potentiation)', fontsize=10, color='green', fontweight='bold')
-    plt.text(min(dt)*0.7, max(dw)*0.1, 'LTD (Depression)', fontsize=10, color='orange', fontweight='bold')
-
-    plt.grid(True, which='both', linestyle=':', alpha=0.5)
-    plt.legend()
-
-    # 保存処理
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-
-    file_full_path = os.path.join(save_path, f"{title}.png")
-    plt.savefig(file_full_path, dpi=300)
-    plt.close()
-
-    print(f"  [Visualization] STDP window plot saved to: {file_full_path}")
+    save_figure(fig, Path(out_path), dpi=None)
