@@ -57,7 +57,7 @@ Watanabe et al., *Commun. Eng.* **5**:150 (2026)
 | participation coefficient / within-module z-score | `analysis/graph.py::module_participation` |
 | Guimerà–Amaral の役割分類 | `analysis/graph.py::classify_roles` |
 | 媒介中心性 | `analysis/graph.py::betweenness_centrality` |
-| グラフ指標でのハブ選択 | `scripts/lesion/analysis/selectors.py::HubSelector` (`hub:metric=participation` 等) |
+| グラフ指標でのハブ選択 | `scripts/lesion/protocol/cut.py::HubSelector` (`hub:metric=participation` 等) |
 | 切断シナプスごとの participation / z の記録 | `scripts/lesion/analysis/metrics.py` |
 
 **足りないのは部品ではなく、2 つの定義を突き合わせる評価軸のほう。**

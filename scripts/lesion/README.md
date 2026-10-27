@@ -3,8 +3,10 @@
 `scripts/develop/` が育てたネットワークを引き継ぎ、**特定の結合を構造的に除去**して、
 切断からの回復を追う。ベースライン (切断直前) は親 run の記録をそのまま使う。
 
-**`scripts/develop/` と同じ 5 層構造** (`report/` `store/` `analysis/` `figures/`)。
-違うのは「何を記録し、何を測り、どう描くか」だけで、層の役割も解析・描画関数の引数も同じ。
+**`scripts/develop/` と同じ層構造** (`report/` `store/` `analysis/` `figures/`) に、
+実験の進め方を決める `protocol/` (どこを切るか・何を止めるか・親を正しく引き継げたか) を
+1 つ足したもの。違うのは「何を記録し、何を測り、どう描くか」だけで、層の役割も
+解析・描画関数の引数も同じ。
 
 ---
 
@@ -33,8 +35,8 @@ python -m scripts.lesion --parent outputs/develop/<条件>
 再現も再解析もできないので、置き場所も親に従属させる (ルート `CLAUDE.md` の
 「出力は `outputs/<実験名>/<条件>/`」はこの実験には当てはまらない)。
 
-ディレクトリ名 `<切断条件>` は**切断 spec から機械的に決まる**
-(`analysis/selectors.py` の `cut_label()`)。だから条件名を受ける引数が無い ——
+ディレクトリ名 `<切断条件>` は**切断 spec (と `freeze_plasticity`) から機械的に決まる**
+(`protocol/freeze.py` の `run_label()`)。だから条件名を受ける引数が無い ——
 名前と中身がずれる余地を作らないため。同じ親を同じ spec で 2 度切ることはできない
 (既にあれば止まる。撮り直すなら先に消す)。
 
@@ -88,6 +90,7 @@ lesion:
   cut:                         # 切断 spec。複数書ける。**run ディレクトリ名になる**
     - "bridge:kind=inter_cluster"
   cut_combine: or              # "or" | "and"
+  freeze_plasticity: []        # 切断後に STDP を止めるシナプス群 (下の節)。**空でなければ名前に付く**
   settle_ms: 60000.0           # 切断直後に落ち着かせる時間。時間軸には含まれない
   record_hours: [0..12]        # 記録する時刻 [h]。**基準は切断の瞬間**
   record_window_ms: 600000.0   # 1 probe の記録窓
@@ -105,6 +108,25 @@ run の `config.yaml` には展開後の時刻が並ぶ。
 媒介中心性を厳密に解く上限 N も、それを使う `src/utils/analysis/graph.py` が既定値として
 持っている。config に置くと同じ定義が 2 か所になるうえ、切断条件と紛らわしい ——
 **何をどこで切るかを決めるのは `cut` の spec だけ**。
+
+### 切断後に可塑性を止める (`freeze_plasticity`)
+
+シナプス群の名前 (`config.synapses` のキー) を並べると、その群の STDP の学習率を 0 にした
+ネットワークで切断後を走らせる。回復が i-STDP と e-STDP のどちらから来るかを切り分けるための操作。
+
+```yaml
+freeze_plasticity: [from_Inh]   # i-STDP を止める (I→E と I→I の重みが切断時の値で固定)
+freeze_plasticity: [from_Exc]   # e-STDP を止める (E→E と E→I)
+```
+
+- **止めるのは学習率だけ。** 短期可塑性 (U, tau_rec) は動いたままなので、伝達の仕方は親と同じ
+- **止めるのは切断の瞬間から。** 親 run (損傷前の発達) は止めていない
+- run の `config.yaml` の `synapses` は**親と同じ値のまま**で、止めたことは `task.freeze_plasticity`
+  と `lesion.json` の `frozen_plasticity` に残る。GeNN に渡す build だけが学習率 0 の複製を使う
+- 学習率のパラメータ名はモデルごとに `protocol/freeze.py` の `LEARNING_RATES` が持つ
+  (`custom_Akita` は `A_E` / `A_I`)。名前の分からないモデルや存在しない群はエラーで止まる
+- `task.yaml` の `lesion_freeze_inh` / `lesion_freeze_exc` が、`random:fraction=0.1` を切って
+  それぞれを止めるプロファイル。比べる相手は同じ切断で何も止めない run
 
 ---
 
@@ -180,7 +202,7 @@ BX0-1   BX0-2   BX1-3   BX2-3                            (4 本)
 ```
 
 `kind` の `BX` / `BC` という接頭辞での分類は **`hierarchical_modular_grid` 固有の命名**に
-依存しているので、`selectors.py` (実験側) が判定を持つ。汎用側でのブリッジの定義は
+依存しているので、`protocol/cut.py` (実験側) が判定を持つ。汎用側でのブリッジの定義は
 「`allow_soma: false` の part」1 つだけ (`src/utils/analysis/connectivity.bridge_part_indices`)。
 
 **切るのは「露出した通路を通った結合」。** ブリッジ part は union を連結にするため両端を
@@ -348,8 +370,12 @@ cut_combine: and        # ハブの出力のうち、クラスタ間ブリッジ
 | `synapses:pairs=3-7+12-40` | `synapses-2` |
 | 上記 2 つを `and` | `<label1>_and_<label2>` |
 
-ネットワークを組む前に spec だけから決まる (`selectors.cut_label()`)。**同じ親を同じ spec で
+ネットワークを組む前に spec だけから決まる (`protocol/cut.py` の `cut_label()`)。**同じ親を同じ spec で
 2 度切ることはできない** (既にあれば止まる)。
+
+`freeze_plasticity` が空でなければ、`+freeze-<群>` が後ろに付く
+(`random-any-any-f0.1-seed0+freeze-from_Inh`。決めるのは `freeze.run_label()`)。
+止めない run の名前は変わらない。
 
 ### `bridge` と `between` は一致しない
 
@@ -572,21 +598,45 @@ python -m scripts.lesion.compare outputs/develop/<条件> --control outputs/deve
 
 ```
 <条件>/lesion_compare/
-├── runs.csv       損傷 run 1 本 = 1 行 (切断数 % / 切った重み % / 低下 / χ の低下 / 回復 …)
+├── runs.csv       損傷 run 1 本 = 1 行 (切断数 % / 切った重み % / 低下 / χ・相関の低下 / 回復 …)
 ├── control.csv    対照 run 1 本 = 1 行 (同じ式で測った回復)
-└── report/        cut_weight / activity_drop / recovery_vs_drop / recovery_vs_cut
+└── report/        cut_weight / activity_drop / recovery_vs_drop / recovery_vs_corr_drop /
+                   recovery_vs_cut / detour_*.csv (下の「迂回経路」)
 ```
 
 - **定義は `analysis/summary.py` のモジュール docstring が正。** 回復 = (18–20 h の平均 − 0 h) ÷ 損傷前。
   対照は切断時刻を 0 h に読み替えて同じ式で測る
 - **種類は切断 spec から決める** (`summary.KINDS`: bridge / random / random_exc)。表に無い spec の
   run は「対象外」と出して表に入れない。新しい種類を比べるときはここに 1 行足す
+- **切断後に可塑性を止めた run (`freeze_plasticity`) も対象外。** 用量反応は何も止めずに切った run
+  どうしの比較なので、同じ spec でも混ぜない (止めた run の比較は下の迂回経路の表と `metrics.csv`)
 - `control.csv` の `matches_lesion_baseline` は、対照の切断時刻の発火率が同じ seed の損傷 run の
   baseline と一致するか (= 対照が切断時刻まで親と同じ run か)。False なら対照として使えない
 - 図の細線は、同じ seed で割合だけ変えた run (入れ子の抽選) を切断数の順に結んだもの
 
 この段階は run 1 本の 3 段階 (structure / panels / overview) の外側にある 4 つ目で、形は
 overview と同じ (表を書いてから、その表を図が読む)。リーダーは `store/collection.py` の `Collection`。
+
+### 迂回経路の表 (`detour_*.csv`)
+
+切断した E→E シナプス a→b について、残った E→E だけでたどる長さ 2〜3 の迂回経路
+(順方向 a⇝b と逆方向 b⇝a) を列挙し、切断後にそれが強まったかを測る。「失った直接の結合の
+代わりに迂回経路が強まる」という回復の仮説を確かめるためのもの。`compare` が一緒に出す
+(1 run 0.3 秒ほど)。
+
+4 つの表はどれも**条件ごとに seed をプールした**値。条件は `lesion.json` から作る
+`spec` (切断 spec を `;` で連結。`runs.csv` の `spec` と同じ) と `frozen` (止めた可塑性の群を
+`-` で連結。止めていなければ空) の 2 列。E→E を切った run が無い束では skip になる。
+
+| 表 | 中身 |
+|---|---|
+| `detour_paths.csv` | 対象 (切った / 切らなかった × 強い / 0) と向きごとの、迂回経路の本数・ボトルネック重みの分布・切断後に強化された割合・強化された辺の位置 (始点側 / 中間 / 終点側) |
+| `detour_reverse.csv` | 強い a→b の逆向き b→a (切断前 0) が最後に強くなったか。順方向の強い迂回の短さで分ける |
+| `detour_last_hop.csv` | 順方向の迂回の最後の段 k→b の post 先行率 (切断前 / 0 h / 最後) と、弱かった k→b の強化 |
+| `detour_turnover.csv` | 切らなかった E→E の強化 / 弱化の割合。対照 (`control (no cut)`) の行を含む |
+
+**定義 (迂回経路・ボトルネック・強化・post 先行率) は `analysis/detours.py` のモジュール
+docstring が正。** 切断前は親 run の記録、最後は損傷 run の最後の probe。
 
 ---
 
@@ -614,7 +664,7 @@ scripts/lesion/
 │   ├── structure.py   切断直後: 切断後のネットワークの形
 │   ├── panels.py      probe ごと: ラスター / アバランチ / metrics 1 行
 │   ├── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 同期 / RTE / 差の表
-│   └── compare.py     run をまたいで: runs.csv / control.csv と用量反応の図
+│   └── compare.py     run をまたいで: runs.csv / control.csv、用量反応の図、迂回経路の表
 ├── store/          どこに何があり、どう読み書きするか
 │   ├── paths.py       run 内部のディレクトリ規約
 │   ├── formats.py     記録ファイル 1 つの読み書き
@@ -627,9 +677,12 @@ scripts/lesion/
 │   ├── structure.py   配線のトポロジー指標 (切断前と切断後の 1 回ずつ) → structure.csv
 │   ├── effective.py   probe ごとの RTE (baseline を基準に一括) → rte.csv
 │   ├── summary.py     損傷 run 1 本 = 1 行の要約 (低下・回復・対照の定義) → runs.csv / control.csv
-│   ├── selectors.py   どこを切るか (spec のパースと選択)
-│   ├── restore.py     再ビルドが親と同じネットワークかの検証 (軸索幾何)
+│   ├── detours.py     切断した E→E の迂回経路と、その切断後の強化 → 報告の表
 │   └── connectivity.py 群間結合確率 → 報告の表
+├── protocol/       実験の進め方 (入口だけが import する)
+│   ├── cut.py         どこを切るか (spec のパースと選択)
+│   ├── freeze.py      切断後に止める可塑性と、run ディレクトリ名 (run_label)
+│   └── restore.py     再ビルドが親と同じネットワークかの検証 (軸索幾何)
 └── figures/        どう描くか (図)
 ```
 

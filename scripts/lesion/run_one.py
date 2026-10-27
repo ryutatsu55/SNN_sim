@@ -57,9 +57,10 @@ from src.utils.analysis.connectivity import bridge_part_indices
 from src.utils.analysis.weights import align_saved_to_coo
 
 from scripts.lesion.analysis import metrics as lesion_metrics
-from scripts.lesion.analysis.restore import (verify_axon_geometry,
+from scripts.lesion.protocol.restore import (verify_axon_geometry,
                                              verify_geometry_alignment)
-from scripts.lesion.analysis.selectors import LesionContext, combine, parse_cut_spec
+from scripts.lesion.protocol.freeze import freeze_plasticity, frozen_groups, run_label
+from scripts.lesion.protocol.cut import LesionContext, combine, parse_cut_spec
 from scripts.lesion.store.parent_run import load_parent
 from scripts.lesion.report import overview, panels, structure
 from scripts.lesion.store import paths
@@ -436,6 +437,7 @@ def main():
     print()
 
     num_cut = int(selection.cut.sum())
+    frozen = frozen_groups(protocol)
     manifest = {
         "parent_run": str(parent.run_dir.resolve()),
         "restored_from_hour": parent.hour,
@@ -443,6 +445,8 @@ def main():
         "cut_combine": str(getattr(protocol, "cut_combine", "or")),
         "label": selection.label,
         "description": selection.description,
+        # 切断後に STDP を止めたシナプス群 (`protocol/freeze.py`)。空なら全部動いている。
+        "frozen_plasticity": frozen,
         "num_synapses_before": int(coo.row.size),
         "num_synapses_cut": num_cut,
         "num_synapses_after": int(coo.row.size - num_cut),
@@ -489,9 +493,13 @@ def main():
     print(f"\n=== {num_cut} 本を構造的に除去して回復を追う ===")
     keep = ~np.asarray(selection.cut, dtype=bool)
     # **モデル名は同時に走るものどうしで必ず変える** (同じ名前は genn_code の同じ
-    # ディレクトリを共有する。ルート CLAUDE.md)。seed と切断条件で分ける。
+    # ディレクトリを共有する。ルート CLAUDE.md)。seed と run の条件 (切断 + 止めた可塑性) で分ける。
+    # 可塑性を止めるのは GeNN に渡すこの build だけ。下見と記録の config は親のまま。
+    if frozen:
+        print(f"  切断後の STDP を止めます: {frozen}")
     builder, model, layout = build_network(
-        config, f"lesion_seed{seed}_{selection.label}"[:80],
+        freeze_plasticity(config, frozen),
+        f"lesion_seed{seed}_{run_label(protocol).replace('+', '_')}"[:80],
         restored_weights=restored, cut_mask=selection.cut, preserve_fan_in=True)
     if parent.axes_path is not None:
         layout.load_axes_file(parent.axes_path)

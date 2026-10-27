@@ -21,9 +21,10 @@ TASK_PATH = root_path / "scripts" / "lesion" / "task.yaml"
 FIXTURE_CONFIG = root_path / "test" / "experiments" / "no_space_100.yaml"
 
 from scripts.lesion.analysis.drive import conductance_per_release, drive_columns, source_params
-from scripts.lesion.analysis.selectors import (
+from scripts.lesion.protocol.cut import (
     BetweenGroupSelector, HubSelector, LesionContext, RandomSelector, SynapseSelector,
     combine, cut_label, parse_cut_spec)
+from scripts.lesion.protocol.freeze import freeze_plasticity, frozen_groups, run_label
 
 import src.models.neurons.akita_escape_lif  # noqa: F401
 import src.models.network.connectors  # noqa: F401
@@ -206,6 +207,69 @@ class SelectorTest(unittest.TestCase):
     def test_bridge_selector_needs_geometry(self):
         with self.assertRaises(ValueError):
             parse_cut_spec("bridge:kind=any").select(self.ctx)
+
+
+class RunLabelTest(unittest.TestCase):
+    """run ディレクトリ名 (`run_label`)。**既存の run と 1 文字も変えない**ことを固定する。"""
+
+    # 既にある run の (task.cut, task.freeze_plasticity) → ディレクトリ名。
+    EXISTING = [
+        (["bridge:parts=BC0-0-1"], [], "bridge-BC0-0-1"),
+        (["bridge:parts=BX1-3"], [], "bridge-BX1-3"),
+        (["bridge:kind=inter_cluster"], [], "bridge-inter_cluster"),
+        (["random:fraction=0.025"], [], "random-any-any-f0.025-seed0"),
+        (["random:pre=exc,fraction=0.1"], [], "random-exc-any-f0.1-seed0"),
+        (["random:fraction=0.1"], ["from_Inh"], "random-any-any-f0.1-seed0+freeze-from_Inh"),
+        (["random:fraction=0.1"], ["from_Exc"], "random-any-any-f0.1-seed0+freeze-from_Exc"),
+    ]
+
+    def test_existing_run_names_are_kept(self):
+        for cut, frozen, name in self.EXISTING:
+            with self.subTest(name):
+                protocol = {"cut": cut, "cut_combine": "or", "freeze_plasticity": frozen}
+                self.assertEqual(run_label(protocol), name)
+
+    def test_frozen_groups_are_sorted_into_the_name(self):
+        protocol = {"cut": ["random:fraction=0.1"], "cut_combine": "or",
+                    "freeze_plasticity": ["from_Inh", "from_Exc"]}
+        self.assertEqual(run_label(protocol),
+                         "random-any-any-f0.1-seed0+freeze-from_Exc-from_Inh")
+
+    def test_name_without_freeze_is_the_cut_label(self):
+        specs = ["hub:metric=participation,top=3,direction=out", "between:axis=module"]
+        self.assertEqual(run_label({"cut": specs, "cut_combine": "and"}),
+                         cut_label(specs, "and"))
+
+
+class FreezeTest(unittest.TestCase):
+    """切断後に可塑性を止める操作 (`protocol/freeze.py`)。"""
+
+    def _config(self):
+        return ConfigManager().resolve(str(FIXTURE_CONFIG), "lesion", task_path=TASK_PATH)
+
+    def test_only_learning_rate_of_named_group_is_zeroed(self):
+        config = self._config()
+        frozen = freeze_plasticity(config, ["from_Inh"])
+        self.assertEqual(frozen.synapses["from_Inh"].plasticity.A_I, 0.0)
+        self.assertEqual(frozen.synapses["from_Exc"].plasticity.A_E,
+                         config.synapses["from_Exc"].plasticity.A_E)
+        self.assertGreater(config.synapses["from_Inh"].plasticity.A_I, 0.0)   # 元は変えない
+        self.assertEqual(frozen.synapses["from_Inh"].plasticity.U,
+                         config.synapses["from_Inh"].plasticity.U)
+
+    def test_unknown_group_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "config.synapses"):
+            freeze_plasticity(self._config(), ["from_Nothing"])
+
+    def test_unknown_plasticity_model_is_an_error(self):
+        config = self._config()
+        config.synapses["from_Inh"].plasticity.type = "static"
+        with self.assertRaisesRegex(ValueError, "学習率"):
+            freeze_plasticity(config, ["from_Inh"])
+
+    def test_scalar_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "リスト"):
+            frozen_groups({"freeze_plasticity": "from_Inh"})
 
 
 class DriveTest(unittest.TestCase):

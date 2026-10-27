@@ -21,10 +21,11 @@ from pathlib import Path
 import pandas as pd
 
 from src.core.config_manager import CONFIG_NAME, ConfigManager
+from src.core.layout import NetworkLayout
 from src.utils.runview import MissingData
 
 from scripts.lesion.store import paths
-from scripts.lesion.store.parent_run import load_parent_metrics
+from scripts.lesion.store.parent_run import Parent, load_parent, load_parent_metrics
 from scripts.lesion.store.formats import (CONTROL_TABLE_NAME, MANIFEST_NAME,
                                           RUNS_TABLE_NAME, load_metrics)
 from scripts.lesion.store.views import Series, open_run
@@ -36,6 +37,14 @@ class ControlRun:
     run_dir: Path
     config: object
     metrics: pd.DataFrame
+
+    def state_at(self, hour: float) -> Parent:
+        """記録時刻 `hour` [h] の結合・重み・スパイク。読み方は親 run と同じ (`load_parent()`)。"""
+        return load_parent(self.run_dir, hour)
+
+    def layout(self) -> NetworkLayout:
+        """この run の config から組んだ `NetworkLayout` (E/I などの軸)。"""
+        return NetworkLayout.from_config(self.config)
 
 
 def _runs_under(directory: Path) -> list[Path]:

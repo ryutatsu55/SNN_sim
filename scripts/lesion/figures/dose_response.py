@@ -1,13 +1,14 @@
-"""損傷の用量反応。損傷 run の束 (`Collection`) を 1 run = 1 点で描く 4 枚。
+"""損傷の用量反応。損傷 run の束 (`Collection`) を 1 run = 1 点で描く 5 枚。
 
     cut_weight          切断数 [%] → 切った重み [%] (+ y = x)
     activity_drop       切断数 [%] → 発火率の低下
     recovery_vs_drop    発火率の低下 → 回復 (+ 対照の幅)
+    recovery_vs_corr_drop 平均相関の低下 → 回復 (+ 対照の幅)
     recovery_vs_cut     切断数 [%] → 回復 (+ 対照の幅)
 
 色 = 切断の種類。同じ seed の割合違い (入れ子の抽選) は切断数の順に細線で結ぶ。凡例に種類ごとの
 Spearman ρ (* は p < 0.05、多重比較の補正なし)。列の定義は `analysis/summary.py`。
-**4 枚が同じ描き方 (色・線・凡例) を共有する**ので 1 ファイルに置く。
+**全部が同じ描き方 (色・線・凡例) を共有する**ので 1 ファイルに置く。
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ RC = {
 
 CUT_LABEL = "synapses cut [% of all synapses]"
 DROP_LABEL = "rate drop  (pre − 0 h) / pre"
+CORR_DROP_LABEL = "mean correlation drop  (pre − 0 h) / pre"
 
 
 def _rec_label(runs) -> str:
@@ -109,6 +111,17 @@ def recovery_vs_drop(collection, out_path) -> None:
         _scatter(ax, runs, "drop", "rec")
         ax.set(xlabel=DROP_LABEL, ylabel=_rec_label(runs))
         _finish(fig, ax, collection, "Recovery vs. activity drop", out_path)
+
+
+def recovery_vs_corr_drop(collection, out_path) -> None:
+    """平均相関の低下と回復。同期の崩れ方で種類ごとの回復を比べる。"""
+    runs, control = collection.runs(), collection.control()
+    with plt.rc_context(RC):
+        fig, ax = plt.subplots(figsize=FIGSIZE)
+        _control_band(ax, control)
+        _scatter(ax, runs, "corr_drop", "rec")
+        ax.set(xlabel=CORR_DROP_LABEL, ylabel=_rec_label(runs))
+        _finish(fig, ax, collection, "Recovery vs. correlation drop", out_path)
 
 
 def recovery_vs_cut(collection, out_path) -> None:
