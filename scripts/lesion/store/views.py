@@ -51,6 +51,7 @@ from src.utils.analysis.avalanche import mean_iei_ms
 from src.utils.runview import Coo, MissingData, NeuronTimeseries, Spikes, Wiring
 
 from scripts.lesion.store import paths
+from scripts.lesion.store.parent_run import load_parent_geometry
 from scripts.lesion.store.formats import (BASELINE_INDEX, COORDS_NAME, DELAYS_NAME,
                                           INITIAL_WEIGHTS_NAME, METRICS_NAME, RTE_NAME,
                                           PHASE_BASELINE, SPIKES, VOLTAGE, CURRENT, WEIGHTS,
@@ -172,6 +173,10 @@ class Window(runview.Window):
         return (self._series.wiring_pre() if self.is_baseline
                 else self._series.wiring())
 
+    def wiring_after_cut(self) -> Wiring:
+        """切断**後**の結合。どの窓でも同じ (baseline の窓の `wiring()` は切断前)。"""
+        return self._series.wiring()
+
     def coords(self) -> np.ndarray:
         """soma の座標。**切断で動かない**ので series が持つものをそのまま返す。"""
         return self._series.coords()
@@ -287,6 +292,18 @@ class Series(runview.Series):
                 raise _not_recorded("geometry", path)
             self._geometry = AxonGeometry.load(path)
         return self._geometry
+
+    def geometry_pre(self):
+        """**切断前**の軸索幾何 (親 run の記録)。`wiring_pre()` の上の値を軸索で描くときに使う。
+
+        この run の `geometry()` は切断後に絞ってあり、切ったシナプスの接触点を持たない。
+        値との対応は位置ではなく (pre, post) で取ること。親 run が幾何を持たなければ `MissingData`。
+        """
+        geometry = load_parent_geometry(Path(self.config.task.parent_run))
+        if geometry is None:
+            name = self.config.network.connection.profile_name
+            raise MissingData("geometry_pre", f"親 run が軸索の幾何を持ちません ({name})")
+        return geometry
 
     def delays(self) -> np.ndarray:
         """切断後の伝播遅延 [ms] (1D, `wiring()` と index 整合)。

@@ -206,6 +206,15 @@ def _load_geometry(data_dir: Path):
     return AxonGeometry.load(path)
 
 
+def load_parent_geometry(run_dir: Path):
+    """親 run の軸索幾何 (= 切断**前**の幾何)。持たない run では None。
+
+    切断したシナプスの経路を描くときに使う。この run の `axon_geometry.npz` は切断後に
+    絞ってあり、切ったシナプスの接触点を持たないため。
+    """
+    return _load_geometry(_parent_data_dir(Path(run_dir)))
+
+
 def load_parent(run_dir: Path, from_hour: float | None = None) -> Parent:
     """親 run の config / 重み / ベースライン窓 / 幾何を読む。
 

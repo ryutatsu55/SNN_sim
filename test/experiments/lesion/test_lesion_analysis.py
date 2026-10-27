@@ -1,4 +1,4 @@
-"""損傷実験のために足した解析モジュール (axons / graph / isi / 迂回経路) と復元経路。
+"""損傷実験のために足した解析モジュール (axons / graph / isi / 迂回経路 / 反転の規則) と復元経路。
 
 実データではなく**合成データで検算**する (test_beggs_plenz.py と同じ方針)。
 area は `src/models` を import せずダックタイピングの fake で作る —— これは
@@ -28,7 +28,10 @@ from src.utils.analysis.weights import (  # noqa: E402
     WeightRestoreError, align_saved_to_coo, align_subset_to_coo)
 
 from scripts.lesion.analysis.detours import (  # noqa: E402
-    MAX_LENGTH, enumerate_paths, lead_fraction)
+    MAX_LENGTH, detour_positions, enumerate_paths, lead_fraction)
+from scripts.lesion.analysis.flip_rule import auc, pair_drift  # noqa: E402
+from scripts.lesion.analysis.input_budget import (  # noqa: E402
+    budget_terms, change_ratios, neuron_budget_from_inputs)
 
 
 # ======================================================================================
@@ -494,3 +497,136 @@ class TestLeadFraction:
         trains = [np.array([10.0]), np.array([900.0]), np.array([])]
         out = lead_fraction(trains, [0, 0], [1, 2], 20.0)
         assert np.isnan(out).all()
+
+
+# ======================================================================================
+# 反転の規則 (`scripts/lesion/analysis/flip_rule.py`)
+# ======================================================================================
+
+class TestPairDrift:
+    """ドリフトは到着時刻 (pre + 遅延) から測った全ペアの核の和を、1 時間あたりにしたもの。"""
+
+    @staticmethod
+    def kernel(lag):
+        return np.where(lag >= 0, 1.0, -2.0)
+
+    def test_sums_all_pairs_measured_from_arrival(self):
+        # pre 10 ms + 遅延 5 → 到着 15。post 20 (後: +1)、post 12 (先: −2)。1 h の窓。
+        trains = [np.array([10.0]), np.array([12.0, 20.0])]
+        out = pair_drift(trains, [0], [1], [5.0], self.kernel, 3.6e6)
+        assert out[0] == pytest.approx(-1.0)
+
+    def test_pairs_beyond_the_window_are_dropped(self):
+        trains = [np.array([0.0, 1000.0]), np.array([10.0])]
+        out = pair_drift(trains, [0], [1], [0.0], self.kernel, 3.6e6, window_ms=150.0)
+        assert out[0] == pytest.approx(1.0)
+
+    def test_matches_a_naive_double_loop(self):
+        rng = np.random.default_rng(0)
+        trains = [np.sort(rng.uniform(0, 2000, 40)), np.sort(rng.uniform(0, 2000, 30))]
+        def kernel(lag):
+            return np.sign(lag) * np.exp(-np.abs(lag) / 20.0)
+        naive = sum(kernel(b - (a + 1.5)) for a in trains[0] for b in trains[1]
+                    if abs(b - (a + 1.5)) <= 150.0)
+        out = pair_drift(trains, [0], [1], [1.5], kernel, 3.6e6)
+        assert out[0] == pytest.approx(naive)
+
+    def test_silent_neuron_gives_zero(self):
+        trains = [np.array([10.0]), np.array([])]
+        assert pair_drift(trains, [0], [1], [0.0], self.kernel, 3.6e6)[0] == 0.0
+
+
+class TestAuc:
+    def test_perfect_and_reversed_scores(self):
+        assert auc([0, 1, 2, 3], [False, False, True, True]) == pytest.approx(1.0)
+        assert auc([3, 2, 1, 0], [False, False, True, True]) == pytest.approx(0.0)
+
+    def test_ties_count_half(self):
+        assert auc([1, 1], [True, False]) == pytest.approx(0.5)
+
+    def test_one_sided_labels_and_nan_scores(self):
+        assert np.isnan(auc([1, 2], [True, True]))
+        assert auc([np.nan, 0, 1], [True, False, True]) == pytest.approx(1.0)
+
+
+# ======================================================================================
+# 駆動の収支 (`scripts/lesion/analysis/input_budget.py`)
+# ======================================================================================
+
+class TestBudgetTerms:
+    """駆動の変化の列: 切られた結合は `lost_direct` だけ、残った結合は窓どうしの駆動の差。"""
+
+    def test_kept_synapse_takes_window_differences(self):
+        t = budget_terms([False], [0.5], [0.3], [0.9], [1.0], [1.5])
+        assert t["lost_direct"][0] == 0.0
+        assert t["lost_upstream"][0] == pytest.approx(0.2)
+        assert t["gain"][0] == pytest.approx(0.6)
+        assert t["drive_gain"][0] == pytest.approx(0.5)
+
+    def test_cut_synapse_loses_its_pre_cut_drive_only(self):
+        t = budget_terms([True], [0.8], [0.0], [0.0], [1.0], [3.0])
+        assert t["lost_direct"][0] == pytest.approx(0.8)
+        assert t["lost_upstream"][0] == 0.0 and t["gain"][0] == 0.0
+        assert np.isnan(t["drive_gain"][0])
+
+    def test_sums_match_drive_differences(self):
+        rng = np.random.default_rng(0)
+        cut = rng.random(100) < 0.2
+        g_pre, g_0h, g_20h = (rng.uniform(0, 1, 100) for _ in range(3))
+        g_0h, g_20h = np.where(cut, 0.0, g_0h), np.where(cut, 0.0, g_20h)
+        t = budget_terms(cut, g_pre, g_0h, g_20h, np.ones(100), np.ones(100))
+        assert (-t["lost_direct"] - t["lost_upstream"]).sum() == pytest.approx((g_0h - g_pre).sum())
+        assert t["gain"].sum() == pytest.approx((g_20h - g_0h).sum())
+
+
+class TestDetourPositions:
+    """位置は切った強い a→b の迂回経路 (3 段まで) の何段目か。当てはまるものはすべて記録する。"""
+
+    def test_positions_around_a_cut(self):
+        # 切った 0→1。残り: 1→0、0→2→1、0→3→4→1、0→5→6→7→1 (4 段は対象外)、8→9 (無関係)。
+        pairs = [(1, 0), (0, 2), (2, 1), (0, 3), (3, 4), (4, 1),
+                 (0, 5), (5, 6), (6, 7), (7, 1), (8, 9)]
+        out = dict(zip(pairs, detour_positions(pairs, [(0, 1)])))
+        assert out == {(1, 0): "rev", (0, 2): "len2_hop1", (2, 1): "len2_hop2",
+                       (0, 3): "len3_hop1", (3, 4): "len3_hop2", (4, 1): "len3_hop3",
+                       (0, 5): "other", (5, 6): "other", (6, 7): "other", (7, 1): "other",
+                       (8, 9): "other"}
+
+    def test_all_positions_are_recorded_in_order(self):
+        # 2→1 は 0→2→1 (長さ 2 の 2 段目) と 0→3→2→1 (長さ 3 の 3 段目) の両方に乗る。
+        pairs = [(0, 2), (2, 1), (0, 3), (3, 2)]
+        out = dict(zip(pairs, detour_positions(pairs, [(0, 1)])))
+        assert out[(2, 1)] == "len2_hop2;len3_hop3" and out[(3, 2)] == "len3_hop2"
+
+    def test_reverse_and_detour_together(self):
+        # 2→1 は 0→1 の迂回の終点側で、同時に切った 1→2 の逆向き。
+        pairs = [(0, 2), (2, 1)]
+        assert detour_positions(pairs, [(0, 1), (1, 2)])[1] == "rev;len2_hop2"
+
+
+class TestNeuronBudget:
+    def test_sums_terms_per_post_and_origin(self):
+        import pandas as pd
+        cut = np.array([True, False, False])
+        g_pre, g_0h, g_20h = np.array([1.0, 0.2, 1.0]), np.array([0.0, 0.1, 1.0]), \
+            np.array([0.0, 0.9, 1.2])
+        inputs = pd.DataFrame(dict(
+            seed=1, post=[1, 1, 0], pre_exc=[True, True, False], cut=cut,
+            w_pre=[1.0, 0.0, 1.0], change=["", "strengthened", ""],
+            g_pre=g_pre, g_0h=g_0h, g_20h=g_20h,
+            **budget_terms(cut, g_pre, g_0h, g_20h, np.ones(3), np.full(3, 1.5))))
+        out = neuron_budget_from_inputs(inputs, ([2.0, 4.0], [2.0, 1.0], [2.0, 2.0]),
+                                        [False, True])
+        b = out.iloc[1]
+        assert b.n_cut_strong_e == 1 and b.n_strengthened_e == 1
+        assert b.n_in_e == 2 and b.n_kept_e == 1 and b.n_in_i == 0
+        assert out.iloc[0].n_in_i == 1 and out.iloc[0].n_kept_i == 1
+        assert b.lost_direct_e == pytest.approx(1.0) and b.lost_upstream_e == pytest.approx(0.1)
+        assert b.gain_e == pytest.approx(0.8) and b.drive_gain_e == pytest.approx(0.5)
+        assert b["drop"] == pytest.approx(0.75) and b["recovery"] == pytest.approx(0.25)
+        assert out.iloc[0].drive_pre_i == pytest.approx(1.0) and out.iloc[0].gain_i == pytest.approx(0.2)
+
+    def test_silent_neuron_has_no_ratio(self):
+        drop, recovery = change_ratios([0.0, 2.0], [0.0, 1.0], [0.0, 1.5])
+        assert np.isnan(drop[0]) and np.isnan(recovery[0])
+        assert drop[1] == pytest.approx(0.5) and recovery[1] == pytest.approx(0.25)

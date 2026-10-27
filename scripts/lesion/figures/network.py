@@ -49,7 +49,7 @@ AXON_TITLE = "axon_network"
 SHOW_ALL_AXONS = True
 
 
-def _sample_nodes(total: int, n_sample: int, rng) -> np.ndarray:
+def sample_nodes(total: int, n_sample: int, rng) -> np.ndarray:
     """描画するニューロンを選ぶ。`network` と `axon_network` が**同じ列を消費する**ので、
     同じ seed なら 2 枚の図に出るニューロンは一致する。"""
     return np.sort(rng.choice(total, size=min(n_sample, total), replace=False))
@@ -84,15 +84,21 @@ def draw_nodes(ax, x, y, sample, is_exc, node_size) -> None:
                edgecolors='black', zorder=3, label='inhibitory')
     ax.legend(fontsize=9, markerscale=1.5)
 
-def _draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin) -> None:
+def draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin,
+               colors=None) -> None:
     """結合を矢印で描く。`widths` が None なら一定の太さ (`EDGE_WIDTH`)。
 
-    色は**送信元 (source) の極性**。layout が無ければノードと同じ灰色。
+    色は `colors` (1 本ずつの RGBA) を渡せばそれ、無ければ**送信元 (source) の極性**。
+    layout が無ければノードと同じ灰色。`change.py` が重みの変化量で塗るときに `colors` を渡す。
     `annotate` を 1 本ずつ呼ぶので、呼び出し側で `MAX_EDGES` 本まで間引いておくこと。
     """
     for index, (source, target) in enumerate(zip(sources, targets)):
-        color = (EDGE_COLOR_NO_LAYOUT if is_exc is None
-                 else EDGE_COLORS[bool(is_exc[source])])
+        if colors is not None:
+            color = colors[index]
+        elif is_exc is None:
+            color = EDGE_COLOR_NO_LAYOUT
+        else:
+            color = EDGE_COLORS[bool(is_exc[source])]
         ax.annotate(
             "",
             xy=(x[target], y[target]),       # 終点 (Target)
@@ -132,10 +138,9 @@ def network(built, out_path):
     """
     ニューロンの空間配置と結合マスクからネットワーク構造を可視化する。
 
-    空間ネットワーク図を担う唯一の関数。大規模ネットワークでも破綻しないよう、
-    ニューロンを N_SAMPLE 個サンプリングし、両端がサンプルに含まれる結合だけを
-    描画する (さらに MAX_EDGES 本へ間引く)。エッジは矢印付きで、**送信元の極性**で
-    色分け (興奮性=赤 / 抑制性=青)、線幅は一定。
+    大規模ネットワークでも破綻しないよう、ニューロンを N_SAMPLE 個サンプリングし、
+    両端がサンプルに含まれる結合だけを描画する (さらに MAX_EDGES 本へ間引く)。
+    エッジは矢印付きで、**送信元の極性**で色分け (興奮性=赤 / 抑制性=青)、線幅は一定。
 
     **重みは見ない。** 描くのは結合マスク —— どこに線が張られたか。重みの値は
     `weight_matrix.py` と `synapse_hist.py` が受け持つ。
@@ -160,7 +165,7 @@ def network(built, out_path):
     y = coords[:, 1]
 
     # --- ニューロンのサンプリングと E/I 判定 ---
-    sample = _sample_nodes(N, N_SAMPLE, rng)
+    sample = sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
     is_exc = excitatory_mask(layout, N)
@@ -188,7 +193,7 @@ def network(built, out_path):
     # (scatterの s は面積なので、半径は平方根に比例)
     node_margin = np.sqrt(NODE_SIZE) * 0.8
 
-    _draw_edges(ax, x, y, sources, targets, None, is_exc, node_margin)
+    draw_edges(ax, x, y, sources, targets, None, is_exc, node_margin)
 
     ax.set_aspect('equal')
     ax.set_title(f"{NETWORK_TITLE}\n{sample.size} neurons sampled, "
@@ -229,7 +234,7 @@ def weight_network(window, out_path):
     x, y = coords[:, 0], coords[:, 1]
 
     # --- network() と同一のサンプリング (乱数の消費順まで同じ) ---
-    sample = _sample_nodes(N, N_SAMPLE, rng)
+    sample = sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
     is_exc = excitatory_mask(layout, N)
@@ -254,7 +259,7 @@ def weight_network(window, out_path):
     widths = (np.abs(edge_w) / max_weight) * MAX_EDGE_WIDTH
 
     node_margin = np.sqrt(NODE_SIZE) * 0.8
-    _draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin)
+    draw_edges(ax, x, y, sources, targets, widths, is_exc, node_margin)
 
     ax.set_aspect('equal')
     ax.set_title(f"{WEIGHT_NETWORK_TITLE} {window.label}\n{sample.size} neurons sampled, "
@@ -266,7 +271,7 @@ def weight_network(window, out_path):
     save(fig, out_path, dpi=DPI, bbox_inches='tight')
 
 
-def _axon_polyline(geometry, neuron: int) -> np.ndarray:
+def axon_polyline(geometry, neuron: int) -> np.ndarray:
     """ニューロン 1 本の軸索を頂点列 (V, 2) にする。軸索が無ければ空配列。
 
     セグメントは端点を共有して連なっている (`seg_start[k+1] == seg_end[k]`) ので、
@@ -277,10 +282,10 @@ def _axon_polyline(geometry, neuron: int) -> np.ndarray:
         return np.zeros((0, 2), dtype=np.float64)
     return np.vstack([geometry.seg_start[lo:hi], geometry.seg_end[hi - 1]])
 
-def _contact_polyline(geometry, edge: int) -> tuple[np.ndarray, np.ndarray]:
+def contact_polyline(geometry, edge: int) -> tuple[np.ndarray, np.ndarray]:
     """シナプス 1 本ぶんの「細胞体から接触点まで」の軸索経路と、その接触点。
 
-    接触したセグメントの途中で折り返すので、`_axon_polyline` のように軸索全体を
+    接触したセグメントの途中で折り返すので、`axon_polyline` のように軸索全体を
     使うのではなく、接触セグメントの始点まで並べてから接触点を足す。
     """
     pre = int(geometry.pre[edge])
@@ -290,7 +295,7 @@ def _contact_polyline(geometry, edge: int) -> tuple[np.ndarray, np.ndarray]:
     contact = a + t * (b - a)
     return np.vstack([geometry.seg_start[int(geometry.offsets[pre]):seg + 1], contact]), contact
 
-def _save_legend_figure(handles, out_path: str) -> None:
+def save_legend_figure(handles, out_path: str) -> None:
     """凡例**だけ**を別ファイルに保存する。
 
     軸索の図は領域いっぱいに広がるので、凡例を図の中に置くとどこに置いても
@@ -337,7 +342,7 @@ def axon_network(built, out_path):
     x, y = coords[:, 0], coords[:, 1]
 
     # --- network() と同一のサンプリング (乱数の消費順まで同じ) ---
-    sample = _sample_nodes(N, N_SAMPLE, rng)
+    sample = sample_nodes(N, N_SAMPLE, rng)
     in_sample = np.zeros(N, dtype=bool)
     in_sample[sample] = True
     is_exc = excitatory_mask(layout, N)
@@ -355,7 +360,7 @@ def axon_network(built, out_path):
     # --- 下敷き: サンプルしたニューロンの軸索を丸ごと ---
     underlay = []
     if SHOW_ALL_AXONS:
-        underlay = [poly for poly in (_axon_polyline(geometry, int(i)) for i in sample)
+        underlay = [poly for poly in (axon_polyline(geometry, int(i)) for i in sample)
                     if len(poly) > 1]
         if underlay:
             ax.add_collection(LineCollection(underlay, colors="0.45", linewidths=0.6,
@@ -364,7 +369,7 @@ def axon_network(built, out_path):
     # --- 結合を作った経路 (実線) と、接触点から細胞体まで (破線) ---
     paths, stubs, colors = [], [], []
     for edge in edges:
-        path, contact = _contact_polyline(geometry, int(edge))
+        path, contact = contact_polyline(geometry, int(edge))
         paths.append(path)
         stubs.append(np.vstack([contact, coords[post[edge], :2]]))
         colors.append(EDGE_COLOR_NO_LAYOUT if is_exc is None
@@ -377,7 +382,7 @@ def axon_network(built, out_path):
     draw_nodes(ax, x, y, sample, is_exc, NODE_SIZE)
 
     # 凡例は draw_nodes が付けた E/I に線種の説明を足す (色は送信元の極性で決まる)。
-    # ただしこの図には載せず、`{title}_legend.png` として別に出す (_save_legend_figure)。
+    # ただしこの図には載せず、`{title}_legend.png` として別に出す (save_legend_figure)。
     handles, _ = ax.get_legend_handles_labels()
     handles.append(Line2D([], [], color="0.4", lw=1.2, label="axon (made a synapse)"))
     handles.append(Line2D([], [], color="0.4", lw=1.0, ls=(0, (2, 2)),
@@ -401,5 +406,5 @@ def axon_network(built, out_path):
 
     # 凡例は別ファイル。**名前は本体から導く** (呼び出し側が 2 つ渡さなくて済むように)。
     legend_path = out_path.with_name(f"{out_path.stem}_legend{out_path.suffix}")
-    _save_legend_figure(handles, legend_path)
+    save_legend_figure(handles, legend_path)
     print(f"Axon network legend saved to {legend_path}")

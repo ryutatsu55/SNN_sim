@@ -61,6 +61,7 @@ python -m scripts.lesion.replot  <親>/seed03/bridge-inter_cluster [--verify] [-
 から描きます (ネットワークは組み直さない)。`--verify` を付けたときだけ、親と同じ
 ネットワークを再ビルドして記録どおりに切り、記録と同じ結合と軸索幾何が出るかを確かめます。
 切断後の軸索幾何を記録する前に走った run では `axon network` が skip になります。
+`cut axon network` は切ったシナプスの経路を**親 run の軸索幾何**から引くので、親 run が要ります。
 
 ### sweep を丸ごと作り直す
 
@@ -487,8 +488,25 @@ run ディレクトリは `<親 run>/<切断条件>/`。
     │   └── trace/                task.trace_neuron を指定した run のみ
     └── overview/         weight_trajectories / weight_distribution_shift /
                           firing_rate_scatter / mean_correlation_track / drive_track /
-                          chi_track / participation_heatmap / rte_track
+                          chi_track / participation_heatmap / rte_track /
+                          {weight,correlation}_change_{matrix,network}[_across_cut] /
+                          weight_change_axon_network[_across_cut] /
+                          flip_timing.csv (下の「反転の規則」) /
+                          input_budget.csv / neuron_budget.csv (下の「駆動の収支」)
 ```
+
+`*_change_*` は 2 つの窓の差 (後 − 先) を描いた図 (`figures/change.py`)。
+
+- 末尾なし: **切断直後 (0 h の probe) → 20 h** の差 (回復)。目標時刻は `TARGET_HOUR`。
+  20 h の窓を持たない run では skip される。`weight_change_axon_network` は軸索の幾何を
+  持つ run だけ。
+- `_across_cut`: **切断前 (baseline の窓) → 切断直後** の差 (切断そのものの効果)。
+  切断直後の窓は settle の後なので、settle 中の可塑性による変化も含む。重みの差は切断前の
+  結合の上で取り、切ったシナプスは切断後を 0 として数える (切断前の重みぶんの減少として出る)。
+  `weight_change_axon_network_across_cut` は親 run の (切断前の) 軸索幾何の上に描くので、
+  どの軸索のどこで切ったかが読める。
+
+色の範囲は図ごとにデータから決めるので、run や図をまたいで色で比べないこと。
 
 ### `metrics.csv` の駆動の列 (`drive_*`)
 
@@ -601,7 +619,9 @@ python -m scripts.lesion.compare outputs/develop/<条件> --control outputs/deve
 ├── runs.csv       損傷 run 1 本 = 1 行 (切断数 % / 切った重み % / 低下 / χ・相関の低下 / 回復 …)
 ├── control.csv    対照 run 1 本 = 1 行 (同じ式で測った回復)
 └── report/        cut_weight / activity_drop / recovery_vs_drop / recovery_vs_corr_drop /
-                   recovery_vs_cut / detour_*.csv (下の「迂回経路」)
+                   recovery_vs_cut / detour_*.csv (下の「迂回経路」) /
+                   flip_rule*.csv (下の「反転の規則」) /
+                   freeze_rate_track / freeze_recovery_split / freeze_split.csv (下の「可塑性を止めた run」)
 ```
 
 - **定義は `analysis/summary.py` のモジュール docstring が正。** 回復 = (18–20 h の平均 − 0 h) ÷ 損傷前。
@@ -609,13 +629,28 @@ python -m scripts.lesion.compare outputs/develop/<条件> --control outputs/deve
 - **種類は切断 spec から決める** (`summary.KINDS`: bridge / random / random_exc)。表に無い spec の
   run は「対象外」と出して表に入れない。新しい種類を比べるときはここに 1 行足す
 - **切断後に可塑性を止めた run (`freeze_plasticity`) も対象外。** 用量反応は何も止めずに切った run
-  どうしの比較なので、同じ spec でも混ぜない (止めた run の比較は下の迂回経路の表と `metrics.csv`)
+  どうしの比較なので、同じ spec でも混ぜない (止めた run の比較は下の「可塑性を止めた run」と迂回経路の表)
 - `control.csv` の `matches_lesion_baseline` は、対照の切断時刻の発火率が同じ seed の損傷 run の
   baseline と一致するか (= 対照が切断時刻まで親と同じ run か)。False なら対照として使えない
 - 図の細線は、同じ seed で割合だけ変えた run (入れ子の抽選) を切断数の順に結んだもの
 
 この段階は run 1 本の 3 段階 (structure / panels / overview) の外側にある 4 つ目で、形は
 overview と同じ (表を書いてから、その表を図が読む)。リーダーは `store/collection.py` の `Collection`。
+
+### 可塑性を止めた run の比較 (`freeze_*`)
+
+同じ切断で、切断後に e-STDP / i-STDP の片方を止めた run と止めない run を seed ごとに対にして、
+活動の回復のうちどれだけが各則の重みの変化から来たかを出す。止めた run が無い束では skip になる。
+
+| 出力 | 中身 |
+|---|---|
+| `freeze_rate_track.png` | 切断からの時刻ごとのネットワーク全体の発火率 / 切断前。3 条件と対照の seed 平均 ± SEM |
+| `freeze_recovery_split.png` | 寄与 Δe / Δi と Δe+Δi、止めない run の回復 (seed ごとの点、同じ seed を線で結ぶ) |
+| `freeze_split.csv` | (spec, seed) ごとの 3 条件の回復と Δe / Δi / Δsum |
+
+回復は `runs.csv` と同じ式。Δe = 回復(i-STDP を止めた) (e-STDP だけが働いた回復)、Δi も同様。両方止めた run は
+無いので、Δe + Δi が止めない run の回復に一致するか (加法性) は確かめられない。
+**定義は `analysis/freeze_split.py` のモジュール docstring が正。**
 
 ### 迂回経路の表 (`detour_*.csv`)
 
@@ -637,6 +672,41 @@ overview と同じ (表を書いてから、その表を図が読む)。リー�
 
 **定義 (迂回経路・ボトルネック・強化・post 先行率) は `analysis/detours.py` のモジュール
 docstring が正。** 切断前は親 run の記録、最後は損傷 run の最後の probe。
+
+### 反転の規則の表 (`flip_rule*.csv`)
+
+切られずに残った E 発の結合 (E→E / E→I) について、切断前と切断直後の probe (0 / 1 / 2 h) の
+窓で e-STDP のドリフト D (全スパイク対の核の和) と post 先行率を測り、最後の probe で重みが
+0.5 をまたいだか (弱 → 強 / 強 → 弱) を D の符号で当てられるかを出す。「切断で順序がずれ、
+D の符号が変わった結合だけが反転する」という規則を確かめるためのもの。`compare` が一緒に出す
+(1 run 0.5 秒ほど)。群は `EE` / `EI` / `EX` (両方) の 3 つを並べる。条件の列は迂回経路の表と同じ。
+
+| 表 | 中身 |
+|---|---|
+| `flip_rule.csv` | 群 × 切断前の状態 (弱 / 強) × 時点ごとの、変化した割合・D の符号で予測した割合・予測の当たり具合 (予測したもの / しなかったもののうち変化した割合、感度、特異度)・D と post 先行率の AUC |
+| `flip_rule_classes.csv` | 弱い結合を、切った強い結合との位置関係 (逆向き `rev` / 長さ n ≤ 3 の迂回経路の i 段目 `len{n}_hop{i}` / `other`) で分けた同じ表。複数の位置に当てはまる結合は全部の位置に数えるので、位置ごとの本数の和は結合の本数より多い |
+
+**定義 (群・D・予測・位置関係) は `analysis/flip_rule.py` のモジュール docstring が正。**
+
+run 1 本の表として、overview が `report/overview/flip_timing.csv` も書く。強化された E 発の結合
+1 本 = 1 行で、切断後の probe (1 時間ごと) をたどり、D が初めて正になった時刻 (`drift_hour`) と
+重みが 0.5 を超えた時刻 (`cross_hour`) のどちらが先か (`first`) を出す。0 h で D ≤ 0 なのに
+強化された結合が、規則の範囲 (D が遅れて正になった) か規則の外 (重みが先) かを分けるためのもの。
+列の定義は `flip_rule.flip_timing()` の docstring。
+
+### 駆動の収支 (`input_budget.csv` / `neuron_budget.csv`)
+
+run 1 本の表として、overview が書く。ニューロン b の発火率の低下 (切断前 → 0 h) と回復
+(0 h → 20 h) を、b に入る結合 k→b の駆動 (時間平均コンダクタンス) の変化で説明するためのもの。
+
+| ファイル | 1 行 | 中身 |
+|---|---|---|
+| `input_budget.csv` | 切断前の結合 k→b 1 本 (切った結合も含む。post → pre の順) | 重みと駆動の推移、強化 / 弱化、k 自身の低下・回復、切った強い E→E の迂回経路 (3 段まで) の何段目か (残った E→E のみ。当てはまるものをすべて `;` でつなぐ)、駆動の変化 (切られて失った / 切られずに失った / 0 h から得た / k の重み 1 あたりの駆動の変化) |
+| `neuron_budget.csv` | ニューロン b 1 個 | 発火率・低下・回復、E 発 / I 発の入力の本数 (切断前と残った分)、駆動の変化の列を E 発の入力 / I 発の入力に限って足したもの |
+
+b に入る駆動の差は、切断時 (切断前 → 0 h) は「切られて失った分 + 切られずに失った分」、回復時
+(0 h → 20 h) は「0 h から得た分」の和に一致する。
+**定義は `analysis/input_budget.py` のモジュール docstring が正。** 20 h の probe を持たない run では書かない。
 
 ---
 
@@ -663,8 +733,8 @@ scripts/lesion/
 ├── report/         いつ何を出すか
 │   ├── structure.py   切断直後: 切断後のネットワークの形
 │   ├── panels.py      probe ごと: ラスター / アバランチ / metrics 1 行
-│   ├── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 同期 / RTE / 差の表
-│   └── compare.py     run をまたいで: runs.csv / control.csv、用量反応の図、迂回経路の表
+│   ├── overview.py    run 終了後: 重み軌跡 / 重み分布の変化 / 発火レート / 同期 / RTE / 差の表 / 反転の時刻 / 駆動の収支
+│   └── compare.py     run をまたいで: runs.csv / control.csv、用量反応の図、迂回経路と反転の規則の表
 ├── store/          どこに何があり、どう読み書きするか
 │   ├── paths.py       run 内部のディレクトリ規約
 │   ├── formats.py     記録ファイル 1 つの読み書き
@@ -678,6 +748,9 @@ scripts/lesion/
 │   ├── effective.py   probe ごとの RTE (baseline を基準に一括) → rte.csv
 │   ├── summary.py     損傷 run 1 本 = 1 行の要約 (低下・回復・対照の定義) → runs.csv / control.csv
 │   ├── detours.py     切断した E→E の迂回経路と、その切断後の強化 → 報告の表
+│   ├── flip_rule.py   切断直後のドリフトの符号で、残った E 発の結合の反転を当てる / 反転の時刻 → 報告の表
+│   ├── freeze_split.py 片方の STDP を止めた run と止めない run の対で、回復への各則の寄与 → 報告の表と図
+│   ├── input_budget.py ニューロンごとの駆動の収支 (切断で失った分と回復で得た分の分解) → 報告の表
 │   └── connectivity.py 群間結合確率 → 報告の表
 ├── protocol/       実験の進め方 (入口だけが import する)
 │   ├── cut.py         どこを切るか (spec のパースと選択)

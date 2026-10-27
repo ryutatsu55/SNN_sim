@@ -16,6 +16,7 @@ from scripts.lesion.figures.correlation import correlation_matrix
 from scripts.lesion.figures.correlation_network import correlation_network
 from scripts.lesion.figures.isi import isi_distribution
 from scripts.lesion.figures.network import weight_network
+from scripts.lesion.figures.pair_scatter import correlation_weight_scatter
 from scripts.lesion.figures.raster import raster
 from scripts.lesion.figures.synapse_hist import weight_distribution
 from scripts.lesion.figures.trace import neuron_trace
@@ -41,6 +42,9 @@ FIGURES = (
      "correlation_network_{tag}.png"),
     # スパイク間隔の分布。平均発火率だけでは見えない「たまに高頻度で撃つ」が読める。
     ("ISI distribution", isi_distribution, paths.ISI, "isi_{tag}.png"),
+    # 結合ごとの相関と重み。点は切断後の結合だけなので、baseline の窓でも同じ結合が並ぶ。
+    ("correlation vs weight", correlation_weight_scatter, paths.CORRELATION_WEIGHT,
+     "correlation_weight_{tag}.png"),
     ("weight distribution", weight_distribution, paths.WEIGHT_DIST,
      "weight_distribution_{tag}.png"),
     # 座標を持たない run (`no_space`) では window.coords() が MissingData を投げるので、

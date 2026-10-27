@@ -27,6 +27,7 @@ run ディレクトリ名は使わない。表はこの 2 列で seed をまた�
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,6 +130,38 @@ def enumerate_paths(adjacency, edge_index, a: int, b: int, max_length: int = MAX
 
     walk(a, {a, b}, [])
     return found
+
+
+# 迂回経路上の位置の名前。`rev` は切った a→b の逆向き、`len{n}_hop{i}` は長さ n の迂回経路の
+# a から数えて i 段目。この順で並べて記録する。
+POSITIONS = ("rev",) + tuple(f"len{n}_hop{i}" for n in range(2, MAX_LENGTH + 1)
+                             for i in range(1, n + 1))
+# どの位置にも当たらない結合の名前。
+OTHER = "other"
+# 1 本が複数の位置に当たるときの区切り。
+POSITION_SEP = ";"
+
+
+def detour_positions(pairs, cut_strong, max_length: int = MAX_LENGTH) -> list[str]:
+    """結合 (pre, post) の並びを、切った強い結合 a→b の迂回経路上の位置 (`POSITIONS`) に分ける。
+
+    `pairs` は経路をたどる辺の集合を兼ねる (切断後に残った結合を渡す)。`cut_strong` は切った強い
+    結合 (a, b) の並び。当てはまる位置を**すべて** `POSITIONS` の順に `POSITION_SEP` で
+    つないで返し、1 つも無ければ `OTHER`。経路は途中で a, b を再訪しない単純な経路で、重みで足切りしない。
+    """
+    edge_index = {pair: k for k, pair in enumerate(pairs)}
+    adjacency: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for (i, j), k in edge_index.items():
+        adjacency[i].append((j, k))
+    found: dict[int, set[str]] = defaultdict(set)
+    for a, b in cut_strong:
+        if (b, a) in edge_index:
+            found[edge_index[(b, a)]].add("rev")
+        for path in enumerate_paths(adjacency, edge_index, a, b, max_length):
+            for i, k in enumerate(path, start=1):
+                found[k].add(f"len{len(path)}_hop{i}")
+    return [POSITION_SEP.join(name for name in POSITIONS if name in found[k]) if k in found
+            else OTHER for k in range(len(pairs))]
 
 
 def _flip_positions(edges, before, after) -> tuple[int, int, int]:

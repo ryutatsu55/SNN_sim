@@ -52,15 +52,16 @@ WEIGHT_NETWORK = f"{PANELS}/weight_network"
 CORRELATION = f"{PANELS}/correlation"   # ニューロン間相関行列
 CORRELATION_NETWORK = f"{PANELS}/correlation_network"   # 相関の強いペアの空間図
 ISI = f"{PANELS}/ISI"                    # スパイク間隔の分布
+CORRELATION_WEIGHT = f"{PANELS}/correlation_weight"   # 結合ごとの相関と重みの散布図
 TRACE = f"{PANELS}/trace"
 OVERVIEW = "overview"
 REPORT_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK,
-                CORRELATION, CORRELATION_NETWORK, ISI, TRACE, OVERVIEW)
+                CORRELATION, CORRELATION_NETWORK, ISI, CORRELATION_WEIGHT, TRACE, OVERVIEW)
 
 # run を走らせる前に必ず作るディレクトリ。trace は task.trace_neuron を指定したときだけ作る
 # (空ディレクトリが残ると「採取したのに空だった」のか「採取していない」のか読めなくなる)。
 DEFAULT_REPORT_KINDS = (STRUCTURE, RASTER, AVALANCHE, WEIGHT, WEIGHT_DIST, WEIGHT_NETWORK,
-                        CORRELATION, CORRELATION_NETWORK, ISI, OVERVIEW)
+                        CORRELATION, CORRELATION_NETWORK, ISI, CORRELATION_WEIGHT, OVERVIEW)
 
 
 def data_dir(run_dir: str | Path) -> Path:

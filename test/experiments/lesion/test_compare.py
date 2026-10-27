@@ -92,12 +92,14 @@ def test_compare_registry_is_a_table():
     assert isinstance(compare.TABLES, tuple)
     rows = compare.FIGURES + compare.TABLES
     labels = [row[0] for row in rows]
-    names = [row[2] for row in rows]
+    names = [row[-1] for row in rows]
     assert len(set(labels)) == len(labels) and len(set(names)) == len(names)
     assert all(callable(row[1]) and row[2].endswith(".png") for row in compare.FIGURES)
-    assert all(callable(row[1]) and row[2].endswith(".csv") for row in compare.TABLES)
-    assert {row[2] for row in compare.TABLES} == {
-        "detour_paths.csv", "detour_reverse.csv", "detour_last_hop.csv", "detour_turnover.csv"}
+    assert all(callable(row[1]) and callable(row[2]) and row[3].endswith(".csv")
+               for row in compare.TABLES)
+    assert {row[3] for row in compare.TABLES} == {
+        "detour_paths.csv", "detour_reverse.csv", "detour_last_hop.csv", "detour_turnover.csv",
+        "flip_rule.csv", "flip_rule_classes.csv", "freeze_split.csv"}
     imports = [line for line in Path(compare.__file__).read_text(encoding="utf-8").splitlines()
                if line.startswith(("import ", "from "))]
     assert not any("matplotlib" in line or "numpy" in line for line in imports)
@@ -154,3 +156,34 @@ def test_runs_with_frozen_plasticity_are_left_out(tmp_path):
                                  control_runs=lambda: ())
     write_summary(collection, tmp_path)
     assert sorted(pd.read_csv(tmp_path / "runs.csv").run) == ["no_freeze_key", "plain"]
+
+
+def _freeze_runs():
+    """seed 1 は 3 条件がそろい、seed 2 は i-STDP を止めた run が欠けた合成の表。"""
+    return pd.DataFrame({
+        "spec": ["random:fraction=0.1"] * 5,
+        "seed": [1, 1, 1, 2, 2],
+        "rule": ["none", "e-STDP", "i-STDP", "none", "e-STDP"],
+        "rec": [0.08, 0.01, 0.06, 0.05, 0.00],
+    })
+
+
+def test_freeze_split_is_the_recovery_with_the_other_rule_frozen():
+    from scripts.lesion.analysis.freeze_split import split_table
+    out = split_table(_freeze_runs())
+    assert list(out.seed) == [1]
+    row = out.iloc[0]
+    assert row.delta_e == pytest.approx(0.06) and row.delta_i == pytest.approx(0.01)
+    assert row.delta_sum == pytest.approx(0.07)
+
+
+def test_freeze_rule_comes_from_the_plasticity_mode():
+    from scripts.lesion.analysis.freeze_split import rule_of
+    config = SimpleNamespace(synapses={
+        "from_Exc": SimpleNamespace(plasticity=SimpleNamespace(mode="e-stdp_physical_fine")),
+        "from_Inh": SimpleNamespace(plasticity=SimpleNamespace(mode="i-stdp_physical_fine"))})
+    assert rule_of(config, []) == "none"
+    assert rule_of(config, ["from_Exc"]) == "e-STDP"
+    assert rule_of(config, ["from_Inh"]) == "i-STDP"
+    with pytest.raises(ValueError):
+        rule_of(config, ["from_Exc", "from_Inh"])

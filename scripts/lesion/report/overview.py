@@ -9,6 +9,22 @@ from __future__ import annotations
 from scripts.lesion.report import guard
 from scripts.lesion.store import paths
 from scripts.lesion.analysis.effective import write_rte_table
+from scripts.lesion.analysis.flip_rule import write_flip_timing
+from scripts.lesion.analysis.input_budget import write_input_budget, write_neuron_budget
+from scripts.lesion.figures.change import (correlation_change_matrix,
+                                           correlation_change_matrix_across_cut,
+                                           correlation_change_network,
+                                           correlation_change_network_across_cut,
+                                           post_rate_vs_weight_change,
+                                           pre_rate_vs_weight_change,
+                                           weight_change_axon_network,
+                                           weight_change_axon_network_across_cut,
+                                           weight_change_matrix,
+                                           weight_change_matrix_across_cut,
+                                           weight_change_network,
+                                           weight_change_network_across_cut,
+                                           weight_change_vs_correlation,
+                                           weight_change_vs_correlation_change)
 from scripts.lesion.figures.chi_track import chi_track
 from scripts.lesion.figures.correlation_track import mean_correlation_track
 from scripts.lesion.figures.drive_track import drive_track
@@ -36,11 +52,45 @@ FIGURES = (
     ("participation heatmap", participation_heatmap, "participation_heatmap.png"),
     # 実効結合。**`rte.csv` を読む**ので、emit() の中で表を先に書く。
     ("rte track", rte_track, "rte_track.png"),
+    # 切断直後から `change.TARGET_HOUR` (20 h) までの変化 (回復)。
+    # その時刻の窓を持たない run では MissingData で skip される。
+    ("weight change matrix", weight_change_matrix, "weight_change_matrix.png"),
+    ("weight change network", weight_change_network, "weight_change_network.png"),
+    ("weight change axon network", weight_change_axon_network,
+     "weight_change_axon_network.png"),
+    ("correlation change matrix", correlation_change_matrix,
+     "correlation_change_matrix.png"),
+    ("correlation change network", correlation_change_network,
+     "correlation_change_network.png"),
+    # 切断前から切断直後までの変化 (切断そのものの効果)。
+    ("weight change matrix across cut", weight_change_matrix_across_cut,
+     "weight_change_matrix_across_cut.png"),
+    ("weight change network across cut", weight_change_network_across_cut,
+     "weight_change_network_across_cut.png"),
+    ("weight change axon network across cut", weight_change_axon_network_across_cut,
+     "weight_change_axon_network_across_cut.png"),
+    ("correlation change matrix across cut", correlation_change_matrix_across_cut,
+     "correlation_change_matrix_across_cut.png"),
+    ("correlation change network across cut", correlation_change_network_across_cut,
+     "correlation_change_network_across_cut.png"),
+    # 切断後に残った結合 1 本 = 1 点。回復の重みの差を、相関や 20 h の発火率と並べる。
+    ("weight change vs correlation change", weight_change_vs_correlation_change,
+     "weight_change_vs_correlation_change.png"),
+    ("weight change vs correlation", weight_change_vs_correlation,
+     "weight_change_vs_correlation.png"),
+    ("pre rate vs weight change", pre_rate_vs_weight_change, "pre_rate_vs_weight_change.png"),
+    ("post rate vs weight change", post_rate_vs_weight_change, "post_rate_vs_weight_change.png"),
 )
 
 
-# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。今は無い。
-TABLES = ()
+# 同じ段階で出す**報告の表**。形と回し方は `FIGURES` と同じ。
+TABLES = (
+    # 強化された E 発の結合ごとに、D が正になった時刻と重みが 0.5 を超えた時刻 (どちらが先か)。
+    ("flip timing", write_flip_timing, "flip_timing.csv"),
+    # 駆動の収支。切断で失った駆動と 20 h までに得た駆動を、結合ごと / ニューロンごとに分解する。
+    ("input budget", write_input_budget, "input_budget.csv"),
+    ("neuron budget", write_neuron_budget, "neuron_budget.csv"),
+)
 
 
 def emit(series) -> None:

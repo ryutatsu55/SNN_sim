@@ -83,11 +83,12 @@ def calculate_gmax_scale(num_synapses: int, num_post: int, normalize_by_fan_in: 
     return 1.0 / fan_in
 
 
-def e_stdp_kernel(delta_t: float, a_e: float, tau_e: float, beta_e: float) -> float:
-    """Supplementary Eq. S16。"""
-    if delta_t >= 0.0:
-        return a_e * np.exp(-delta_t / tau_e)
-    return -a_e * beta_e * np.exp(delta_t / tau_e)
+def e_stdp_kernel(delta_t, a_e: float, tau_e: float, beta_e: float):
+    """Supplementary Eq. S16。`delta_t` は数でも配列でもよい (数なら float を返す)。"""
+    delta_t = np.asarray(delta_t, dtype=np.float64)
+    decay = np.exp(-np.abs(delta_t) / tau_e)
+    out = np.where(delta_t >= 0.0, a_e * decay, -a_e * beta_e * decay)
+    return float(out) if out.ndim == 0 else out
 
 
 def i_stdp_kernel(delta_t: float, a_i: float, tau_i1: float, tau_i2: float, beta_i: float) -> float:
