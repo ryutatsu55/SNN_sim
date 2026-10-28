@@ -19,7 +19,7 @@
 
 **実験固有の図はここに置かない。** 実験は自分の `scripts/<実験>/figures/` に持つ
 (必要なら複製する)。ここに集まるのは、実験に依存しない道具 (`scripts/tools/`) が使う図。
-判断基準は `src/utils/CLAUDE.md`。
+判断基準は `src/utils/README.md`。
 
 - 数値計算 … `src/utils/analysis/`
 - 読み出し契約 … `src/utils/runview.py`

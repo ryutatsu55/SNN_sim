@@ -9,13 +9,13 @@ E/I も、この意味では対等な軸である。
 
 | 知りたいこと | 見る場所 |
 |---|---|
-| 要約と設計方針 | ルート `CLAUDE.md` の不変条件 §2、`src/core/CLAUDE.md` §2（自動ロード） |
+| 要約と設計方針 | ルート `README.md` の「NetworkLayout — 正準グローバルID空間 + 任意軸」、`src/core/README.md` の「NetworkLayout: 正準グローバルID空間 + 任意軸」 |
 | **正の仕様** | `src/core/layout.py` のモジュール docstring と各メソッドの docstring |
 | API の一覧・具体例・永続化・検証記録 | **この文書** |
-| コンポーネントが軸を宣言する側の話 | `src/models/network/CLAUDE.md` §1 |
+| コンポーネントが軸を宣言する側の話 | `src/models/network/README.md` の「コンポーネントの並びと `describe_axes()`」 |
 | ID 割り当てが変わった非互換 | `docs/technical/compat_breaks.md` |
 
-> **この文書は `src/core/CLAUDE.md` §2 の詳細版。** 同じ話を繰り返さないよう、
+> **この文書は `src/core/README.md` の「NetworkLayout」の節の詳細版。** 同じ話を繰り返さないよう、
 > 「なぜ任意軸なのか」「assignment の既定がなぜ `random` か」はそちらにあり、ここは
 > **一覧と具体例**を持つ。
 
@@ -63,7 +63,7 @@ E/I も、この意味では対等な軸である。
 
 既定値は `config_manager.DEFAULT_ASSIGNMENT` にだけ存在する。`from_config()` は未指定を
 補完せず raise し、`load_resolved()` も補完しない（保存済み config は記録なので、欠落は
-検証エラー）。詳しい理由は `src/core/CLAUDE.md` §2。
+検証エラー）。詳しい理由は `src/core/README.md` の「assignment」。
 
 **`random` の RNG は別ストリーム。** `seed + _ASSIGN_SEED_OFFSET (= 104729)` を使い、
 行列値を生成する `NetworkBuilder.rng` との相関を避ける（`docs/technical/reproducibility.md`）。

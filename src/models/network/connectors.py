@@ -272,7 +272,7 @@ class AxonGeometry:
         規約は持たない (`NetworkLayout.save_axes()` と同じ切り分け)。
 
         軸索の軌跡は seed から再現できるが、再現には同じコード・同じエリア・同じ
-        `segment_length` が要る (CLAUDE.md 注記 16b / 16d)。損傷実験の対象は
+        `segment_length` が要る (`docs/technical/axon_growth_confinement.md`・`axon_growth_segment_length.md`)。損傷実験の対象は
         **その run で実際に伸びた軸索**なので、記録として残す。
 
         書き出す配列はフィールドそのままで、dtype も値も変換しない。連続セグメントが

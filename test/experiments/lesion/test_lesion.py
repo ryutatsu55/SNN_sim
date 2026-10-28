@@ -1,7 +1,18 @@
-"""`NetworkBuilder.replace_global_coo()` — 損傷実験の構造的除去の土台。
+"""損傷実験 (`scripts/lesion/`) の切断・命名・可塑性の凍結・記録の読み書きを検証する。
 
-`test_global_coo.py` と同じく `_generate_global_matrices()` までで止めるので、
-GeNN のコンパイルは走らない。
+- **構造的除去** (`NetworkBuilder.replace_global_coo()`): 指定したシナプスだけを除き、COO の
+  不変条件 (row-major・有限の重み) を保つ。壊れた COO は弾く
+- **切断 spec の選択**: 各選択子 (hub / 群間 / 明示 / random / bridge) が指定どおりのシナプスだけを選ぶ。
+  存在しない対象や綴りの誤りは黙って無視せずエラーにする。random は seed で再現し、割合をまたいで入れ子になる
+- **run ディレクトリ名**: 既存の run と 1 文字も変えない
+- **可塑性の凍結**: 指定した群の学習率だけを 0 にし、元の config を変えない
+- **駆動**: 1 発が届けるコンダクタンス × 本数を正しく積み、切ったシナプスは駆動を届けない
+- **切断の素性** (`cut_profile`): 切断群を残存群と対比して記録する
+- **記録の読み直し**: 切断直後の記録から読み直した `Built` が切断後の builder と同じで、構造の記録と
+  比較表が記録から作り直せる。probe の窓幅・順序・番号が記録どおりで、akita_soc の記録と衝突せず、
+  アバランシェのビン幅は baseline で固定される
+
+ネットワークは `_generate_global_matrices()` までで止めるので、GeNN のコンパイルは走らない。
 """
 import sys
 import tempfile

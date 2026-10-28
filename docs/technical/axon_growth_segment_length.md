@@ -8,7 +8,7 @@
 Sumi et al. (2025) Front. Neurosci. 19:1570783 §2.8（`docs/private/damage.pdf`）。
 論文の値は Δs = 0.1 mm / σ_θ = 0.1 rad で、これが `axon_growth` プロファイル。
 
-> **結論 (ルート `CLAUDE.md` から移設した一段落):**
+> **結論:**
 > Δs を変えるときは `angle_sigma` を `0.1 * sqrt(Δs / 100)` として再計算すること。
 > 転回ウォークはステップ単位なので persistence length は `Lp = 2Δs/σ²`。論文の (100 µm, 0.1 rad)
 > は 20 mm で、平均軸索長 1.1 mm の 18 倍 — これが「quasi-straight」の数値的な意味である。
@@ -195,7 +195,7 @@ Lp = 2 * 100 / 0.1^2 = 20,000 um = 20 mm
 
 ## 関連
 
-- `CLAUDE.md` 注記 16 / 16b / 16c — 壁沿いの伸長、`contains()` の許容差、角の不動点
+- `docs/technical/axon_growth_confinement.md` — 壁沿いの伸長、`contains()` の許容差、角の不動点
 - `src/models/network/connectors.py::AxonGrowthTopology` — 実装本体
 - `test/test_axon_growth.py::TestInvasionLottery::test_degree_barely_depends_on_segment_length`
   — 侵入ルールの Δs 不変性を pin しているテスト
@@ -281,7 +281,7 @@ Lp = 2 * 100 / 0.1^2 = 20,000 um = 20 mm
 ### B.1 `NetworkBuilder` から見た呼ばれ方
 
 ```
-area   = areaClass(...)                       # 乱数を引かない (CLAUDE.md 注記 12)
+area   = areaClass(...)                       # 乱数を引かない (BaseArea は RNG を保持も消費もしない)
 space  = spaceClass(..., rng, area=area)      # soma 座標。rng を消費する
 conn   = AxonGrowthTopology(cfg, N, coords, rng, layout=..., area=area)
 rows, cols = conn.generate()                  # ← ここ
@@ -640,14 +640,14 @@ keep[1:] = (pre[1:] != pre[:-1]) | (post[1:] != post[:-1])
    幾何は E も I も同じ。原文も同様。
 7. **角の不動点。** 非平滑な点で `normal()` (中心差分) は 2 面の**二等分線**を返すため、
    その接線はどちらの面の接線でもなく、`deflect` が turn を見つけられない
-   (CLAUDE.md 注記 16c)。Δs=100 で 1.3% の軸索が失われ、Δs=10 では 0%。
-8. **`contains()` の許容差 `_CONTAINS_TOL = 1e-9` に依存している** (注記 16b)。
+   (`axon_growth_confinement.md` の「角で生き残るのは deflect の不動点」)。Δs=100 で 1.3% の軸索が失われ、Δs=10 では 0%。
+8. **`contains()` の許容差 `_CONTAINS_TOL = 1e-9` に依存している** (`axon_growth_confinement.md` の「`_CONTAINS_TOL` は飾りではなく load-bearing」)。
    0 にすると 45° の面で軸索が壁に貼り付いて止まる (26% の軸索が停止)。
 9. **細い通路は Δs 次第で「存在しないのと同じ」になる** (§3(c))。
 10. **損傷 (線で切る・軸索を切られたニューロンを死なせる) は実装していない。**
     `AxonGeometry` はそれを後から計算できるようにするための記録。
 11. **旧実装との互換性はない。** 境界処理と抽選単位が変わった時点で、同じ seed でも
-    別のネットワークになる (CLAUDE.md 注記 20: `axon_growth_modular` で 34,319 → 14,243
+    別のネットワークになる (`compat_breaks.md` の「`axon_growth`: 境界処理と結合抽選の変更」: `axon_growth_modular` で 34,319 → 14,243
     シナプス)。互換フラグは用意していない。
 
 ---
@@ -671,4 +671,4 @@ keep[1:] = (pre[1:] != pre[:-1]) | (post[1:] != post[:-1])
 | `…::test_degree_barely_depends_on_segment_length` | 侵入ルールの Δs 不変性 (§E.1) |
 | `…::test_block_size_does_not_change_the_network` | `_SEGMENT_BLOCK` が性能ノブでしかないこと (§E.2) |
 | `TestAxonGeometry::test_contact_is_the_earliest_touching_segment` | 重複畳み込みが「最初の侵入」を残すこと (§E.4) |
-| `TestAreaRngContract::test_construction_consumes_no_randomness` | area が rng を引かないこと (CLAUDE.md 注記 12) |
+| `TestAreaRngContract::test_construction_consumes_no_randomness` | area が rng を引かないこと |

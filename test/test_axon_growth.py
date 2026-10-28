@@ -628,7 +628,7 @@ class TestAxonGeometry(unittest.TestCase):
     def test_contact_point_reaches_the_postsynaptic_soma(self):
         """接触点は post 細胞体から dendrite_radius 以内にあり、かつ見通しが立つ。
 
-        後者は生成時の条件そのもの (CLAUDE.md #17)。記録した接触点が本物であることの検算。
+        後者は生成時の条件そのもの (`docs/technical/axon_growth_segment_length.md` の「見通し判定」)。記録した接触点が本物であることの検算。
         """
         area, conn, coords, _, _ = self._built()
         g = conn.axon_geometry()
@@ -980,7 +980,7 @@ class TestModularGridArea(unittest.TestCase):
         モジュールとブリッジの spec は `_module_spec` / `_bridge_spec` に括り出されて
         `hierarchical_modular_grid` と共有されている。この式が 1 つでも変わると、
         座標が動く -> 棄却サンプリングのドロー数が変わる -> **同じ seed の既存
-        ネットワークが重みと遅延まで丸ごと別物になる** (CLAUDE.md の注意 14)。
+        ネットワークが重みと遅延まで丸ごと別物になる** (`docs/technical/compat_breaks.md` の「領域(area)の幾何を変えると重み・遅延もずれる」)。
         面積・連結性・名前を見る他のテストはこの種のずれを通してしまうので、
         bbox そのものをここで押さえる。
 

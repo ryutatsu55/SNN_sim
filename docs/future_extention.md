@@ -73,7 +73,7 @@ Watanabe et al., *Commun. Eng.* **5**:150 (2026)
    一致すれば「幾何学的ハブ＝グラフ理論的ハブ」が本モデルで成り立つことの検証になり、
    論文の定義をそのまま借りてよい根拠になる。**ずれた場合のほうが情報量が大きい** ——
    デバイス設計上のハブが、生成された配線ではハブになっていないという意味で、
-   `axon_growth` のパラメータ（`segment_length` とブリッジ幅の関係、注記 16d）を
+   `axon_growth` のパラメータ（`segment_length` とブリッジ幅の関係。`docs/technical/axon_growth_segment_length.md` の「細い通路を通れるかどうか」）を
    疑う入口になる。
 
 2. **評価軸としての利用**
@@ -95,7 +95,7 @@ Watanabe et al., *Commun. Eng.* **5**:150 (2026)
 - `module_participation` はモジュールラベル（`module` 軸）を要求する。
   `soma_in_bridge: true` だとブリッジ上のニューロンが `BC*` / `BX*` というラベルを持ち、
   「モジュール」の意味が壊れる。`hierarchical_modular_grid` では
-  `soma_in_bridge: false` が前提（CLAUDE.md の該当節、および論文のマイクロチャネルが
+  `soma_in_bridge: false` が前提（`src/models/network/README.md` の「出荷済みプロファイル」、および論文のマイクロチャネルが
   幅 4.5 µm でソーマを通さないという実験事実に対応）。
 
 ---
@@ -173,13 +173,13 @@ Watanabe et al., *Commun. Eng.* **5**:150 (2026)
 4 は後回しでよい。
 
 その時が来たら、プロジェクト自身のルール（「まとめる単位は呼び出し元の数ではなく
-何の都合で変わるか」, CLAUDE.md）に従えば **刺激プロトコルは `scripts/<実験>/` 側**になる。
+何の都合で変わるか」, ルート `README.md`）に従えば **刺激プロトコルは `scripts/<実験>/` 側**になる。
 図と同じ扱いで、共有するのは数式だけ。`spatial_recognition` が共有層で干からびたのは、
 置き場所が最初から逆だったためと見ている。
 
 ### 注意
 
-- **`BaseDataLoader` という枠は残す。** CLAUDE.md の不変条件 3 が挙げる 8 つの拡張点の
+- **`BaseDataLoader` という枠は残す。** ルート `README.md` の「コンポーネント階層」が挙げる拡張点の
   1 つであり、拡張点として正しい。問題は枠の存在ではなく、枠が「シミュレータの入力層」を
   名乗っていること。
 - `scripts/tools/pipeline_check.py` は Config → Registry → Builder → Simulator →
@@ -269,3 +269,37 @@ lesion の `compare` (run をまたぐ比較、2026-10-06) は**暫定版**。�
   (`replot` / `compare`) で作り直せる形にし、変えたら `docs/technical/compat_breaks.md` に書く
 - 実験をまたいで使うなら置き場所は `src/utils/runview.py` の契約側。まず lesion の中で形を
   決めてから上げる (`Collection` と同じ順序)
+
+---
+
+## 検討事項: lesion の `analysis/` に指標の計算以外が混ざっている（保留）
+
+`scripts/lesion/analysis/` は「何を測るか」の層で、入れてよいのは単純な指標の計算
+(入力 → 数値・表) だけ。`detours.py` と `flip_rule.py` はそこからはみ出している
+(2026-10-21 に指摘、整理は保留)。
+
+### 現状
+
+どちらも 1 ファイルに性質の違う 3 つが入っている。
+
+| 中身 | `detours.py` | `flip_rule.py` | 単純な指標か |
+|---|---|---|---|
+| 結合ごと・経路ごとの指標 | `enumerate_paths` / `lead_fraction` / `run_detours` | `pair_drift` / `classify` / `run_flips` | はい |
+| 指標の上に乗った評価・集計 | `path_summary` / `reverse_summary` / `last_hop_summary` / `turnover_summary` | `auc` / `rule_summary` / `class_summary` (感度・的中率) | 仮説の評価で、単純な指標とは言いにくい |
+| run の束を回す処理と CSV の書き出し | `measure_collection` / `write_*` / `_write` | `measure_collection` / `write_*` / `_write` | いいえ |
+
+加えて、`_write` は `store/formats.write_table` を通らずに `to_csv` で書いており、ほかの
+analysis モジュール (`summary.py` / `structure.py` / `effective.py` / `connectivity.py`) と形が違う。
+
+### やること
+
+- analysis には結合ごとの指標と、評価の関数だけを残す
+- 束を回す処理 (`measure_collection`) と書き出しは外に出す。置き場所 (`report/compare.py` か
+  `store/`) は、`report/` が numpy を import しない約束 (`test_report_registries.py`) との兼ね合いで決める
+- 書き出しは `store/formats.write_table` にそろえる
+- 両モジュールを同時に直す (片方だけ直すと、残った方が見かけの前例になる)
+
+### 注意
+
+- 出力 (`detour_*.csv` / `flip_rule*.csv`) の列と値は変えない。直したあと `compare` を回し直して
+  表が一致することを確かめる

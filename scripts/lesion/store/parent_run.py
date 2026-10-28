@@ -5,8 +5,7 @@
 
 ## なぜ `scripts/develop/store/` を import しないのか
 
-実験どうしの横 import を作らない、というのがこのプロジェクトの規則
-(ルート `CLAUDE.md`)。develop の内部事情に lesion がぶら下がると、develop を直すたびに
+実験どうしの横 import を作らない、というのがこのプロジェクトの規則。develop の内部事情に lesion がぶら下がると、develop を直すたびに
 lesion が壊れる。
 
 代わりに **develop 形式の記録を読む実装をこちらが持つ。** 読むのは 7 つだけで、

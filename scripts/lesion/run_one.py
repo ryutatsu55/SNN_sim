@@ -493,7 +493,7 @@ def main():
     print(f"\n=== {num_cut} 本を構造的に除去して回復を追う ===")
     keep = ~np.asarray(selection.cut, dtype=bool)
     # **モデル名は同時に走るものどうしで必ず変える** (同じ名前は genn_code の同じ
-    # ディレクトリを共有する。ルート CLAUDE.md)。seed と run の条件 (切断 + 止めた可塑性) で分ける。
+    # ディレクトリを共有する)。seed と run の条件 (切断 + 止めた可塑性) で分ける。
     # 可塑性を止めるのは GeNN に渡すこの build だけ。下見と記録の config は親のまま。
     if frozen:
         print(f"  切断後の STDP を止めます: {frozen}")

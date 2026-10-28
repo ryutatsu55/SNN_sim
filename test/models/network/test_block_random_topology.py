@@ -1,3 +1,8 @@
+"""`BlockRandomTopology` の引数の検証。
+
+不正な引数 (ニューロン数を超える・整数でないモジュール数、数でない・範囲外の結合確率、
+bool でない `allow_self_connections`) を生成前に弾き、モジュール数 = ニューロン数は受け付ける。
+"""
 import sys
 from pathlib import Path
 from typing import Any

@@ -1,3 +1,7 @@
+"""スパイク CSV の書き出し (`analysis/spikes.export_spike_csv`)。
+
+ヘッダと 1 発 1 行を書き、時刻と ID の長さが合わなければ弾く。
+"""
 import numpy as np
 import sys
 from pathlib import Path

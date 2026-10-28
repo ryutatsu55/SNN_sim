@@ -198,7 +198,7 @@ def load_connectivity(path: Path) -> Wiring:
 def _require_row_major(wiring: Wiring, path: Path) -> None:
     """記録された COO が**行優先ソート済み**であることを確かめる。
 
-    COO の並びはプロジェクト全体で 1 つ (CLAUDE.md の不変条件 4) だが、それを揃える前に
+    COO の並びはプロジェクト全体で 1 つ (ルート `README.md` の「結合はすべて COO」) だが、それを揃える前に
     作られた run は GeNN の格納順で書かれている。同じネットワークで本数も同じなので、
     **位置で対応づけると黙って別のシナプスに値が乗る。** 読んだ時点で弾く。
 

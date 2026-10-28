@@ -1,6 +1,6 @@
 # コンポーネントと軸の追加手順
 
-ルート `CLAUDE.md` の「Architecture」§1 の実務版。実際に拡張点を追加するときに読む。
+ルート `README.md` の「新しいコンポーネントの追加」の実務版。実際に拡張点を追加するときに読む。
 
 ---
 
@@ -135,4 +135,4 @@ layout.save_axes(out_dir / AXES_NAME)   # AXES_NAME は src/core/layout.py
 
 両方必要なのは、`profile_name` が YAML のキーであると同時にレジストリのキーでもあるため。
 
-詳細と出荷済みプロファイルの一覧 → `src/models/network/CLAUDE.md`
+詳細と出荷済みプロファイルの一覧 → `src/models/network/README.md`

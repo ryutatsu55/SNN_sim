@@ -255,7 +255,7 @@ class GeNNSimulator:
             data            : float32, 対応する変数値
             shape           : (total_neurons, total_neurons)
 
-        **row/col は `NetworkBuilder.global_coo()` そのもの** (Hard Rule 4: `global_coo()` が
+        **row/col は `NetworkBuilder.global_coo()` そのもの** (`global_coo()` が
         唯一の入口)。GeNN から取り出した値を `SynapseIndex.global_positions` へ散布するだけ
         なので、row/col と data の並びは必ず一致する。**ソートは無い**
         (`_global_positions()` 参照)。結合構造だけが要るときは `global_coo()` を直接使う。

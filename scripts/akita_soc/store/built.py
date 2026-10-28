@@ -33,7 +33,7 @@ def write_built(run_dir: Path, builder) -> None:
     """ビルド済みの `builder` から build 直後の記録を全部書く。
 
     `builder` は `build()` を通した後のもの。GeNN の setup は要らない —— 結合は
-    `builder.global_coo()` が唯一の入口 (ルート `CLAUDE.md` Hard Rule 4)。
+    `builder.global_coo()` が唯一の入口。
     """
     builder.layout.save_axes(paths.data_path(run_dir, AXES_NAME))
 

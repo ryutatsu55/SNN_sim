@@ -1,3 +1,7 @@
+"""`OffsetScaledNormalWeight` の引数の検証。
+
+数でない `offset`、数でない・負の `g_scale` を弾き、`g_scale` = 0 は受け付ける。
+"""
 import sys
 from pathlib import Path
 from typing import Any

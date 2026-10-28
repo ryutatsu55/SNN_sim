@@ -435,7 +435,7 @@ class CompositeArea(BaseArea):
     `segment_inside()` は凸形状のような端点だけの近道が使えず、基底のサンプリング実装を使う。
 
     ※ `parts` の各要素は素の dict のまま渡ってくる (`ComponentConfig` は extra='allow'
-      なので入れ子は pydantic モデル化されない)。子クラスが CLAUDE.md どおり属性アクセス
+      なので入れ子は pydantic モデル化されない)。子クラスが他のコンポーネントと同じく属性アクセス (`self.config.<attr>`)
       できるよう `_build_part()` が SimpleNamespace に包み直す。**入れ子の spec を読む
       この 1 箇所だけが dict アクセス**で、それ以外は従来どおり属性アクセス。
     """
@@ -973,7 +973,7 @@ def _build_part(spec: Dict[str, Any], num_neurons: int, layout) -> BaseArea:
 # 「正方形モジュール + それを繋ぐ矩形ブリッジ」という形は 1 段でも 2 段でも同じなので、
 # spec を組み立てる式をここに 1 つだけ置く。**式を書き換えると同じ seed の既存
 # ネットワークが別物になる** (座標が変われば棄却サンプリングのドロー数も変わり、
-# 重みと遅延まで全部ずれる — CLAUDE.md の注意 14) ので、幾何を触るときは意図的に。
+# 重みと遅延まで全部ずれる — `docs/technical/compat_breaks.md` の「領域(area)の幾何を変えると重み・遅延もずれる」) ので、幾何を触るときは意図的に。
 # ======================================================================================
 
 def _validate_grid_params(side: float, bridge_width: float, spacing: float,

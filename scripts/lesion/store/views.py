@@ -318,7 +318,7 @@ class Series(runview.Series):
     def area(self):
         """ニューロンが置かれる領域。**config から組み直す** (記録には残っていない)。
 
-        `BaseArea` は RNG を保持も消費もしない (ルート `CLAUDE.md` の Hard Rule 6) ので、
+        `BaseArea` は RNG を保持も消費もしないので、
         読み出しの途中で作っても run の再現性には影響しない。**無界のエリアと
         `no_space` は「持たない」**として扱う —— 契約 (`src/utils/runview.py`) と同じ。
         """

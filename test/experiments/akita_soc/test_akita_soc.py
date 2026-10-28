@@ -1,10 +1,15 @@
 """`scripts/akita_soc/` の記録規約と読み出しを検証する。
 
-**develop と同じ形の実験なので、見るところも同じ** —— 記録ファイル名の往復、窓の原点が
-npz から来ること、指標の列が揃うこと、そして `develop` の規約と衝突しないこと。
+**develop と同じ形の実験なので、見るところも同じ:**
+
+- config が自分の task プロファイルを選ぶこと
+- 記録ファイル名が往復し、時刻順に見つかり、損傷実験の probe と取り違えないこと
+- 記録時刻が npz から来て、時刻は窓のローカルで返ること
+- 並べ替え軸が polarity だけであること
+- 指標の列が揃い、smax がネットワークの大きさに従うこと
 
 モデルと数式そのもの (escape LIF / STDP カーネル / べき乗フィット) は
-`test/test_akita_soc.py` が見る。
+`test/test_akita_model.py` が見る。
 """
 from __future__ import annotations
 

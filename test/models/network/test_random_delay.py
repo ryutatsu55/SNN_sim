@@ -1,3 +1,7 @@
+"""`RandomDelay` の引数の検証とクリップ。
+
+数でない・負の `std` と、`min` > `max` を弾く。`std` = 0 では遅延を指定範囲にクリップする。
+"""
 import sys
 from pathlib import Path
 from typing import Any

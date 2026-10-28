@@ -1,3 +1,7 @@
+"""スパイクアニメーションの減衰強度 (`plotting/animation._compute_decay_intensity`)。
+
+発火からの経過時間で指数減衰し、同じニューロンが複数回撃ったときは最大値を保つ。
+"""
 import sys
 from pathlib import Path
 

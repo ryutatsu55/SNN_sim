@@ -63,8 +63,7 @@ def monkeypatched_axes(axes):
 
     `import src.utils.plotting.raster` ではモジュールを掴めない —— パッケージの
     `__init__` が同名の*関数* `raster` を re-export しているので属性参照がそちらに
-    解決される。`importlib.import_module` なら確実にモジュール
-    (`src/utils/CLAUDE.md` の「落とし穴」)。
+    解決される。`importlib.import_module` なら確実にモジュール。
     """
     import importlib
 

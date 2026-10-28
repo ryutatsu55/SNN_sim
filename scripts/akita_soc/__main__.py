@@ -110,7 +110,7 @@ def prepare_runs(manager: ConfigManager, config, condition: str,
         run_dir = condition_dir if len(seeds) == 1 else condition_dir / seed_dir_name(seed)
         run_dir.mkdir(parents=True, exist_ok=True)
         # **run ごとの config.yaml には必ずスカラーの seed を書く。** 範囲指定のまま
-        # 残すと「この run の seed はどれか」が決まらなくなる (Hard Rule 7)。
+        # 残すと「この run の seed はどれか」が決まらなくなる (run を特定するのは (seed, backend) の組)。
         # 範囲そのものは source_config.yaml (入力の逐語コピー) に残る。
         config.simulation.seed = int(seed)
         manager.save_config(config, save_dir=run_dir)

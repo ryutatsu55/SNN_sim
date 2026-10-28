@@ -13,6 +13,11 @@
 > export LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/lib/wsl/drivers/nv_dispsi.inf_amd64_0cc79ee359bdef40:/usr/local/cuda/lib64
 > ```
 > 恒久修正は `sudo apt remove libnvidia-compute-580-server`。
+>
+> **2026-08-26 に解決済み (2026-10-28 に再確認)**: `libnvidia-compute-535` / `-580-server` はどちらも dpkg 上 `rc`
+> (削除済み・設定のみ残存) で、`/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so*` は存在しない。
+> `LD_LIBRARY_PATH` は `/usr/local/cuda/lib64` だけで `backend: cuda` の run が最後まで通る
+> (axon_growth_grid2, N=67 で確認)。上の回避用の設定は今は要らない。再発したらこの手順に戻る。
 
 ## 結果
 

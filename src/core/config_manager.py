@@ -138,7 +138,7 @@ def expand_seed_spec(spec: int | str | List[int | str] | None) -> List[int]:
     ランチャ) が同じ 1 つの関数を通るので、片方だけ解釈がずれることがない。
 
     **範囲を書いてよいのは入力 YAML だけ。** 実験ランチャがこれを展開し、run ごとの
-    config.yaml には必ずスカラーを書き込む (Hard Rule 7)。
+    config.yaml には必ずスカラーを書き込む (run を特定するのは (seed, backend) の組)。
 
     書き方は `task.record_hours` (`expand_hours_spec()`) と同じ。
     """
@@ -218,7 +218,7 @@ class SimulationConfig(BaseModel):
     #   seed: [1..10:2]    -> STEP 付き = 1, 3, 5, 7, 9
     #   seed: [1, 5..7]    -> 混在
     # 複数を書いてよいのは**入力 YAML だけ**。実験ランチャがこれを展開し、run ごとの
-    # config.yaml には必ずスカラーを書き込む (Hard Rule 7: run を特定するのは (seed, backend)
+    # config.yaml には必ずスカラーを書き込む (run を特定するのは (seed, backend)
     # の組なので、記録にリストが残ると「この run の seed」が決まらなくなる)。
     # 展開は expand_seed_spec() が唯一の入口で、書き方は task.record_hours と同じ。
     seed: Optional[int | str | List[int | str]] = Field(

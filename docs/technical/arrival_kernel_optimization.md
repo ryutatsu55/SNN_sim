@@ -353,6 +353,35 @@ C. elegans のようにスケールの大きい構成でも遅延分解能を落
 それはバケツごと (1,596 回/step) の読み出しでシナプスごと (43,000 回/step) ではないため
 効きは小さい。案 B を採用した。
 
+### 10-4. 遅延ごとにシナプス群を分割 + `axonal_delay_steps` (2026-07-27 比較)
+
+fork を使わず、遅延値ごとに SynapseGroup を分けて標準の `sg.axonal_delay_steps` を使う案。
+**意味論は `pre_arrival_syn_code` とほぼ等価**: 到着時刻でのイベント駆動、軸索遅延で補正した
+st_pre (= `st_pre_axon`)、Δt=0 の順序、custom_Akita の +1.0 手補正が要らなくなること、の
+いずれも分割で成り立つ。差は疎行列の置き方にある。
+
+決定的な差は **rowStride のパディング**。分割すると各群が独立の rowStride / colStride を持つので、
+メモリが O(numPre × Σ_g rowStride_g) になる。arrival 方式に対する倍率の実測:
+
+| config | シナプス数 | 遅延の種類 D | 行 | 列 |
+|---|---|---|---|---|
+| `celegans_distance` | 1,057 | 8 | 2.7 倍 | 1.9 倍 |
+| `criticality_test2` (3,600 ニューロン) | 39.5k | 27 | 4.1 倍 | 3.8 倍 |
+| 同上、dt を 1/2・1/4・1/10・1/20 にした相当 | | | 6.3 → 9.5 → 17.4 → 29.6 倍 | |
+
+arrival 方式の追加は row slot あたり `_arr_perm` 4 B + `_arr_st` 8 B だけ (`criticality_test2` で 1.3 MB)。
+
+逆に分割が優る点: `_arr_st` (numSyn × 8 B) と uint8 の `d` (255 ステップ上限) が要らない、
+dendritic ring が要らない、電流の配送と重み更新のスパイク走査が 1 回にまとまる、fork の保守が要らない。
+
+落とし穴: GeNN の `getWUPrePostFuseHashDigest` が `getAxonalDelaySteps()` を含むので、
+遅延が違う群どうしは WU の pre 変数が fuse されず、STP の `x` / `x_release` や pre trace が
+群ごとに複製される (軌道は同じなので数値は壊れないが、状態と `pre_spike_code` が D 倍になる)。
+
+使い分けの目安: D が小さく (≲10)、バケツあたりの fan-out が十分なら分割方式で fork は要らない。
+D が大きいか疎な config (celegans, criticality) では arrival 方式が有利。
+測定に使ったスクリプトは当時の scratchpad にあり、残っていない。
+
 ---
 
 ## 11. GeNN fork (`~/genn`) への変更一覧
