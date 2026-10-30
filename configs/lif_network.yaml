@@ -1,0 +1,19 @@
+# オータプス比較用の基準候補。1時間の発達は成熟を保証しない。
+n: 1000
+n_exc: 800
+probability: 0.1
+seeds: [11, 22, 33]
+dt_ms: 0.1
+backend: cpu
+development_ms: 3600000.0
+frozen_ms: 60000.0
+chunk_ms: 10000.0
+snapshot_ms: 60000.0
+gmax_values: [1.5, 2.5, 4.0]
+beta_inh_values: [1.05, 1.15, 1.25]
+rest_rates_hz: [0.4]
+beta_exc: 1.05
+learning_amplitude: 0.01
+escape_gain_mv: 4.0
+max_rate_hz: 100.0
+case_timeout_s: 86400.0
